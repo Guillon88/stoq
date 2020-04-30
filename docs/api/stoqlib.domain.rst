@@ -37,6 +37,13 @@ domain Package
     :members:
     :show-inheritance:
 
+:mod:`certificate`
+-----------------
+
+.. automodule:: stoqlib.domain.certificate
+    :members:
+    :show-inheritance:
+
 :mod:`commission`
 -----------------
 
@@ -119,6 +126,20 @@ domain Package
 -----------
 
 .. automodule:: stoqlib.domain.loan
+    :members:
+    :show-inheritance:
+
+:mod:`message`
+-----------
+
+.. automodule:: stoqlib.domain.message
+    :members:
+    :show-inheritance:
+
+:mod:`overrides`
+----------------
+
+.. automodule:: stoqlib.domain.overrides
     :members:
     :show-inheritance:
 
@@ -321,6 +342,13 @@ domain Package
 -----------
 
 .. automodule:: stoqlib.domain.till
+    :members:
+    :show-inheritance:
+
+:mod:`token`
+------------
+
+.. automodule:: stoqlib.domain.token
     :members:
     :show-inheritance:
 

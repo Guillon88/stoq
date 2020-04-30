@@ -26,6 +26,9 @@
 
 import logging
 import optparse
+import os
+import platform
+import sys
 
 # To avoid kiwi dependency at startup
 log = logging.getLogger(__name__)
@@ -41,6 +44,10 @@ def get_shell(args):
                      action="store_true",
                      dest="autoreload",
                      help='Autoreload application when source is modified')
+    group.add_option('', '--quiet',
+                     action="store_true",
+                     dest="quiet",
+                     help='Be quiet about warnings')
     group.add_option('', '--fatal-warnings',
                      action="store_false",
                      dest="non_fatal_warnings",
@@ -71,7 +78,8 @@ def get_shell(args):
 
     if options.version:
         import stoq
-        raise SystemExit(stoq.version)
+        print(stoq.version)
+        raise SystemExit()
 
     from stoq.gui.shell.bootstrap import boot_shell
     shell = boot_shell(options)
@@ -79,7 +87,30 @@ def get_shell(args):
     return args, shell
 
 
+def _windows_fixes():  # pragma: no cover
+    executable = os.path.realpath(os.path.abspath(sys.executable))
+    root = os.path.dirname(executable)
+
+    # Indicate the cert.pem location so requests can use it on verify
+    # From: http://stackoverflow.com/a/33334042
+    import requests
+    from raven.conf import defaults
+    from raven.transport.http import HTTPTransport
+    requests.utils.DEFAULT_CA_BUNDLE_PATH = os.path.join(root, 'cacert.pem')
+    defaults.CA_BUNDLE = os.path.join(root, 'cacert.pem')
+
+    # We need to monkeypatch the default values of the constructor, since the value is
+    # 'hardcoded' once the class is first imported.
+    _defs = list(HTTPTransport.__init__.__defaults__)
+    _defs[-1] = defaults.CA_BUNDLE
+    HTTPTransport.__init__.__defaults__ = tuple(_defs)
+    print('XXX', defaults.CA_BUNDLE)
+
+
 def main(args):
+    if platform.system() == 'Windows':  # pragma: no cover
+        _windows_fixes()
+
     args, shell = get_shell(args)
 
     action_name = None
@@ -99,4 +130,5 @@ def main(args):
 
         if len(args) > 2:
             action_name = args[2]
+
     shell.main(appname, action_name)

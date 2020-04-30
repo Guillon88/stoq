@@ -42,7 +42,7 @@ from stoqlib.database.interfaces import (
     ICurrentBranch, ICurrentBranchStation, ICurrentUser)
 from stoqlib.database.runtime import new_store, get_default_store
 from stoqlib.database.settings import db_settings
-from stoqlib.domain.person import Branch, LoginUser, Person
+from stoqlib.domain.person import Branch, LoginUser, Person, Company
 from stoqlib.domain.station import BranchStation
 from stoqlib.importers.stoqlibexamples import create
 from stoqlib.lib.interfaces import IApplicationDescriptions, ISystemNotifier
@@ -133,6 +133,7 @@ def _provide_current_station(station_name=None, branch_name=None):
         branches = store.find(Branch)
         if branches.count() == 0:
             person = Person(name=u"test", store=store)
+            Company(person=person, store=store)
             branch = Branch(person=person, store=store)
         else:
             branch = branches[0]
@@ -228,15 +229,16 @@ def provide_utilities(station_name, branch_name=None):
     _provide_domain_slave_mapper()
 
 
-def _enable_plugins():
+def _enable_plugins(extra_plugins=None):
     manager = get_plugin_manager()
-    for plugin in [u'ecf',
-                   u'nfe',
-                   u'optical']:
+    default_plugins = [u'ecf', u'nfe', u'optical']
+    extra_plugins = extra_plugins or []
+    for plugin in set(default_plugins + extra_plugins):
         if not manager.is_installed(plugin):
             # STOQLIB_TEST_QUICK won't let dropdb on testdb run. Just a
             # precaution to avoid trying to install it again
-            manager.install_plugin(plugin)
+            with new_store() as store:
+                manager.install_plugin(store, plugin)
 
         else:
             # Make sure that the plugin is imported so sys.path is properly
@@ -246,7 +248,7 @@ def _enable_plugins():
 
 
 def bootstrap_suite(address=None, dbname=None, port=5432, username=None,
-                    password=u"", station_name=None, quick=False):
+                    password=u"", station_name=None, quick=False, extra_plugins=None):
     """
     Test.
     :param address:
@@ -257,6 +259,7 @@ def bootstrap_suite(address=None, dbname=None, port=5432, username=None,
     :param station_name:
     :param quick:
     """
+    os.environ['STOQ_TESTSUIT_RUNNING'] = '1'
 
     # This will only be required when we use uuid.UUID instances
     # for UUIDCol
@@ -273,13 +276,13 @@ def bootstrap_suite(address=None, dbname=None, port=5432, username=None,
 
     if quick and not empty:
         provide_utilities(station_name)
-        _enable_plugins()
+        _enable_plugins(extra_plugins=extra_plugins)
         return
 
     initialize_system(testsuite=True, force=True)
 
     # Commit before trying to apply patches which requires an exclusive lock
     # to all tables.
-    _enable_plugins()
+    _enable_plugins(extra_plugins=extra_plugins)
     ensure_admin_user(u"")
-    create(utilities=True)
+    create(utilities=True, create_users=True)

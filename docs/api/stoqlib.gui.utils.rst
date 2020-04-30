@@ -9,14 +9,6 @@ utils Package
     :undoc-members:
     :show-inheritance:
 
-:mod:`aptpackageinstaller` Module
----------------------------------
-
-.. automodule:: stoqlib.gui.utils.aptpackageinstaller
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 :mod:`databaseform` Module
 --------------------------
 
@@ -37,6 +29,14 @@ utils Package
 ------------------
 
 .. automodule:: stoqlib.gui.utils.help
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`iconutils` Module
+-----------------------
+
+.. automodule:: stoqlib.gui.utils.workorderutils
     :members:
     :undoc-members:
     :show-inheritance:
@@ -101,14 +101,6 @@ utils Package
 ----------------------
 
 .. automodule:: stoqlib.gui.utils.printing
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-:mod:`workorderutils` Module
-----------------------------
-
-.. automodule:: stoqlib.gui.utils.workorderutils
     :members:
     :undoc-members:
     :show-inheritance:

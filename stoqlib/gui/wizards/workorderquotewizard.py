@@ -25,9 +25,8 @@
 """Wizard for work order pre-sales"""
 
 import decimal
-import pango
 
-import gtk
+from gi.repository import Gtk, Pango
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column
 from kiwi.ui.widgets.combo import ProxyComboBox
@@ -160,12 +159,12 @@ class WorkOrderQuoteWorkOrderStep(BaseWizardStep):
     #
 
     def _create_ui(self):
-        new_button = gtk.Button(gtk.STOCK_NEW)
+        new_button = Gtk.Button(Gtk.STOCK_NEW)
         new_button.set_use_stock(True)
-        new_button.set_relief(gtk.RELIEF_NONE)
+        new_button.set_relief(Gtk.ReliefStyle.NONE)
         new_button.show()
         new_button.connect('clicked', self._on_new_work_order__clicked)
-        self.work_orders_nb.set_action_widget(new_button, gtk.PACK_END)
+        self.work_orders_nb.set_action_widget(new_button, Gtk.PackType.END)
         self.new_tab_button = new_button
 
         saved_orders = list(WorkOrder.find_by_sale(self.store, self.model))
@@ -181,6 +180,7 @@ class WorkOrderQuoteWorkOrderStep(BaseWizardStep):
     def _create_work_order(self):
         return WorkOrder(
             store=self.store,
+            station=api.get_current_station(self.store),
             sale=self.model,
             sellable=None,
             description=u'',
@@ -196,12 +196,13 @@ class WorkOrderQuoteWorkOrderStep(BaseWizardStep):
         label = _('WO %d') % (work_order_id)
 
         button = NotebookCloseButton()
-        hbox = gtk.HBox(spacing=6)
-        hbox.pack_start(gtk.Label(label))
-        hbox.pack_start(button)
+        hbox = Gtk.HBox(spacing=6)
+        tab_label = Gtk.Label(label)
+        hbox.pack_start(tab_label, True, True, 0)
+        hbox.pack_start(button, True, True, 0)
         hbox.show_all()
 
-        holder = gtk.EventBox()
+        holder = Gtk.EventBox()
         holder.show()
         slave = self.get_work_order_slave(work_order)
         slave.close_button = button
@@ -224,7 +225,7 @@ class WorkOrderQuoteWorkOrderStep(BaseWizardStep):
         # a reason for it.
         reason = (_(u'Removed from sale %s') % work_order.sale.identifier)
         work_order.sale = None
-        work_order.cancel(reason=reason)
+        work_order.cancel(api.get_current_user(self.store), reason=reason)
 
         self._work_order_ids.remove(work_order_id)
 
@@ -277,7 +278,7 @@ class WorkOrderQuoteItemStep(SaleQuoteItemStep):
         the 'quantity' columns.
         """
         return [Column('_equipment', title=_(u'Equipment'), data_type=str,
-                       ellipsize=pango.ELLIPSIZE_END)]
+                       ellipsize=Pango.EllipsizeMode.END)]
 
     def setup_work_order(self, work_order):
         """Do some extra setup for the work order
@@ -319,7 +320,13 @@ class WorkOrderQuoteItemStep(SaleQuoteItemStep):
         # Remove the workorder items first to avoid reference problems
         for item in items:
             wo_item = WorkOrderItem.get_from_sale_item(self.store, item)
-            wo_item.order.remove_item(wo_item)
+            # If the item's quantity_decreased changed in this step, the
+            # synchronization between the 2 that happens on self.validate_step
+            # would not have happened yet, meaning that order.remove_item
+            # would try to return a wrong quantity to the stock. Force the
+            # synchronization to avoid any problems like that
+            wo_item.quantity_decreased = item.quantity_decreased
+            wo_item.order.remove_item(wo_item, api.get_current_user(self.store))
 
         super(WorkOrderQuoteItemStep, self).remove_items(items)
 
@@ -366,19 +373,19 @@ class WorkOrderQuoteItemStep(SaleQuoteItemStep):
         return format_sellable_description(item.sellable, item.batch)
 
     def _setup_work_orders_widgets(self):
-        self._work_orders_hbox = gtk.HBox(spacing=6)
+        self._work_orders_hbox = Gtk.HBox(spacing=6)
         self.item_vbox.pack_start(self._work_orders_hbox, False, True, 6)
         self.item_vbox.reorder_child(self._work_orders_hbox, 0)
         self._work_orders_hbox.show()
 
-        label = gtk.Label(_("Work order:"))
-        self._work_orders_hbox.pack_start(label, False, True)
+        label = Gtk.Label(label=_("Work order:"))
+        self._work_orders_hbox.pack_start(label, False, True, 0)
 
         data = []
         for wo in self.wizard.workorders:
             # The work order might be already approved if we are editing a sale
             if wo.can_approve():
-                wo.approve()
+                wo.approve(api.get_current_user(self.store))
 
             self.setup_work_order(wo)
             data.append([wo.description, wo])
@@ -392,13 +399,13 @@ class WorkOrderQuoteItemStep(SaleQuoteItemStep):
             self.work_orders_combo.prefill(data)
             self._selected_workorder = self.work_orders_combo.get_selected()
             self._work_orders_hbox.pack_start(self.work_orders_combo,
-                                              False, False)
+                                              False, False, 0)
 
         self._work_orders_hbox.show_all()
 
     def _add_work_order_radio(self, desc, workorder):
-        radio = gtk.RadioButton(group=self._radio_group, label=desc)
-        radio.set_data('workorder', workorder)
+        radio = Gtk.RadioButton(group=self._radio_group, label=desc)
+        radio._workorder = workorder
         radio.connect('toggled', self._on_work_order_radio__toggled)
 
         if self._radio_group is None:
@@ -418,7 +425,7 @@ class WorkOrderQuoteItemStep(SaleQuoteItemStep):
     def _on_work_order_radio__toggled(self, radio):
         if not radio.get_active():
             return
-        self._selected_workorder = radio.get_data('workorder')
+        self._selected_workorder = radio._workorder
 
 
 class WorkOrderQuoteWizard(SaleQuoteWizard):

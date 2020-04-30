@@ -25,69 +25,54 @@
 
 """Process View a simple view of a process' stdout or stderr"""
 
-import errno
-import os
 import platform
 
-import glib
-import gtk
+from gi.repository import Gtk, GLib
 from kiwi.utils import gsignal
 
 from stoqlib.lib.process import Process, PIPE
+from stoqlib.lib.threadutils import threadit, schedule_in_main_thread
 
 CHILD_TIMEOUT = 100  # in ms
 N_BYTES = 4096  # a page
 
 
-class ProcessView(gtk.ScrolledWindow):
+class ProcessView(Gtk.ScrolledWindow):
     gsignal('read-line', str)
     gsignal('finished', object)
 
     def __init__(self):
-        gtk.ScrolledWindow.__init__(self)
-        self.set_policy(gtk.POLICY_NEVER,
-                        gtk.POLICY_AUTOMATIC)
-        self.set_shadow_type(gtk.SHADOW_ETCHED_IN)
+        super(ProcessView, self).__init__()
+
+        self.set_policy(Gtk.PolicyType.NEVER,
+                        Gtk.PolicyType.AUTOMATIC)
+        self.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
         self.listen_stdout = True
         self.listen_stderr = False
-        self._source_ids = []
         self._create_view()
 
+        # FIXME: The overlay scrolling when a TextView is inside a
+        # ScrolledWindow is somewhat broken in a way that it would make it get
+        # a height of 0 when being displayed.
+        self.set_property('overlay_scrolling', False)
+
     def _create_view(self):
-        self._textview = gtk.TextView()
+        self._textview = Gtk.TextView()
         self._textview.set_editable(False)
         self._textview.set_cursor_visible(False)
-        self._textview.set_wrap_mode(gtk.WRAP_WORD)
+        self._textview.set_wrap_mode(Gtk.WrapMode.WORD)
         self._textview.set_property('width-request', 1)
         self.add(self._textview)
         self.show()
         self._textview.show()
 
     def _watch_fd(self, fd):
-        try:
-            import fcntl
-            fcntl.fcntl(fd, fcntl.F_SETFL, os.O_NONBLOCK)
-        except ImportError:
-            return
-        source_id = glib.io_add_watch(fd, glib.IO_IN, self._io_watch)
-        self._source_ids.append(source_id)
-
-    def _io_watch(self, fd, cond):
-        while True:
-            try:
-                data = fd.read(N_BYTES)
-            except IOError as e:
-                if e.errno == errno.EAGAIN:
-                    break
-                else:
-                    raise
-            if data == '':
-                break
-            for line in data.split('\n'):
-                if line:
-                    self.emit('read-line', line)
-                    self.feed(line + '\r\n')
-        return True
+        for l in iter(fd.readline, ''):
+            # os-independent form of stripping newline from the end of
+            # the fine. We want to add it manually bellow
+            line = l.splitlines()[0]
+            schedule_in_main_thread(self.emit, 'read-line', line)
+            schedule_in_main_thread(self.feed, line + '\r\n')
 
     def _check_child_finished(self):
         self.retval = self.proc.poll()
@@ -97,9 +82,6 @@ class ProcessView(gtk.ScrolledWindow):
         return not finished
 
     def _finished(self):
-        for source_id in self._source_ids[:]:
-            glib.source_remove(source_id)
-            self._source_ids.remove(source_id)
         self.emit('finished', self.retval)
 
     def execute_command(self, args):
@@ -115,12 +97,12 @@ class ProcessView(gtk.ScrolledWindow):
             kwargs['stderr'] = PIPE
         self.proc = Process(args, **kwargs)
         if self.listen_stdout:
-            self._watch_fd(self.proc.stdout)
+            threadit(self._watch_fd, self.proc.stdout)
         if self.listen_stderr:
-            self._watch_fd(self.proc.stderr)
+            threadit(self._watch_fd, self.proc.stderr)
 
         # We could probably listen to SIGCHLD here instead
-        glib.timeout_add(CHILD_TIMEOUT, self._check_child_finished)
+        GLib.timeout_add(CHILD_TIMEOUT, self._check_child_finished)
 
     def feed(self, line):
         tbuffer = self._textview.get_buffer()

@@ -20,8 +20,10 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-import weasyprint
+import os
+import platform
 
+from gi.repository import GdkPixbuf
 from kiwi.accessor import kgetattr
 from kiwi.environ import environ
 
@@ -78,7 +80,13 @@ class HTMLReport(object):
         html.flush()
 
     def render(self, stylesheet=None):
+        import weasyprint
+
         template_dir = environ.get_resource_filename('stoq', 'template')
+        if platform.system() == 'Windows':
+            # FIXME: Figure out why this is breaking
+            # On windows, weasyprint is eating the last directory of the path
+            template_dir = os.path.join(template_dir, 'foobar')
         html = weasyprint.HTML(string=self.get_html(),
                                base_url=template_dir)
 
@@ -239,11 +247,11 @@ class ObjectListReport(TableReport):
         TableReport.__init__(self, filename, data, *args, **kwargs)
 
     def get_columns(self):
-        import gtk
+        from gi.repository import Gtk
         alignments = {
-            gtk.JUSTIFY_LEFT: 'left',
-            gtk.JUSTIFY_RIGHT: 'right',
-            gtk.JUSTIFY_CENTER: 'center',
+            Gtk.Justification.LEFT: 'left',
+            Gtk.Justification.RIGHT: 'right',
+            Gtk.Justification.CENTER: 'center',
         }
 
         # The real columns from the objectlist
@@ -252,7 +260,7 @@ class ObjectListReport(TableReport):
         for c in self._objectlist.get_columns():
             if not c.treeview_column.get_visible():
                 continue
-            if c.data_type == gtk.gdk.Pixbuf:
+            if c.data_type == GdkPixbuf.Pixbuf:
                 continue
 
             self._columns.append(c)

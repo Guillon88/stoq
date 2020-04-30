@@ -23,7 +23,7 @@
 ##
 """ Slaves for payment methods management"""
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.datatypes import converter
 from kiwi.ui.delegates import GladeSlaveDelegate
@@ -67,9 +67,9 @@ class SelectPaymentMethodSlave(GladeSlaveDelegate):
         else:
             method_name = None
             description = _("No payments")
-        widget = gtk.RadioButton(group, N_(description))
+        widget = Gtk.RadioButton(group=group, label=N_(description))
         widget.connect('toggled', self._on_method__toggled)
-        widget.set_data('method', method)
+        widget._method = method
         self.methods_box.pack_start(widget, False, False, 6)
         widget.show()
 
@@ -206,5 +206,5 @@ class SelectPaymentMethodSlave(GladeSlaveDelegate):
         if not radio.get_active():
             return
 
-        self._selected_method = radio.get_data('method')
+        self._selected_method = radio._method
         self.emit('method-changed', self._selected_method)

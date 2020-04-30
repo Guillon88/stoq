@@ -27,6 +27,7 @@
 
 import fnmatch
 import logging
+import functools
 import os
 import re
 import shutil
@@ -36,9 +37,7 @@ import traceback
 
 from kiwi.environ import environ
 
-from stoqlib.api import api
-from stoqlib.database.runtime import (get_default_store,
-                                      new_store)
+from stoqlib.database.runtime import get_default_store, new_store
 from stoqlib.database.settings import db_settings, check_extensions
 from stoqlib.domain.plugin import InstalledPlugin
 from stoqlib.domain.profile import update_profile_applications
@@ -56,12 +55,14 @@ log = logging.getLogger(__name__)
 create_log = logging.getLogger('stoqlib.database.create')
 
 
+@functools.total_ordering
 class Patch(object):
     """A Database Patch
 
     :attribute filename: patch filename
     :attribute level: database level
     """
+
     def __init__(self, filename, migration):
         """
         Create a new Patch object.
@@ -79,8 +80,13 @@ class Patch(object):
         self.level = int(base_parts[2])
         self._migration = migration
 
-    def __cmp__(self, other):
-        return cmp(self.get_version(), other.get_version())
+    __hash__ = object.__hash__
+
+    def __eq__(self, other):
+        return self.get_version() == other.get_version()
+
+    def __lt__(self, other):
+        return self.get_version() < other.get_version()
 
     def apply(self, store):
         """Apply the patch
@@ -115,7 +121,7 @@ class Patch(object):
             # Execute the patch, we cannot use __import__() since there are
             # hyphens in the filename and data/sql lacks an __init__.py
             ns = {}
-            execfile(self.filename, ns, ns)
+            exec(compile(open(self.filename).read(), self.filename, 'exec'), ns, ns)
             function = ns['apply_patch']
 
             # Create a new store that will be used to apply the patch and
@@ -217,9 +223,6 @@ class SchemaMigration(object):
                     continue
                 patches_to_apply.append(patch)
 
-            from stoqlib.database.admin import create_database_functions
-            create_database_functions()
-
             log.info("Applying %d patches" % (len(patches_to_apply), ))
             create_log.info("PATCHES:%d" % (len(patches_to_apply), ))
 
@@ -233,20 +236,14 @@ class SchemaMigration(object):
                 ', '.join(str(p.level) for p in patches_to_apply)))
             last_level = patches_to_apply[-1].get_version()
 
-        self.after_update()
-
         return current_version, last_level
 
     # Public API
 
     def check(self, check_plugins=True):
-        if self.check_uptodate():
-            return True
-
-        if not check_plugins:
-            return True
-
-        if self.check_plugins():
+        # always check if schema is up to date and optionally (depending on check_plugins flag)
+        # check if plugins are up to date as well
+        if self.check_uptodate() and (not check_plugins or self.check_plugins()):
             return True
 
         error(_("Database schema error"),
@@ -300,6 +297,10 @@ class SchemaMigration(object):
     def update(self):
         """Updates the database schema
         """
+        # Make sure that database functions are up to date even if there are no patches to apply.
+        from stoqlib.database.admin import create_database_functions
+        create_database_functions()
+
         if self.check_uptodate():
             print('Database is already at the latest version %d.%d' % (
                 self.get_current_version()))
@@ -311,6 +312,8 @@ class SchemaMigration(object):
                 f = "(%d.%d)" % from_
                 t = "(%d.%d)" % to
                 print('Database schema updated from %s to %s' % (f, t))
+
+        self.after_update()
 
     def get_current_version(self):
         """This method is revision for returning the database schema version
@@ -349,16 +352,6 @@ class StoqlibSchemaMigration(SchemaMigration):
     def __init__(self):
         super(StoqlibSchemaMigration, self).__init__()
         self._backup = None
-
-    def check_uptodate(self):
-        retval = super(StoqlibSchemaMigration, self).check_uptodate()
-
-        # If the database already needs upgrading, dont check the parameters
-        # presence (since they may need an upgrade as well)
-        if retval and not sysparam.check_parameter_presence():
-            return False
-
-        return retval
 
     def _check_database(self):
         try:
@@ -416,29 +409,27 @@ class StoqlibSchemaMigration(SchemaMigration):
 
         os.unlink(self._backup)
 
-    @api.async
-    def update_async(self, plugins=True, backup=True):
-        log.info("Upgrading database (plugins=%r, backup=%r)" % (
-            plugins, backup))
+    def _get_transaction_entry_tables(self, store):
+        """Returns a list of all tables that reference transaction_entry"""
+        tables_query = """
+        SELECT DISTINCT src_pg_class.relname AS srctable
+        FROM pg_constraint
+        JOIN pg_class AS src_pg_class ON src_pg_class.oid = pg_constraint.conrelid
+        JOIN pg_class AS ref_pg_class ON ref_pg_class.oid = pg_constraint.confrelid
+        JOIN pg_attribute AS src_pg_attribute ON src_pg_class.oid = src_pg_attribute.attrelid
+        JOIN pg_attribute AS ref_pg_attribute
+            ON ref_pg_class.oid = ref_pg_attribute.attrelid, generate_series(0,10) pos(n)
+        WHERE
+            contype = 'f'
+            AND ref_pg_class.relname = 'transaction_entry'
+            AND ref_pg_attribute.attname = 'id'
+            AND src_pg_attribute.attnum = pg_constraint.conkey[n]
+            AND ref_pg_attribute.attnum = pg_constraint.confkey[n]
+            AND NOT src_pg_attribute.attisdropped
+            AND NOT ref_pg_attribute.attisdropped
+        """
 
-        if not self._check_database():
-            api.asyncReturn(False)
-
-        if backup:
-            self._backup_database()
-
-        # Don't try to update the plugins if the database doesn't
-        # have the plugin_egg table, which was included in patch-05-15
-        if self.get_current_version() >= (5, 15):
-            manager = get_plugin_manager()
-            for egg_plugin in manager.egg_plugins_names:
-                try:
-                    yield manager.download_plugin(egg_plugin)
-                except Exception:
-                    pass
-
-        api.asyncReturn(
-            self.update(plugins=plugins, backup=False, check_database=False))
+        return [i for (i,) in store.execute(tables_query).get_all()]
 
     def update(self, plugins=True, backup=True, check_database=True):
         log.info("Upgrading database (plugins=%r, backup=%r)" % (
@@ -449,6 +440,16 @@ class StoqlibSchemaMigration(SchemaMigration):
 
         if backup:
             self._backup_database()
+
+        # Don't try to update the plugins if the database doesn't
+        # have the plugin_egg table, which was included in patch-05-15
+        if self.get_current_version() >= (5, 15):
+            manager = get_plugin_manager()
+            for egg_plugin in manager.egg_plugins_names:
+                try:
+                    manager.download_plugin(egg_plugin)
+                except Exception:
+                    pass
 
         # We have to wrap a try/except statement inside a try/finally to
         # support python previous to 2.5 version.
@@ -512,6 +513,7 @@ class StoqlibSchemaMigration(SchemaMigration):
 
         # Updating the parameter list
         sysparam.ensure_system_parameters(store, update=True)
+        self.ensure_te_rules(store)
         store.commit(close=True)
 
     def generate_sql_for_patch(self, patch):
@@ -520,11 +522,29 @@ class StoqlibSchemaMigration(SchemaMigration):
             "VALUES (NOW(), %s, %s);", (patch.level,
                                         patch.generation))
 
+    def ensure_te_rules(self, store):
+        """Ensures that all tables have the transcation entry rules
+
+        It may happen that the developer forgets to add the update_te rule after the table is
+        created, leaving a table that will not be properly synchronized.
+
+        This makes sure that all tables have the update_te rule.
+        """
+        query = """
+        ALTER TABLE {table} ALTER COLUMN te_id SET DEFAULT new_te('{table}');
+        CREATE OR REPLACE RULE update_te AS ON UPDATE TO {table}
+            DO ALSO SELECT update_te(old.te_id, '{table}');
+        """
+
+        for table in self._get_transaction_entry_tables(store):
+            store.execute(query.format(table=table))
+
 
 class PluginSchemaMigration(SchemaMigration):
     """This is a SchemaMigration class which is suitable for use within
     a plugin
     """
+
     def __init__(self, plugin_name, resource_domain, resource, patterns):
         """
         Create a new PluginSchemaMigration object.

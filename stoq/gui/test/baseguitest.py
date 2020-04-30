@@ -22,8 +22,8 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-import gtk
 import mock
+from gi.repository import Gtk
 
 from stoqlib.api import api
 from stoqlib.domain.profile import ProfileSettings
@@ -33,8 +33,6 @@ from stoqlib.gui.test.uitestutils import GUITest
 import stoq
 from stoq.gui.shell.shellapp import ShellApp
 from stoq.gui.shell.shellwindow import ShellWindow
-
-gtk.set_interactive(False)
 
 
 class MockShellWindow(ShellWindow):
@@ -85,7 +83,13 @@ class BaseGUITest(GUITest):
         self.shell = mock.Mock()
         self.options = mock.Mock(spec=[u'debug'])
         self.options.debug = False
-        self.window = MockShellWindow(self.options, self.shell, store=self.store)
+        app = Gtk.Application.get_default()
+        if not app:
+            app = Gtk.Application()
+            app.set_default()
+            app.register()
+        self.window = MockShellWindow(self.options, self.shell,
+                                      store=self.store, app=app)
         self.window.in_ui_test = True
         self.window.statusbar.push(0, u'Test Statusbar test')
 

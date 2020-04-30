@@ -1,14 +1,14 @@
 wizard: NewLoanWizard
 GtkDialog(toplevel): title='New Loan Wizard', hidden
-  GtkVBox(PluggableWizard-vbox):
-    GtkVBox(vbox1, expand=True, fill=True):
+  GtkBox(PluggableWizard-vbox, orientation=vertical):
+    GtkBox(vbox1, orientation=vertical, expand=True, fill=True):
       ProxyLabel(header_lbl, fill=True): hidden
       GtkEventBox(slave_area, expand=True, fill=True): slave LoanItemStep is attached
-        GtkVBox(step.toplevel):
+        GtkBox(step.toplevel, orientation=vertical):
           GtkTable(step.item_table, fill=True):
-            GtkHBox(step.hbox2):
+            GtkBox(step.hbox2, orientation=horizontal):
               ProxyLabel(step.item_lbl, fill=True): 'Item:'
-              GtkEntry(step.barcode, fill=True): ''
+              ProxyEntry(step.barcode, fill=True): '', invalid
               GtkButton(step.product_button):
             ProxyLabel(step.kiwilabel2): 'Quantity:'
             ProxySpinButton(step.quantity): '0', insensitive
@@ -21,56 +21,64 @@ GtkDialog(toplevel): title='New Loan Wizard', hidden
             ProxyLabel(step.minimum_quantity): '<span >0.0</span>', hidden
             GtkLabel(step.stock_quantity_lbl): 'Stock:', hidden
             ProxyLabel(step.stock_quantity): '<span >0.0</span>', hidden
-          GtkEventBox(step.list_holder, expand=True, fill=True): slave AdditionListSlave is attached
-            GtkVBox(toplevel):
-              GtkVBox(list_vbox, expand=True, fill=True):
-                ObjectTree(klist, expand=True, fill=True):
-                  column: title='Code', hidden
-                  column: title='Barcode', hidden
-                  column: title='Description', expand
-                  column: title='Manufacturer', hidden
-                  column: title='Model', hidden
-                  column: title='Category', expand
-                  column: title='Quantity'
-                  column: title='Unit'
-                  column: title='CFOP', hidden
-                  column: title='ICMS BC', hidden
-                  column: title='ICMS', hidden
-                  column: title='IPI', hidden
-                  column: title='Original Price'
-                  column: title='Sale Price'
-                  column: title='Discount'
-                  column: title='Total'
-                  row: u'', u'', u'Description', None, None, u'', Decimal('1.000'), u'', None, None, None, None, <currency $10>, <currency $10>, None, <currency $10>
-                GtkHBox(step.summary, fill=True):
-                  GtkLabel(expand=True, fill=True, padding=6): '<b>Total Ordered:</b>'
-                  GtkLabel(): '<b>$10.00</b>'
-              GtkHBox(hbox1, fill=True):
-                GtkHBox(button_box):
-                  GtkButton(add_button): hidden
-                  GtkButton(edit_button): insensitive
-                  GtkButton(delete_button): insensitive
-                  GtkButton(step.discount_btn, pack-end): 'Apply discount'
-                GtkHBox(message_hbox, expand=True, fill=True): hidden
-                  GtkLabel(message_label, expand=True, fill=True):
-                  GtkButton(message_details_button, fill=True): 'Details'
+          GtkOverlay(step.overlay, expand=True, fill=True):
+            GtkEventBox(step.list_holder): slave AdditionListSlave is attached
+              GtkBox(vbox1, orientation=vertical):
+                GtkBox(list_vbox, orientation=vertical, expand=True, fill=True):
+                  ObjectTree(klist, expand=True, fill=True):
+                    column: title='Code', hidden
+                    column: title='Barcode', hidden
+                    column: title='Description', expand
+                    column: title='Manufacturer', hidden
+                    column: title='Model', hidden
+                    column: title='Category', expand
+                    column: title='Quantity'
+                    column: title='Unit'
+                    column: title='CFOP', hidden
+                    column: title='ICMS BC', hidden
+                    column: title='ICMS', hidden
+                    column: title='IPI', hidden
+                    column: title='Original Price'
+                    column: title='Sale Price'
+                    column: title='Discount'
+                    column: title='Total'
+                    row: '', '', 'Description', None, None, '', Decimal('1.000'), '', '5917', None, None, <currency $0>, <currency $10>, <currency $10>, None, <currency $10>
+                  SummaryLabel(step.summary, fill=True):
+                    GtkLabel(expand=True, fill=True, padding=6): '<b>Total Ordered:</b>'
+                    GtkLabel(): '<b>$10.00</b>'
+                GtkBox(hbox1, orientation=horizontal, fill=True):
+                  GtkBox(button_box, orientation=horizontal):
+                    GtkButton(add_button): hidden
+                    GtkButton(edit_button): insensitive
+                    GtkButton(delete_button): insensitive
+                    GtkButton(step.discount_btn, pack-end): 'Apply discount'
+                  GtkBox(message_hbox, orientation=horizontal, expand=True, fill=True): hidden
+                    GtkLabel(message_label, expand=True, fill=True):
+                    GtkButton(message_details_button, fill=True): 'Details'
+            GtkBox(step.box, orientation=horizontal):
+              GtkBox(step.warning_box, orientation=vertical, fill=True):
+                GtkLabel(step.warning_label, fill=True):
+                GtkLabel(step.dismiss_label, fill=True):
       ProxyLabel(notification_lbl, fill=True):
-      GtkHBox(hbox1, fill=True, pack-end):
-        GtkHButtonBox(buttonbox, expand=True, fill=True, pack-end):
+      GtkBox(hbox1, orientation=horizontal, fill=True, pack-end):
+        GtkButtonBox(buttonbox, orientation=horizontal, expand=True, fill=True, pack-end):
           GtkButton(cancel_button): 'gtk-cancel'
           GtkButton(previous_button): 'gtk-go-back'
           GtkButton(next_button): '_Finish'
           GtkButton(ok_button): 'gtk-ok', hidden
-          GtkButton(help_button): 'gtk-help'
-    GtkHButtonBox(dialog-action_area1, fill=True, pack-end):
+          GtkButton(help_button, expand=True, fill=True): 'gtk-help'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(dialog-action_area1, orientation=horizontal, fill=True, pack-end):
 
 model: Loan<1>
+  cancel_date: None
+  cancel_reason: None
   close_date: None
   expire_date: datetime.today()
-  notes: u''
+  notes: ''
   open_date: datetime.today()
-  removed_by: u''
-  status: u'open'
+  removed_by: ''
+  status: 'open'
 
 model: LoanItem<2>
   base_price: <currency $10>

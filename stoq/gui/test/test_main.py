@@ -30,7 +30,6 @@ from kiwi.ui.widgets.label import ProxyLabel
 from stoqlib.lib.interfaces import IAppInfo
 from stoqlib.lib.settings import get_settings
 
-import stoq
 from stoq.main import main
 from stoq.gui.shell.bootstrap import ShellBootstrap
 
@@ -55,7 +54,7 @@ class TestMain(unittest.TestCase):
         # If a dependency is missing, avoid showing an error message
         # or else jenkins will hang
         mocked = mock.patch('stoq.lib.dependencies.DependencyChecker._error',
-                            new=lambda *args: None)
+                            new=lambda *args, **kwargs: None)
         self._mocks.append(mocked)
 
         for mocked in self._mocks:
@@ -76,12 +75,15 @@ class TestMain(unittest.TestCase):
         options = mock.Mock()
         bootstrap = ShellBootstrap(options=options, initial=True)
         mocks = []
-        for func in [
-                # Those two fail as testsuit already setup them
-                '_setup_gobject',
-                '_setup_twisted']:
-            mocked = mock.patch.object(bootstrap, func, new=lambda: None)
-            mocks.append(mocked)
+        # This will fail since testsuit already setup it
+        mocks.append(
+            mock.patch.object(bootstrap, '_setup_gobject', new=lambda: None))
+        # This will change the locale of all the tests that come after it,
+        # making a lot of them fail
+        mocks.append(
+            mock.patch.object(bootstrap, '_set_user_locale', new=lambda: None))
+
+        for mocked in mocks:
             mocked.start()
 
         try:
@@ -108,12 +110,11 @@ class TestMain(unittest.TestCase):
         boot_shell().main.assert_called_once_with('payable', 'AddPayment')
         boot_shell.reset_mock()
 
-        with self.assertRaisesRegexp(SystemExit,
-                                     stoq.version):
+        with self.assertRaises(SystemExit):
             main(['stoq', '--version'])
 
-        with self.assertRaisesRegexp(
-            SystemExit,
-            r"'no-such-app' is not an application. "
-            r"Valid applications are: \[[a-z,\' ]+\]"):
+        with self.assertRaisesRegex(
+                SystemExit,
+                r"'no-such-app' is not an application. "
+                r"Valid applications are: \[[a-z,\' ]+\]"):
             main(['stoq', 'no-such-app'])

@@ -24,7 +24,7 @@ import locale
 import platform
 
 from kiwi.environ import environ
-import gtk
+from gi.repository import Gtk
 
 from stoqlib.api import api
 from stoqlib.gui.base.dialogs import BasicDialog
@@ -52,34 +52,27 @@ class WelcomeDialog(BasicDialog):
         self._open_uri(uri)
 
     def _build_ui(self):
-        sw = gtk.ScrolledWindow()
-        sw.set_shadow_type(gtk.SHADOW_ETCHED_IN)
+        sw = Gtk.ScrolledWindow()
+        sw.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
         self.vbox.remove(self.main)
         self.vbox.add(sw)
         sw.show()
 
-        if platform.system() != 'Windows':
-            import webkit
-            self._view = webkit.WebView()
-            self._view.connect(
-                'navigation-policy-decision-requested',
-                self._on_view__navigation_policy_decision_requested)
-            sw.add(self._view)
-            self._view.show()
-        else:
-            self._view = None
+        from gi.repository import WebKit
+        self._view = WebKit.WebView()
+        self._view.connect(
+            'navigation-policy-decision-requested',
+            self._on_view__navigation_policy_decision_requested)
+        sw.add(self._view)
+        self._view.show()
 
     def _setup_buttons(self):
         self.cancel_button.hide()
         self.ok_button.set_label(_("_Start using Stoq"))
 
     def _open_uri(self, uri):
-        if self._view:
-            self._view.load_uri(uri)
-            self.ok_button.grab_focus()
-        else:
-            open_browser(uri, self.toplevel.get_screen())
-            self.toplevel.hide()
+        self._view.load_uri(uri)
+        self.ok_button.grab_focus()
 
     def get_uri(self):
         # Make sure we extract everything from html in case we are running

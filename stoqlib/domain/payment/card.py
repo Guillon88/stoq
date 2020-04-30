@@ -40,7 +40,7 @@ from zope.interface import implementer
 from storm.expr import And, Delete, Or, Update
 from storm.references import Reference
 
-from stoqlib.database.properties import (PercentCol, PriceCol, DateTimeCol,
+from stoqlib.database.properties import (BoolCol, PercentCol, PriceCol, DateTimeCol,
                                          IntCol, UnicodeCol, IdCol, EnumCol)
 from stoqlib.domain.base import Domain
 from stoqlib.domain.interfaces import IDescribable
@@ -74,6 +74,12 @@ class CreditProvider(Domain):
 
     #: The date when we start working with this provider
     open_contract_date = DateTimeCol()
+
+    #: the order of what provider should be displayed
+    sort_order = IntCol(default=0)
+
+    #: if the card provider should be displayed
+    visible = BoolCol(default=True)
 
     #
     # IDescribable
@@ -127,6 +133,10 @@ class CardPaymentDevice(Domain):
 
     #: user-defined description of the device, like "Mastercard reader"
     description = UnicodeCol()
+
+    #: The |supplier| id for this device
+    supplier_id = IdCol()
+    supplier = Reference(supplier_id, 'Supplier.id')
 
     def get_description(self):
         return self.description
@@ -311,6 +321,9 @@ class CreditCardData(Domain):
     #: date. Not completely supported in Stoq yet
     TYPE_DEBIT_PRE_DATED = u'debit-pre-dated'
 
+    #: This is a voucher card payment.
+    TYPE_VOUCHER = 'voucher'
+
     types = collections.OrderedDict([
         (TYPE_CREDIT, _(u'Credit Card')),
         (TYPE_DEBIT, _(u'Debit Card')),
@@ -318,19 +331,21 @@ class CreditCardData(Domain):
         (TYPE_CREDIT_INSTALLMENTS_PROVIDER, _(u'Credit Card Installments '
                                               u'Provider')),
         (TYPE_DEBIT_PRE_DATED, _(u'Debit Card Pre-dated')),
+        (TYPE_VOUCHER, _(u'Voucher')),
     ])
 
-    short_desc = {
-        TYPE_CREDIT: _(u'Credit'),
-        TYPE_DEBIT: _(u'Debit'),
-        # translators: This is 'Credit Card Installments Store, but should be
+    short_desc = collections.OrderedDict([
+        (TYPE_CREDIT, _(u'Credit')),
+        (TYPE_DEBIT, _(u'Debit')),
+        # translators, This is 'Credit Card Installments Store, but should be
         # abbreviated to fit a small space
-        TYPE_CREDIT_INSTALLMENTS_STORE: _(u'Credit Inst. Store'),
-        # translators: This is 'Credit Card Installments Provider, but should be
+        (TYPE_CREDIT_INSTALLMENTS_STORE, _(u'Credit Inst. Store')),
+        # translators, This is 'Credit Card Installments Provider, but should be
         # abbreviated to fit a small space
-        TYPE_CREDIT_INSTALLMENTS_PROVIDER: _(u'Credit Inst. Provider'),
-        TYPE_DEBIT_PRE_DATED: _(u'Debit Pre-dated'),
-    }
+        (TYPE_CREDIT_INSTALLMENTS_PROVIDER, _(u'Credit Inst. Provider')),
+        (TYPE_DEBIT_PRE_DATED, _(u'Debit Pre-dated')),
+        (TYPE_VOUCHER, _(u'Voucher')),
+    ])
 
     payment_id = IdCol()
 
@@ -359,12 +374,12 @@ class CreditCardData(Domain):
     fee_value = PriceCol(default=0)
 
     #: this is used by the tef plugin.
-    nsu = IntCol(default=None)
+    nsu = UnicodeCol(default=None)
 
     #: The authorization number returned by the payment device. This will be
     #: returned automatically by the tef plugin, but needs to be manually
     #: informed if not using the plugin.
-    auth = IntCol(default=None)
+    auth = UnicodeCol(default=None)
 
     #: the number of installments, used by the tef plugin
     installments = IntCol(default=1)
@@ -372,6 +387,21 @@ class CreditCardData(Domain):
     #: the value of the first installment (when installments > 1), used by the
     #: tef plugin
     entrance_value = PriceCol(default=0)
+
+    def is_credit(self):
+        return self.card_type in (self.TYPE_CREDIT, self.TYPE_CREDIT_INSTALLMENTS_STORE,
+                                  self.TYPE_CREDIT_INSTALLMENTS_PROVIDER)
+
+    def is_debit(self):
+        return self.card_type in (self.TYPE_DEBIT, self.TYPE_DEBIT_PRE_DATED)
+
+    def is_voucher(self):
+        return self.card_type == self.TYPE_VOUCHER
+
+    def get_description(self):
+        type_desc = CreditCardData.short_desc[self.card_type]
+        desc = u'%s %s' % (self.provider.short_name, type_desc)
+        return desc
 
     def update_card_data(self, device, provider,
                          card_type, installments):

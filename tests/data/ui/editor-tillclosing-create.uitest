@@ -1,38 +1,40 @@
 editor: TillClosingEditor
 GtkDialog(main_dialog.toplevel): title='Closing Opened Till', hidden
-  GtkVBox(main_dialog._main_vbox):
-    GtkVBox(main_dialog.vbox, expand=True, fill=True):
+  GtkBox(main_dialog._main_vbox, orientation=vertical):
+    GtkBox(main_dialog.vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(main_dialog.header):
       GtkEventBox(main_dialog.main, expand=True, fill=True, padding=6): slave TillClosingEditor is attached
-        GtkVBox(toplevel):
+        GtkBox(vbox1, orientation=vertical):
           GtkTable(table2, fill=True):
             GtkLabel(label9): '<b>General Details:</b>'
-            GtkHBox(hbox1):
+            GtkBox(hbox1, orientation=horizontal):
               GtkLabel(label11, fill=True): 'Open Date:'
               ProxyLabel(opening_date, expand=True, fill=True): '<span >YYYY-MM-DD</span>'
-          GtkVBox(day_history_box, expand=True, fill=True):
+          GtkBox(day_history_box, orientation=vertical, expand=True, fill=True):
             ObjectList(day_history, expand=True, fill=True):
               column: title='Description'
               column: title='Amount'
-              row: u'Initial Amount', <currency $ 0>
-            GtkHBox(fill=True):
+              row: 'Initial Amount', <currency $0>
+            SummaryLabel(fill=True):
               GtkLabel(expand=True, fill=True, padding=6): '<b>Total balance:</b>'
-              GtkLabel(): '$ 0.00'
-          GtkTable(table1, fill=True):
-            GtkLabel(label18): 'Float Remaining:'
-            ProxyLabel(balance): '<span >$ 0.00</span>'
-            ProxyLabel(label17): 'Amount Removed ($CURRENCY):'
+              GtkLabel(): '$0.00'
+          GtkGrid(totals_grid, fill=True):
             ProxyEntry(value): '0.00'
-            GtkLabel(label1): 'Observations:'
-            GtkViewport(viewport1):
+            ProxyLabel(label17): 'Amount Removed ($CURRENCY):'
+            ProxyLabel(balance): '<span >$0.00</span>'
+            GtkLabel(label18): 'Float Remaining:'
+          GtkBox(box1, orientation=vertical, fill=True):
+            GtkLabel(label1, fill=True): 'Observations:'
+            GtkViewport(viewport1, expand=True, fill=True):
               GtkScrolledWindow(scrolledwindow1):
                 ProxyTextView(observations):
-      GtkHBox(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(main_dialog.extra_holder, expand=True, fill=True, padding=6):
         GtkEventBox(main_dialog.print_holder, expand=True, fill=True):
         GtkEventBox(main_dialog.notice, fill=True):
         GtkEventBox(main_dialog.details_holder, padding=6, pack-end):
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
-      GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok'
-      GtkButton(main_dialog.help_button, padding=6): 'gtk-help'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(main_dialog.action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
+        GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok'
+        GtkButton(main_dialog.help_button, padding=6): 'gtk-help'

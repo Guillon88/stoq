@@ -24,15 +24,19 @@
 ##
 """ Classes for Transfer Order Details Dialog """
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column, SummaryLabel
 
 from stoqlib.api import api
+from stoqlib.domain.events import StockOperationTryFiscalCancelEvent
 from stoqlib.domain.transfer import TransferOrder, TransferOrderItem
+from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.editors.baseeditor import BaseEditor
+from stoqlib.gui.editors.noteeditor import NoteEditor
 from stoqlib.gui.utils.printing import print_report
-from stoqlib.lib.message import yesno
+from stoqlib.lib.message import yesno, warning
+from stoqlib.lib.pluginmanager import get_plugin_manager
 from stoqlib.lib.translation import stoqlib_gettext
 from stoqlib.reporting.transfer import TransferOrderReceipt
 
@@ -54,19 +58,31 @@ class TransferOrderDetailsDialog(BaseEditor):
     model_type = TransferOrder
     report_class = TransferOrderReceipt
     gladefile = "TransferOrderDetails"
-    proxy_widgets = ('open_date',
-                     'receival_date',
-                     'close_date_lbl',
-                     'source_branch_name',
-                     'destination_branch_name',
-                     'source_responsible_name',
-                     'destination_responsible_name',
-                     'invoice_number',
-                     'comments')
+    transfer_widgets = ['open_date',
+                        'receival_date',
+                        'close_date_lbl',
+                        'source_branch_name',
+                        'destination_branch_name',
+                        'source_responsible_name',
+                        'destination_responsible_name',
+                        'comments']
+    invoice_widgets = ['invoice_number']
+    proxy_widgets = transfer_widgets + invoice_widgets
 
     def __init__(self, store, model):
         BaseEditor.__init__(self, store, model)
         self._setup_widgets()
+
+    def add_tab(self, slave, name):
+        """Add a new tab on the notebook
+
+        :param slave: the slave we are attaching to the new tab
+        :param name: the name of the tab
+        """
+        event_box = Gtk.EventBox()
+        self.details_notebook.insert_page(event_box, Gtk.Label(label=name), -1)
+        self.attach_slave(name, slave, event_box)
+        event_box.show()
 
     def _setup_status(self):
         self.status.set_text(self.model.status_str)
@@ -100,19 +116,19 @@ class TransferOrderDetailsDialog(BaseEditor):
                                               label=total_label,
                                               value_format=value_format)
         products_summary_label.show()
-        self.products_vbox.pack_start(products_summary_label, False)
+        self.products_vbox.pack_start(products_summary_label, False, True, 0)
 
     def _get_product_columns(self):
         return [Column("sellable.code", title=_("Code"), data_type=str,
-                       justify=gtk.JUSTIFY_RIGHT, width=130),
+                       justify=Gtk.Justification.RIGHT, width=130),
                 Column("sellable.description", title=_("Description"),
                        data_type=str, expand=True),
                 Column("quantity", title=_("Quantity"),
-                       data_type=int, justify=gtk.JUSTIFY_RIGHT),
+                       data_type=int, justify=Gtk.Justification.RIGHT),
                 Column("sellable.cost", title=_("Cost"), width=100,
-                       data_type=currency, justify=gtk.JUSTIFY_RIGHT),
+                       data_type=currency, justify=Gtk.Justification.RIGHT),
                 Column("total", title=_(u"Total Cost"), width=100,
-                       data_type=currency, justify=gtk.JUSTIFY_RIGHT)]
+                       data_type=currency, justify=Gtk.Justification.RIGHT)]
 
     #
     # BaseEditor Hooks
@@ -123,31 +139,60 @@ class TransferOrderDetailsDialog(BaseEditor):
             self.receival_date.set_property('model-attribute', 'cancel_date')
         elif self.model.status == TransferOrder.STATUS_RECEIVED:
             self.receival_date.set_property('model-attribute', 'receival_date')
-        self.proxy = self.add_proxy(self.model, self.proxy_widgets)
+        self.transfer_proxy = self.add_proxy(self.model, self.transfer_widgets)
+        self.invoice_proxy = self.add_proxy(self.model.invoice, self.invoice_widgets)
 
     def on_receive_button__clicked(self, event):
         assert self.model.status == self.model.STATUS_SENT
 
-        if yesno(_(u'Receive the order?'), gtk.RESPONSE_YES, _(u'Receive'),
+        if yesno(_(u'Receive the order?'), Gtk.ResponseType.YES, _(u'Receive'),
                  _(u"Don't receive")):
-            responsible = api.get_current_user(self.store).person.employee
-            self.model.receive(responsible)
+            user = api.get_current_user(self.store)
+            responsible = user.person.employee
+            self.model.receive(user, responsible)
             self.store.commit(close=False)
             self.receival_date.set_property('model-attribute', 'receival_date')
-            self.proxy.update_many(['destination_responsible_name',
-                                    'receival_date'])
+            self.transfer_proxy.update_many(['destination_responsible_name',
+                                             'receival_date'])
 
         self._setup_status()
 
     def on_cancel_button__clicked(self, event):
-        if yesno(_(u'Cancel the order?'), gtk.RESPONSE_YES, _(u'Cancel transfer'),
-                 _(u"Don't cancel")):
-            responsible = api.get_current_user(self.store).person.employee
-            self.model.cancel(responsible)
-            self.store.commit(close=False)
-            self.receival_date.set_property('model-attribute', 'cancel_date')
-            self.proxy.update_many(['destination_responsible_name',
-                                    'receival_date'])
+        msg_text = _(u'This will cancel the transfer. Are you sure?')
+
+        # nfce plugin cancellation event requires a minimum length for the
+        # cancellation reason note. We can't set this in the plugin because it's
+        # not possible to identify unically this NoteEditor.
+        if get_plugin_manager().is_active('nfce'):
+            note_min_length = 15
+        else:
+            note_min_length = 0
+
+        retval = run_dialog(
+            NoteEditor, self, self.model.store, model=None,
+            message_text=msg_text, label_text=_(u"Reason"), mandatory=True,
+            ok_button_label=_(u"Cancel transfer"),
+            cancel_button_label=_(u"Don't cancel"),
+            min_length=note_min_length)
+
+        if not retval:
+            return
+
+        # Try to cancel the transfer fiscally with a fiscal plugin. If False is
+        # returned, the cancellation failed, so we don't proceed.
+        if StockOperationTryFiscalCancelEvent.emit(self.model, retval.notes) is False:
+            warning(_("The cancellation was not authorized by SEFAZ. You "
+                      "should do a reverse transfer."))
+            return
+
+        user = api.get_current_user(self.store)
+        branch = api.get_current_branch(self.store)
+        responsible = user.person.employee
+        self.model.cancel(user, responsible, retval.notes, branch)
+        self.store.commit(close=False)
+        self.receival_date.set_property('model-attribute', 'cancel_date')
+        self.transfer_proxy.update_many(['destination_responsible_name',
+                                         'receival_date'])
         self.setup_proxies()
         self._setup_status()
     #

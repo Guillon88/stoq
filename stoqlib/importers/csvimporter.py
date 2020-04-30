@@ -42,8 +42,7 @@ class CSVRow(object):
     def __init__(self, item, field_names):
         self.fields = []
         for i, field in enumerate(item):
-            # XXX: we expect to receive unicode data
-            setattr(self, field_names[i], unicode(field, 'utf-8'))
+            setattr(self, field_names[i], field)
             self.fields.append(field_names[i])
 
     def __repr__(self):
@@ -122,7 +121,7 @@ class CSVImporter(Importer):
             if self.lineno % self.items == 0:
                 t2 = time.time()
                 print('%s Imported %d entries in %2.2f sec total=%d' % (
-                    datetime.datetime.now().strftime('%T'), self.items,
+                    datetime.datetime.now().strftime('%H:%M:%S'), self.items,
                     t2 - t, self.lineno))
                 t = t2
 

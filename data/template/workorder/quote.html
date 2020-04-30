@@ -11,7 +11,7 @@
 </%block>
 
 <div class="page">
-  ${ header(complete_header, title, report.subtitle, notes) }
+  ${ header(complete_header, title, None, notes) }
   <h3>${ _("Quote") }</h3>
   <div class="details">
     <div class="column-8">
@@ -56,6 +56,11 @@ yet, use the defect reported by the client for the quote-->
     <pre>${ report.workorder.defect_detected or report.workorder.defect_reported }</pre>
   </section>
 
+  <section id="notice">
+    <span>
+      ${ notice }
+    </span>
+  </section>
 
   <div class="signatures">
     <div class="signature">

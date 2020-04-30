@@ -32,7 +32,8 @@ instead signals and interfaces for that.
 import collections
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
+from kiwi.component import get_utility
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
 from kiwi.ui.objectlist import SummaryLabel
@@ -42,21 +43,31 @@ from storm.expr import And, Lower
 
 from stoqlib.api import api
 from stoqlib.domain.sellable import Sellable
+from stoqlib.domain.payment.payment import Payment
+from stoqlib.domain.payment.group import PaymentGroup
 from stoqlib.domain.product import Product, StorableBatch
+from stoqlib.domain.sale import SaleItem
+from stoqlib.domain.workorder import WorkOrderItem
 from stoqlib.domain.service import ServiceView
 from stoqlib.domain.views import (ProductFullStockItemView,
                                   ProductComponentView, SellableFullStockView,
                                   ProductFullStockView)
+from stoqlib.exceptions import TaxError
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.base.lists import AdditionListSlave
-from stoqlib.gui.base.wizards import WizardStep
+from stoqlib.gui.base.wizards import WizardStep, WizardEditorStep
 from stoqlib.gui.dialogs.batchselectiondialog import BatchDecreaseSelectionDialog
 from stoqlib.gui.dialogs.credentialsdialog import CredentialsDialog
 from stoqlib.gui.editors.baseeditor import BaseEditorSlave
 from stoqlib.gui.events import WizardSellableItemStepEvent
+from stoqlib.gui.interfaces import IDomainSlaveMapper
 from stoqlib.gui.search.sellablesearch import SellableSearch
+from stoqlib.gui.slaves.paymentmethodslave import SelectPaymentMethodSlave
+from stoqlib.gui.slaves.paymentslave import register_payment_slaves
 from stoqlib.gui.widgets.calculator import CalculatorPopup
+from stoqlib.lib.dateutils import localtoday
 from stoqlib.lib.defaults import QUANTITY_PRECISION, MAX_INT
+from stoqlib.lib.message import warning
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -134,12 +145,6 @@ class SellableItemSlave(BaseEditorSlave):
     #: If ``None``, the calculator will not be attached
     calculator_mode = None
 
-    #: If we should add the sellable on the list when activating the barcode.
-    #: This is useful when the barcode is supposed to work with barcode
-    #: readers. Note that, if the sellable with the given barcode wasn't found,
-    #: it'll just be cleared and no error message will be displayed
-    add_sellable_on_barcode_activate = False
-
     #: If we should make visible a label showing the stock and the minimum
     #: quantity of a sellable when one is selected. Note that sellables
     #: without storables (e.g. services) won't have them shown anyway
@@ -186,6 +191,7 @@ class SellableItemSlave(BaseEditorSlave):
                         add_result(parent)
                     if result not in self.slave.klist:
                         self.slave.klist.append(parent, result)
+                    self.slave.klist.expand(result)
                 add_result(item)
             else:
                 self.slave.klist.append(None, item)
@@ -207,11 +213,15 @@ class SellableItemSlave(BaseEditorSlave):
     # Public API
     #
 
-    def add_sellable(self, sellable, parent=None):
+    def add_sellable(self, sellable, parent=None, reset_proxy=True):
         """Add a sellable to the current step
 
         This will call step.get_order_item to create the correct item for the
         current model, and this created item will be returned.
+
+        :param sellable: the |sellable| we are adding
+        :param parent: the |sellable|'s parent we are adding
+        :param reset_proxy: indicate if we want to clear the proxy model right away
         """
         quantity = self.get_quantity()
         value = self.cost.read()
@@ -243,13 +253,15 @@ class SellableItemSlave(BaseEditorSlave):
             else:
                 self.slave.klist.append(parent, item)
 
-            for child in self.proxy.model.children:
-                if parent is None:
+            product = item.sellable.product
+            if product and product.is_package and parent is None:
+                for child in self.proxy.model.children:
                     self.add_sellable(child, parent=item)
+                    self.slave.klist.expand(item)
 
         self.update_total()
 
-        if len(order_items):
+        if reset_proxy and len(order_items):
             self._reset_sellable()
 
         # After an item is added, reset manager to None so the discount is only
@@ -264,7 +276,12 @@ class SellableItemSlave(BaseEditorSlave):
         for item in items:
             # We need to remove the children before remove the parent_item
             self.remove_items(getattr(item, 'children_items', []))
-            self.model.remove_item(item)
+            if isinstance(item, (SaleItem, WorkOrderItem)):
+                # SaleItem and WorkOrderItem may change the stock items. And stock transactions
+                # require the logged user
+                self.model.remove_item(item, api.get_current_user(item.store))
+            else:
+                self.model.remove_item(item)
 
     def hide_item_addition_toolbar(self):
         self.item_table.hide()
@@ -545,6 +562,30 @@ class SellableItemSlave(BaseEditorSlave):
         """
         return {}
 
+    def try_get_sellable(self, grab_focus=True):
+        """Try to get the sellable based on the barcode typed
+        This will try to get the sellable using the barcode the user entered.
+
+           If one is not found, than an advanced search will be displayed for
+        the user, and the string he typed in the barcode entry will be
+        used to filter the results.
+
+        :param grab_focus: indicate if the focus should go to the quantity
+                           widget
+        """
+        sellable, batch = self._get_sellable_and_batch()
+        if not sellable:
+            search_str = self.barcode.get_text()
+            self.run_advanced_search(search_str)
+            return
+
+        self.sellable_selected(sellable, batch=batch)
+
+        if grab_focus:
+            self.quantity.grab_focus()
+        self.quantity.set_sensitive(grab_focus)
+        self.add_sellable_button.set_sensitive(grab_focus)
+
     #
     #  Private
     #
@@ -558,11 +599,12 @@ class SellableItemSlave(BaseEditorSlave):
         # 10 for the length of MAX_INT and 1 for comma
         self.cost.set_max_length(10 + cost_digits + 1)
         self.add_sellable_button.set_sensitive(False)
+        self.overlay.set_overlay_pass_through(self.box, True)
         self.unit_label.set_bold(True)
 
         for widget in [self.quantity, self.cost]:
-            widget.set_adjustment(gtk.Adjustment(lower=0, upper=MAX_INT,
-                                                 step_incr=1))
+            widget.set_adjustment(Gtk.Adjustment(lower=0, upper=MAX_INT,
+                                                 step_increment=1))
 
         self._reset_sellable()
         self._setup_summary()
@@ -586,9 +628,9 @@ class SellableItemSlave(BaseEditorSlave):
                                     label=self.summary_label_text,
                                     value_format='<b>%s</b>')
         self.summary.show()
-        self.slave.list_vbox.pack_start(self.summary, expand=False)
+        self.slave.list_vbox.pack_start(self.summary, False, True, 0)
 
-    def _run_advanced_search(self, search_str=None):
+    def run_advanced_search(self, search_str=None):
         table, query = self.get_sellable_view_query()
         ret = run_dialog(self.sellable_search, self.get_parent(),
                          self.store,
@@ -666,7 +708,6 @@ class SellableItemSlave(BaseEditorSlave):
         barcode = self.barcode.get_text()
         if not barcode:
             return None, None
-        barcode = unicode(barcode, 'utf-8')
 
         sellable, batch = self._find_sellable_and_batch(barcode)
 
@@ -677,13 +718,13 @@ class SellableItemSlave(BaseEditorSlave):
 
         return sellable, batch
 
-    def _add_sellable(self):
+    def _add_sellable(self, reset_proxy=True):
         sellable = self.proxy.model.sellable
         assert sellable
 
         sellable = self.store.fetch(sellable)
 
-        self.add_sellable(sellable)
+        self.add_sellable(sellable, reset_proxy=reset_proxy)
         self.barcode.grab_focus()
 
     def _reset_sellable(self):
@@ -694,30 +735,6 @@ class SellableItemSlave(BaseEditorSlave):
         for widget in [self.minimum_quantity_lbl, self.minimum_quantity,
                        self.stock_quantity, self.stock_quantity_lbl]:
             widget.set_visible(self.stock_labels_visible and visible)
-
-    def _try_get_sellable(self):
-        """Try to get the sellable based on the barcode typed
-        This will try to get the sellable using the barcode the user entered.
-           If one is not found, than an advanced search will be displayed for
-        the user, and the string he typed in the barcode entry will be
-        used to filter the results.
-        """
-        sellable, batch = self._get_sellable_and_batch()
-
-        if not sellable:
-            if self.add_sellable_on_barcode_activate:
-                return
-            search_str = unicode(self.barcode.get_text())
-            self._run_advanced_search(search_str)
-            return
-
-        self.sellable_selected(sellable, batch=batch)
-
-        if (self.add_sellable_on_barcode_activate and
-                self.add_sellable_button.get_sensitive()):
-            self._add_sellable()
-        else:
-            self.quantity.grab_focus()
 
     #
     #  Callbacks
@@ -743,10 +760,10 @@ class SellableItemSlave(BaseEditorSlave):
         self._add_sellable()
 
     def on_product_button__clicked(self, button):
-        self._try_get_sellable()
+        self.try_get_sellable()
 
     def on_barcode__activate(self, widget):
-        self._try_get_sellable()
+        self.try_get_sellable()
 
     def on_quantity__activate(self, entry):
         if self.add_sellable_button.get_sensitive():
@@ -816,7 +833,7 @@ class SellableItemSlave(BaseEditorSlave):
                      valid_data['max_discount']))
 
     def on_cost__icon_press(self, entry, icon_pos, event):
-        if icon_pos != gtk.ENTRY_ICON_PRIMARY:
+        if icon_pos != Gtk.EntryIconPosition.PRIMARY:
             return
 
         # No need to check credentials if it is not a price
@@ -834,6 +851,7 @@ class SellableItemSlave(BaseEditorSlave):
 # SellableItemSlave. This will need a lot of refactoring
 class SellableItemStep(SellableItemSlave, WizardStep):
     model_type = None
+    check_item_taxes = False
 
     def __init__(self, wizard, previous, store, model):
         self.wizard = wizard
@@ -860,8 +878,119 @@ class SellableItemStep(SellableItemSlave, WizardStep):
         self.slave.save_columns()
         return True
 
-    def get_component_quantity(self, parent, sellable):
+    def get_component(self, parent, sellable):
         product = parent.sellable.product
         for component in product.get_components():
             if component.component.sellable == sellable:
-                return component.quantity
+                return component
+
+    def can_add_sellable(self, sellable):
+        if self.check_item_taxes:
+            try:
+                sellable.check_taxes_validity(self.wizard.model.branch)
+            except TaxError as strerr:
+                # If the sellable taxes are not valid, we cannot add it.
+                warning(str(strerr))
+                return False
+
+        return True
+
+
+class BasePaymentStep(WizardEditorStep):
+    gladefile = 'BasePaymentStep'
+    model_type = PaymentGroup
+
+    def __init__(self, wizard, previous, store, model,
+                 outstanding_value=currency(0)):
+        self.parent = model
+        self.slave = None
+        self.discount_surcharge_slave = None
+        self.outstanding_value = outstanding_value
+
+        if not model.payments.count():
+            # Default values
+            self._installments_number = None
+            self._first_duedate = None
+            self._method = 'bill'
+        else:
+            self._installments_number = model.payments.count()
+            self._method = model.payments[0].method.method_name
+
+            # due_date is datetime.datetime. Converting it to datetime.date
+            due_date = model.payments[0].due_date.date()
+            self._first_duedate = (due_date >= localtoday().date() and
+                                   due_date or None)
+
+        WizardEditorStep.__init__(self, store, wizard, model.group, previous)
+
+    def _setup_widgets(self):
+        register_payment_slaves()
+
+        self._ms = SelectPaymentMethodSlave(store=self.store,
+                                            payment_type=Payment.TYPE_OUT,
+                                            default_method=self._method,
+                                            no_payments=True)
+        self._ms.connect_after('method-changed',
+                               self._after_method_select__method_changed)
+
+        self.attach_slave('method_select_holder', self._ms)
+        self._update_payment_method_slave()
+
+    def _set_method_slave(self):
+        """Sets the payment method slave"""
+        method = self._ms.get_selected_method()
+        if not method:
+            return
+        domain_mapper = get_utility(IDomainSlaveMapper)
+        slave_class = domain_mapper.get_slave_class(method)
+        if slave_class:
+            self.wizard.payment_group = self.model
+            self.slave = slave_class(self.wizard, self,
+                                     self.store, self.parent, method,
+                                     outstanding_value=self.outstanding_value,
+                                     first_duedate=self._first_duedate,
+                                     installments_number=self._installments_number,
+                                     temporary_identifiers=self.wizard.is_for_another_branch())
+            self.attach_slave('method_slave_holder', self.slave)
+
+    def _update_payment_method_slave(self):
+        """Updates the payment method slave """
+        holder_name = 'method_slave_holder'
+        if self.get_slave(holder_name):
+            self.slave.get_toplevel().hide()
+            self.detach_slave(holder_name)
+            self.slave = None
+
+        # remove all payments created last time, if any
+        self.model.clear_unused()
+        if not self.slave:
+            self._set_method_slave()
+
+    #
+    # WizardStep hooks
+    #
+
+    def validate_step(self):
+        if self.slave:
+            return self.slave.finish()
+        return True
+
+    def next_step(self):
+        raise NotImplementedError
+
+    def post_init(self):
+        self.model.clear_unused()
+        self.main_box.set_focus_chain([self.method_select_holder,
+                                       self.method_slave_holder])
+        self.register_validate_function(self.wizard.refresh_next)
+        self.force_validation()
+
+    def setup_proxies(self):
+        self._setup_widgets()
+
+    #
+    # callbacks
+    #
+
+    def _after_method_select__method_changed(self, slave, method):
+        self._update_payment_method_slave()

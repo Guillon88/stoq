@@ -19,15 +19,16 @@
 ##  Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-import gtk
+from gi.repository import Gtk
 
 from kiwi.currency import currency
-from kiwi.python import Settable
+from kiwi.python import Settable, cmp
 from kiwi.ui.objectlist import ColoredColumn, Column, ObjectTree
 
 from stoqlib.domain.views import Account, AccountView
 from stoqlib.gui.stockicons import (STOQ_MONEY, STOQ_PAYABLE_APP, STOQ_BILLS,
                                     STOQ_TILL_APP)
+from stoqlib.lib.defaults import payment_value_colorize
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -36,17 +37,19 @@ _ = stoqlib_gettext
 
 class StockTextColumn(Column):
     "A column which you can add a stock item and a text"
+
     def __init__(self, *args, **kwargs):
         Column.__init__(self, *args, **kwargs)
 
     def attach(self, objectlist):
         column = Column.attach(self, objectlist)
-        self._pixbuf_renderer = gtk.CellRendererPixbuf()
+        self._pixbuf_renderer = Gtk.CellRendererPixbuf()
         column.pack_start(self._pixbuf_renderer, False)
         return column
 
     def cell_data_func(self, tree_column, renderer,
-                       model, treeiter, (column, renderer_prop)):
+                       model, treeiter, col_data):
+        column, renderer_prop = col_data
         row = model[treeiter]
         data = column.get_attribute(row[0], column.attribute, None)
         text = column.as_string(data)
@@ -78,20 +81,22 @@ class AccountTree(ObjectTree):
             #        domain classes
             def colorize(account):
                 if (account.kind == 'account' and
-                    account.account_type == Account.TYPE_INCOME):
+                        account.account_type == Account.TYPE_INCOME):
                     return False
                 else:
-                    return account.total < 0
+                    return payment_value_colorize(account.total)
             columns.append(ColoredColumn('total', title=_("Total"), width=100,
                                          data_type=currency,
                                          color='red',
                                          data_func=colorize,
                                          use_data_model=True))
         ObjectTree.__init__(self, columns,
-                            mode=gtk.SELECTION_SINGLE)
+                            mode=Gtk.SelectionMode.SINGLE)
 
         def render_icon(icon):
-            return self.render_icon(icon, gtk.ICON_SIZE_MENU)
+            theme = Gtk.IconTheme.get_default()
+            return theme.load_icon(icon, 16, Gtk.IconLookupFlags.FORCE_SIZE)
+
         self._pixbuf_money = render_icon(STOQ_MONEY)
         self._pixbuf_payable = render_icon(STOQ_PAYABLE_APP)
         self._pixbuf_receivable = render_icon(STOQ_BILLS)

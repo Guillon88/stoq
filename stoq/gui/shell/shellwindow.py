@@ -29,11 +29,10 @@ import platform
 import os
 import operator
 
-import gtk
-import glib
+from gi.repository import Gtk, GLib, Gdk, Gio
 from kiwi.component import get_utility
 from kiwi.environ import environ
-from kiwi.ui.delegates import GladeDelegate
+from kiwi.ui.delegates import Delegate
 from stoqlib.api import api
 from stoqlib.domain.views import ClientWithSalesView
 from stoqlib.gui.base.dialogs import (add_current_toplevel,
@@ -42,19 +41,21 @@ from stoqlib.gui.base.dialogs import (add_current_toplevel,
 from stoqlib.gui.base.messagebar import MessageBar
 from stoqlib.gui.editors.preferenceseditor import PreferencesEditor
 from stoqlib.gui.events import StartApplicationEvent, StopApplicationEvent
+from stoqlib.gui.stockicons import STOQ_LAUNCHER
 from stoqlib.gui.utils.help import show_contents, show_section
 from stoqlib.gui.utils.introspection import introspect_slaves
-from stoqlib.gui.utils.keybindings import get_accel, get_accels
 from stoqlib.gui.utils.logo import render_logo_pixbuf
 from stoqlib.gui.utils.openbrowser import open_browser
+from stoqlib.gui.widgets.notification import NotificationCounter
 from stoqlib.lib.interfaces import IAppInfo, IApplicationDescriptions
 from stoqlib.lib.message import error, yesno
 from stoqlib.lib.permissions import PermissionManager
+from stoqlib.lib.pluginmanager import InstalledPlugin, get_plugin_manager
 from stoqlib.lib.translation import (stoqlib_gettext, stoqlib_ngettext,
                                      locale_sorted)
 from stoqlib.lib.webservice import WebService
-from stoqlib.gui.widgets.toolmenuaction import ToolMenuAction
 from stoq.gui.shell.statusbar import ShellStatusbar
+from stoq.gui.widgets import PopoverMenu, ButtonGroup
 from stoq.lib.applist import get_application_icon, Application
 import stoq
 
@@ -62,26 +63,74 @@ _ = stoqlib_gettext
 log = logging.getLogger(__name__)
 
 
-class ShellWindow(GladeDelegate):
+MENU_XML = """
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <menu id="app-menu">
+    <section id='user-settings'>
+      <attribute name="label" translatable="yes">{username}</attribute>
+      <item>
+        <attribute name="action">stoq.preferences</attribute>
+        <attribute name="label" translatable="yes">{preferences}</attribute>
+      </item>
+      <item>
+        <attribute name="action">stoq.change_password</attribute>
+        <attribute name="label" translatable="yes">{password}</attribute>
+      </item>
+      <item>
+        <attribute name="action">stoq.sign_out</attribute>
+        <attribute name="label" translatable="yes">{signout}</attribute>
+      </item>
+    </section>
+    <section id='help-section'>
+      <attribute name="label" translatable="yes">{help}</attribute>
+      <item>
+        <attribute name="action">stoq.HelpContents</attribute>
+        <attribute name="label" translatable="yes">{contents}</attribute>
+      </item>
+      <item>
+        <attribute name="action">stoq.HelpTranslate</attribute>
+        <attribute name="label" translatable="yes">{translate}</attribute>
+      </item>
+      <item>
+        <attribute name="action">stoq.HelpSupport</attribute>
+        <attribute name="label" translatable="yes">{get_support}</attribute>
+      </item>
+      <item>
+        <attribute name="action">stoq.HelpChat</attribute>
+        <attribute name="label" translatable="yes">{chat}</attribute>
+      </item>
+      <item>
+        <attribute name="action">stoq.HelpAbout</attribute>
+        <attribute name="label" translatable="yes">{about}</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
+        <attribute name="action">stoq.quit</attribute>
+        <attribute name="label" translatable="yes">{quit}</attribute>
+      </item>
+    </section>
+  </menu>
+</interface>
+"""
+
+
+class ShellWindow(Delegate):
     """
     A Shell window is a
 
     - Window
-    - Menubar
-    - Toolbar
     - Application box
     - Statusbar w/ Feedback button
 
     It contain common menu items for:
-      - Opening a new Window
       - Signing out
       - Changing password
       - Closing the application
       - Printing
       - Editing user preferences
       - Spreedshet
-      - Toggle toolbar and statusbar visibility
-      - View Fullscreen
       - Help menu (Chat, Content, Translation, Support, About)
 
     The main function is to create the common ui and switch between different
@@ -101,27 +150,25 @@ class ShellWindow(GladeDelegate):
         'HelpHelp': ('app.common.help', PermissionManager.PERM_ACCESS),
     }
 
-    def __init__(self, options, shell, store):
+    def __init__(self, options, shell, store, app):
         """Creates a new window
 
         :param options: optparse options
         :param shell: the shell
         :param store: a store
+        :param app: a Gtk.Application instance
         """
         self._action_groups = {}
-        self._help_ui = None
+        self._help_section = None
         self._osx_app = None
         self.current_app = None
-        self.current_app_widget = None
         self.shell = shell
-        self.uimanager = gtk.UIManager()
+        self.app = app
         self.in_ui_test = False
-        self.tool_items = []
         self.options = options
         self.store = store
         self._pre_launcher_init()
-        GladeDelegate.__init__(self,
-                               gladefile=self.gladefile)
+        Delegate.__init__(self, toplevel=Gtk.ApplicationWindow.new(app))
         self._create_ui()
         self._launcher_ui_bootstrap()
 
@@ -133,160 +180,79 @@ class ShellWindow(GladeDelegate):
                 'NSApplicationBlockTermination',
                 self._on_osx__block_termination)
             self._osx_app.set_use_quartz_accelerators(True)
-        api.user_settings.migrate()
-        self._app_settings = api.user_settings.get('app-ui', {})
-        self._create_shared_actions()
-        if self.options.debug:
-            self.add_debug_ui()
 
-        self.main_vbox = gtk.VBox()
+        self._app_settings = api.user_settings.get('app-ui', {})
+        self.main_vbox = Gtk.VBox()
 
     #
     # Private
     #
 
-    def _create_shared_actions(self):
-        group = get_accels('app.common')
-        actions = [
-            ('menubar', ),
-            ('toolbar', ),
-
-            # Menus
-            ('FileMenu', None, _("_File")),
-            ('FileMenuNew', None),
-            ("NewMenu", None, _("New")),
-            ("HomeMenu", gtk.STOCK_HOME, _("Home"), None, _("Go back to launcher")),
-
-            ('NewWindow', None, _("_Window"),
-             group.get('new_window'),
-             _('Opens up a new window')),
-            ('Close', None, _('Close'),
-             group.get('close_window'),
-             _('Close the current view and go back to the initial screen')),
-            ('ChangePassword', None, _('Change password...'),
-             group.get('change_password'),
-             _('Change the password for the currently logged in user')),
-            ('SignOut', None, _('Sign out...'),
-             group.get('sign_out'),
-             _('Sign out the currently logged in user and login as another')),
-            ('Print', gtk.STOCK_PRINT, _("Print..."),
-             group.get('print')),
-            ('ExportSpreadSheet', gtk.STOCK_SAVE_AS, _('Export to spreadsheet...')),
-            ("Quit", gtk.STOCK_QUIT, _('Quit'),
-             group.get('quit'),
-             _('Exit the application')),
-
-            # Edit
-            ('EditMenu', None, _("_Edit")),
-            ('Preferences', None, _("_Preferences"),
-             group.get('preferences'),
-             _('Show preferences')),
-
-            # View
-            ('ViewMenu', None, _("_View")),
-
-            # Search
-            ('SearchMenu', None, _("_Search")),
-
-            # Help
-            ("HelpMenu", None, _("_Help")),
-            ("HelpContents", gtk.STOCK_HELP, _("Contents"),
-             group.get('help_contents')),
-            ("HelpTranslate", None, _("Translate Stoq..."), None,
-             _("Translate this application online")),
-            ("HelpSupport", None, _("Get support online..."), None,
-             _("Get support for Stoq online")),
-            ("HelpChat", None, _("Online chat..."), None,
-             _("Talk about Stoq online")),
-            ("HelpAbout", gtk.STOCK_ABOUT),
-
-            # Toolbar
-            ("NewToolMenu", None, _("New")),
-            ("SearchToolMenu", None, _("Search")),
-        ]
-        self.add_ui_actions(None, actions, filename='shellwindow.xml')
-        self.Close.set_sensitive(False)
-        toggle_actions = [
-            ('ToggleToolbar', None, _("_Toolbar"),
-             group.get('toggle_toolbar'),
-             _('Show or hide the toolbar')),
-            ('ToggleStatusbar', None, _("_Statusbar"),
-             group.get('toggle_statusbar'),
-             _('Show or hide the statusbar')),
-            ('ToggleFullscreen', None, _("_Fullscreen"),
-             group.get('toggle_fullscreen'),
-             _('Enter or leave fullscreen mode')),
-        ]
-        self.add_ui_actions('', toggle_actions, 'ToggleActions',
-                            'toggle')
-
-        self.Print.set_short_label(_("Print"))
-        self.add_tool_menu_actions([
-            ("NewToolItem", _("New"), '', gtk.STOCK_NEW),
-            ("SearchToolItem", _("Search"), None, gtk.STOCK_FIND),
-            ("HomeToolItem", _("Home"), None, gtk.STOCK_HOME),
-        ])
-        self.NewToolItem.props.is_important = True
-        self.SearchToolItem.props.is_important = True
-
     def _create_application_actions(self):
-        def callback(action, name):
+        """Create the actions that activate the applications.
+
+        This actions are prefixed by 'launch', followed by the app name (for
+        instance launch.pos)
+        """
+        def callback(action, parameter, name):
             self.switch_application(name)
 
-        self.application_actions = {}
-        actions = []
+        group = Gio.SimpleActionGroup()
+        self.toplevel.insert_action_group('launch', group)
         for app in self.get_available_applications():
-            action = gtk.Action(app.name, app.fullname, app.description, app.icon)
+            action = Gio.SimpleAction.new(app.name, None)
             action.connect('activate', callback, app.name)
-            actions.append(action)
-            self.application_actions[app.name] = action
+            group.add_action(action)
 
-        # By default, the menu comes with an 'Empty' item that we must hide
-        self.HomeToolItem.get_proxies()[0].get_menu().get_children()[-1].hide()
-        self.HomeToolItem.add_actions(self.uimanager, actions,
-                                      add_separator=False)
+        # Also add the launcher app
+        action = Gio.SimpleAction.new('launcher', None)
+        action.connect('activate', callback, 'launcher')
+        group.add_action(action)
+
+    def _create_menu2(self, actions):
+        model = Gio.Menu()
+        for action in actions or []:
+            if isinstance(action, list):
+                section = self._create_menu(action)
+                model.append_section(None, section)
+            else:
+                label, name = action
+                item = Gio.MenuItem.new(label, name)
+                model.append_item(item)
+        return model
+
+    def _create_menu(self, actions):
+        model = Gio.Menu()
+        for action in actions or []:
+            if isinstance(action, list):
+                section = self._create_menu(action)
+                model.append_section(None, section)
+                pass
+            else:
+                fullname, icon, label, accel = self._action_specs[action.get_name()][:-1]
+                item = Gio.MenuItem.new(label, fullname)
+                if accel:
+                    item.set_attribute_value('accel', GLib.Variant('s', accel))
+                    self.app.set_accels_for_action(fullname, [accel])
+                model.append_item(item)
+        return model
 
     def _create_shared_ui(self):
-        self.ToggleToolbar.connect(
-            'notify::active', self._on_ToggleToolbar__notify_active)
-        self.ToggleStatusbar.connect(
-            'notify::active', self._on_ToggleStatusbar__notify_active)
-        self.ToggleFullscreen.connect(
-            'notify::active', self._on_ToggleFullscreen__notify_active)
-
         self.toplevel.add(self.main_vbox)
-        self.main_vbox.show()
 
-        self.application_box = gtk.VBox()
-        self.main_vbox.pack_start(self.application_box)
+        self.application_box = Gtk.HBox()
+        self.main_vbox.pack_start(self.application_box, True, True, 0)
         self.application_box.show()
 
-        menubar = self.uimanager.get_widget('/menubar')
-        if self._osx_app:
-            self._osx_app.set_menu_bar(menubar)
-        else:
-            self.main_vbox.pack_start(menubar, False, False)
-            self.main_vbox.reorder_child(menubar, 0)
-
-        toolbar = self.uimanager.get_widget('/toolbar')
-        self.main_vbox.pack_start(toolbar, False, False)
-        self.main_vbox.reorder_child(toolbar, len(self.main_vbox) - 2)
+        self.stoq_menu = PopoverMenu(self)
+        self.main_vbox.show_all()
 
         self.statusbar = self._create_statusbar()
-        self.main_vbox.pack_start(self.statusbar, False, False)
-        self.main_vbox.reorder_child(self.statusbar, len(self.main_vbox) - 1)
+        self.statusbar.set_visible(True)
 
-        menu_tool_button = self.SearchToolItem.get_proxies()[0]
-        # This happens when we couldn't set the GType of ToolMenuAction
-        # properly
-        if not hasattr(menu_tool_button, 'get_menu'):
-            return
-        search_tool_menu = menu_tool_button.get_menu()
-        # FIXME: For some reason, without this hack, some apps like Stock and
-        #        Purchase shows an extra search tool menu labeled 'empty'
-        for child in search_tool_menu.get_children():
-            search_tool_menu.remove(child)
+        self.main_vbox.pack_start(self.statusbar, False, False, 0)
 
+        self.main_vbox.set_focus_chain([self.application_box])
         self._create_application_actions()
 
     def _create_statusbar(self):
@@ -305,7 +271,7 @@ class ShellWindow(GladeDelegate):
         return statusbar
 
     def _osx_setup_menus(self):
-        self.Quit.set_visible(False)
+        self.quit.set_visible(False)
         self.HelpAbout.set_visible(False)
         self.HelpAbout.set_label(_('About Stoq'))
         self._osx_app.set_help_menu(
@@ -313,19 +279,19 @@ class ShellWindow(GladeDelegate):
         self._osx_app.insert_app_menu_item(
             self.HelpAbout.get_proxies()[0], 0)
         self._osx_app.insert_app_menu_item(
-            gtk.SeparatorMenuItem(), 1)
-        self.Preferences.set_visible(False)
+            Gtk.SeparatorMenuItem(), 1)
+        self.preferences.set_visible(False)
         self._osx_app.insert_app_menu_item(
             self.Preferences.get_proxies()[0], 2)
         self._osx_app.ready()
 
     def _launcher_ui_bootstrap(self):
         self._restore_window_size()
-        self._update_toolbar_style()
 
         self.hide_app(empty=True)
 
         self._check_demo_mode()
+        self._check_online_plugins()
         self._birthdays_bar = None
         self._check_client_birthdays()
         # json will restore tuples as lists. We need to convert them
@@ -334,33 +300,58 @@ class ShellWindow(GladeDelegate):
         if stoq.stoq_version > actual_version:
             api.user_settings.set('last-version-check', None)
             self._display_changelog_message()
+            # Display the changelog message only once. Most users will never
+            # click on the "See what's new" button, and that will affect its
+            # visual identity.
+            api.user_settings.set('actual-version', stoq.stoq_version)
 
         self._check_information()
 
         if not stoq.stable and not api.is_developer_mode():
             self._display_unstable_version_message()
 
-        if not self.in_ui_test:
-            # Initial fullscreen state for launcher must be handled
-            # separate since the window is not realized when the state loading
-            # is run in hide_app() the first time.
-            window = self.get_toplevel()
-            window.realize()
-            self.ToggleFullscreen.set_active(
-                self._app_settings.get('show-fullscreen', False))
-            self.ToggleFullscreen.notify('active')
-
         toplevel = self.get_toplevel()
         toplevel.connect('configure-event', self._on_toplevel__configure)
         toplevel.connect('delete-event', self._on_toplevel__delete_event)
-        toplevel.add_accel_group(self.uimanager.get_accel_group())
 
         # A GtkWindowGroup controls grabs (blocking mouse/keyboard interaction),
         # by default all windows are added to the same window group.
         # We want to avoid setting modallity on other windows
         # when running a dialog using gtk_dialog_run/run_dialog.
-        window_group = gtk.WindowGroup()
+        window_group = Gtk.WindowGroup()
         window_group.add_window(toplevel)
+
+    def _check_online_plugins(self):
+        # For each online plugin, try to download and install it.
+        # Otherwise warn him
+        online_plugins = InstalledPlugin.get_pre_plugin_names(self.store)
+        if not online_plugins:
+            return
+
+        successes = []
+        manager = get_plugin_manager()
+        for plugin_name in online_plugins:
+            success, msg = manager.download_plugin(plugin_name)
+            successes.append(success)
+            if success:
+                manager.install_plugin(self.store, plugin_name)
+                online_plugins.remove(plugin_name)
+
+        if all(successes):
+            return
+
+        # Title
+        title = _('You have pending plugins.')
+
+        # Description
+        url = 'https://stoq.link/?source=stoq-plugin-alert&amp;hash={}'.format(
+            api.sysparam.get_string('USER_HASH'))
+        desc = _(
+            'The following plugins need to be enabled: <b>{}</b>.\n\n'
+            'You can do it by registering on <a href="{}">Stoq.link</a>.'
+        ).format(', '.join(online_plugins), url)
+        msg = '<b>%s</b>\n%s' % (title, desc)
+        self.add_info_bar(Gtk.MessageType.WARNING, msg)
 
     def _check_demo_mode(self):
         if not api.sysparam.get_bool('DEMO_MODE'):
@@ -369,16 +360,16 @@ class ShellWindow(GladeDelegate):
         if api.user_settings.get('hide-demo-warning'):
             return
 
-        button_label = _('Enable production mode')
-        title = _('You are using Stoq in demonstration mode.')
+        button_label = _('Use my own data')
+        title = _('You are using Stoq with example data.')
         desc = (_("Some features are limited due to fiscal reasons. "
-                  "Click on '%s' to remove the limitations and finish the demonstration.")
+                  "Click on '%s' to remove the limitations.")
                 % button_label)
-        msg = '<b>%s</b>\n%s' % (title, desc)
+        msg = '<b>%s</b>\n%s' % (api.escape(title), api.escape(desc))
 
-        button = gtk.Button(button_label)
+        button = Gtk.Button(button_label)
         button.connect('clicked', self._on_enable_production__clicked)
-        self.add_info_bar(gtk.MESSAGE_WARNING, msg, action_widget=button)
+        self.add_info_bar(Gtk.MessageType.WARNING, msg, action_widget=button)
 
     def _check_client_birthdays(self):
         if not api.sysparam.get_bool('BIRTHDAY_NOTIFICATION'):
@@ -407,12 +398,12 @@ class ShellWindow(GladeDelegate):
                 _("There is %s client doing birthday today!"),
                 _("There are %s clients doing birthday today!"),
                 clients_count) % (clients_count, )
-            button = gtk.Button(_("Check the calendar"))
+            button = Gtk.Button(_("Check the calendar"))
             button.connect('clicked', self._on_check_calendar__clicked)
 
             self._birthdays_bar = self.add_info_bar(
-                gtk.MESSAGE_INFO,
-                "<b>%s</b>" % (glib.markup_escape_text(msg), ),
+                Gtk.MessageType.INFO,
+                "<b>%s</b>" % (GLib.markup_escape_text(msg), ),
                 action_widget=button)
 
     def _check_information(self):
@@ -429,10 +420,10 @@ class ShellWindow(GladeDelegate):
     def _display_changelog_message(self):
         msg = _("Welcome to Stoq version %s!") % stoq.version
 
-        button = gtk.Button(_("See what's new"))
+        button = Gtk.Button(_("See what's new"))
         button.connect('clicked', self._on_show_changelog__clicked)
 
-        self._changelog_bar = self.add_info_bar(gtk.MESSAGE_INFO, msg,
+        self._changelog_bar = self.add_info_bar(Gtk.MessageType.INFO, msg,
                                                 action_widget=button)
 
     def _display_unstable_version_message(self):
@@ -440,7 +431,7 @@ class ShellWindow(GladeDelegate):
             'You are currently using an <b>unstable version</b> of Stoq that '
             'is under development,\nbe aware that it may behave incorrectly, '
             'crash or even loose your data.\n<b>Do not use in production.</b>')
-        self.add_info_bar(gtk.MESSAGE_WARNING, msg)
+        self.add_info_bar(Gtk.MessageType.WARNING, msg)
 
     def _save_window_size(self):
         if not hasattr(self, '_width'):
@@ -448,7 +439,7 @@ class ShellWindow(GladeDelegate):
         # Do not save the size of the window when we are in fullscreen
         window = self.get_toplevel()
         window = window.get_window()
-        if window.get_state() & gtk.gdk.WINDOW_STATE_FULLSCREEN:
+        if window.get_state() & Gdk.WindowState.FULLSCREEN:
             return
         d = api.user_settings.get('launcher-geometry', {})
         d['width'] = str(self._width)
@@ -468,11 +459,23 @@ class ShellWindow(GladeDelegate):
 
         # Setup the default window size, for smaller sizes use
         # 75% of the height or 600px if it's higher than 800px
-        if height == -1:
-            screen = gtk.gdk.screen_get_default()
-            height = min(int(screen.get_height() * 0.75), 600)
+        screen = Gdk.Screen.get_default()
+        screen_height = screen.get_height()
+        screen_width = screen.get_width()
+
+        if height == -1 or y > screen_height:
+            height = min(int(screen_height * 0.75), 650)
+
+        if width == -1 or y > screen_width:
+            width = min(int(screen_width * 0.75), 800)
+
+        # Setup window position according to the settings file, but if settings file
+        # indicates values out of the screen, move the window to the outermost position
+        # within the screen.
         toplevel = self.get_toplevel()
         toplevel.set_default_size(width, height)
+        y = min(y, screen_height - height)
+        x = min(x, screen_width - width)
         if x != -1 and y != -1:
             toplevel.move(x, y)
 
@@ -486,29 +489,11 @@ class ShellWindow(GladeDelegate):
             with open(devpath) as f:
                 return f.read()
 
-        return environ.get_resource_string('stoq', domain, name)
-
-    def _update_toolbar_style(self):
-        toolbar = self.uimanager.get_widget('/toolbar')
-        if not toolbar:
-            return
-
-        style_map = {'icons': gtk.TOOLBAR_ICONS,
-                     'text': gtk.TOOLBAR_TEXT,
-                     'both': gtk.TOOLBAR_BOTH,
-                     'both-horizontal': gtk.TOOLBAR_BOTH_HORIZ}
-        # We set both horizontal as default to improve usability,
-        # it's easier for the user to know what some of the buttons
-        # in the toolbar does by having a label next to it
-        toolbar_style = api.user_settings.get('toolbar-style',
-                                              'both-horizontal')
-        value = style_map.get(toolbar_style)
-        if value:
-            toolbar.set_style(value)
+        return environ.get_resource_string('stoq', domain, name).decode()
 
     def _run_about(self):
         info = get_utility(IAppInfo)
-        about = gtk.AboutDialog()
+        about = Gtk.AboutDialog()
         about.set_name(info.get("name"))
         about.set_version(info.get("version"))
         about.set_website(stoq.website)
@@ -552,21 +537,6 @@ class ShellWindow(GladeDelegate):
         toplevel = self.get_toplevel()
         open_browser(uri, toplevel.get_screen())
 
-    def _get_action_group(self, name):
-        action_group = self._action_groups.get(name)
-        if action_group is None:
-            action_group = gtk.ActionGroup(name)
-            self.uimanager.insert_action_group(action_group, 0)
-            self._action_groups[name] = action_group
-        return action_group
-
-    def _update_toggle_actions(self, app_name):
-        self._current_app_settings = d = self._app_settings.setdefault(app_name, {})
-        self.ToggleToolbar.set_active(d.get('show-toolbar', True))
-        self.ToggleStatusbar.set_active(d.get('show-statusbar', True))
-        self.ToggleToolbar.notify('active')
-        self.ToggleStatusbar.notify('active')
-
     def _empty_message_area(self):
         area = self.statusbar.message_area
         for child in area.get_children()[1:]:
@@ -593,7 +563,6 @@ class ShellWindow(GladeDelegate):
 
         :returns: True if shutdown was successful, False if not
         """
-
         log.debug("Shutting down launcher")
 
         # Ask the application if we can close, currently this only happens
@@ -627,9 +596,135 @@ class ShellWindow(GladeDelegate):
     def _create_ui(self):
         if self._osx_app:
             self._osx_setup_menus()
+
+        self._create_headerbar()
+        self._create_actions()
         self._create_shared_ui()
+
         toplevel = self.get_toplevel().get_toplevel()
         add_current_toplevel(toplevel)
+
+        if self.options.debug:
+            self.add_debug_ui()
+
+    def create_button(self, icon, label=None, menu_model=None, menu=False, action=None,
+                      tooltip=None, style_class=None, toggle=False, icon_size=Gtk.IconSize.BUTTON):
+        if menu_model or menu:
+            button = Gtk.MenuButton()
+        elif toggle:
+            button = Gtk.ToggleButton()
+        else:
+            button = Gtk.Button()
+
+        box = Gtk.HBox(spacing=6)
+        button.add(box)
+
+        if icon:
+            image = Gtk.Image.new_from_icon_name(icon, icon_size)
+            box.pack_start(image, False, False, 0)
+        if label:
+            label = Gtk.Label.new(label)
+            box.pack_start(label, False, False, 0)
+
+        if menu_model:
+            button.set_menu_model(menu_model)
+        if action:
+            button.set_action_name(action)
+        if tooltip:
+            button.set_tooltip_text(tooltip)
+        if style_class:
+            button.get_style_context().add_class(style_class)
+        return button
+
+    def _create_headerbar(self):
+        # User/help menu
+        user = api.get_current_user(self.store)
+        xml = MENU_XML.format(username=api.escape(user.get_description()),
+                              preferences=_('Preferences...'), password=_('Change password...'),
+                              signout=_('Sign out...'), help=_('Help'),
+                              contents=_('Contents'), translate=_('Translate Stoq...'),
+                              get_support=_('Get support online...'), chat=_('Online chat...'),
+                              about=_('About'), quit=_('Quit'))
+        builder = Gtk.Builder.new_from_string(xml, -1)
+
+        # Header bar
+        self.header_bar = Gtk.HeaderBar()
+        self.toplevel.set_titlebar(self.header_bar)
+
+        # Right side
+        self.close_btn = self.create_button('fa-power-off-symbolic', action='stoq.quit')
+        self.close_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self.min_btn = self.create_button('fa-window-minimize-symbolic')
+        self.min_btn.set_relief(Gtk.ReliefStyle.NONE)
+        #self.header_bar.pack_end(self.close_btn)
+        #self.header_bar.pack_end(self.min_btn)
+        box = Gtk.Box.new(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        box.pack_start(self.min_btn, False, False, 0)
+        box.pack_start(self.close_btn, False, False, 0)
+        self.header_bar.pack_end(box)
+
+        self.user_menu = builder.get_object('app-menu')
+        self.help_section = builder.get_object('help-section')
+        self.user_button = self.create_button('fa-cog-symbolic',
+                                              menu_model=self.user_menu)
+        self.search_menu = Gio.Menu()
+        self.search_button = self.create_button('fa-search-symbolic', _('Searches'),
+                                                menu_model=self.search_menu)
+        self.main_menu = Gio.Menu()
+        self.menu_button = self.create_button('fa-bars-symbolic', _('Actions'),
+                                              menu_model=self.main_menu)
+
+        self.header_bar.pack_end(
+            ButtonGroup([self.menu_button, self.search_button, self.user_button]))
+
+        self.sign_button = self.create_button('', _('Sign now'), style_class='suggested-action')
+        #self.header_bar.pack_end(self.sign_button)
+
+        # Left side
+        self.home_button = self.create_button(STOQ_LAUNCHER, style_class='suggested-action')
+        self.new_menu = Gio.Menu()
+        self.new_button = self.create_button('fa-plus-symbolic', _('New'),
+                                             menu_model=self.new_menu)
+
+        self.header_bar.pack_start(
+            ButtonGroup([self.home_button, self.new_button, ]))
+
+        self.domain_header = None
+        self.header_bar.show_all()
+
+        self.notifications = NotificationCounter(self.home_button, blink=True)
+
+    def _create_actions(self):
+        # Gloabl actions avaiable at any time from all applications
+        actions = [
+            ('preferences', None),
+            ('export', None),
+            ('print', None),
+            ('sign_out', None),
+            ('change_password', None),
+            ('HelpApp', None),
+            ('HelpContents', None),
+            ('HelpTranslate', None),
+            ('HelpSupport', None),
+            ('HelpChat', None),
+            ('HelpAbout', None),
+            ('quit', None),
+        ]
+
+        pm = PermissionManager.get_permission_manager()
+        group = Gio.SimpleActionGroup()
+        self.toplevel.insert_action_group('stoq', group)
+        for (name, param_type) in actions:
+            action = Gio.SimpleAction.new(name, param_type)
+            group.add_action(action)
+            # Save the action in self so that auto signal connections work
+            setattr(self, name, action)
+
+            # Check permissions
+            key, required = self.action_permissions.get(name,
+                                                        (None, pm.PERM_ALL))
+            if not pm.get(key) & required:
+                action.set_enabled(False)
 
     def _load_shell_app(self, app_name):
         user = api.get_current_user(self.store)
@@ -648,43 +743,95 @@ class ShellWindow(GladeDelegate):
             raise SystemExit("%s app misses a %r attribute" % (
                 app_name, attribute))
 
+        shell_app_class.app_name = app_name
         shell_app = shell_app_class(window=self,
                                     store=self.store)
-        shell_app.app_name = app_name
 
         return shell_app
+
+    def _wrap_action_callback(self, app, name):
+        """Wraps a Gtk.Action callback to a Gio.SimpleAction callback.
+
+        This is just a temporary wrapper untill all apps are properly migrated
+        to the new gtk api.
+        """
+        method_name = 'on_%s__activate' % name
+        try:
+            old_callback = getattr(app, method_name)
+        except AttributeError:
+            return
+
+        def new_callback(action, parameter):
+            return old_callback(action)
+
+        setattr(app, method_name, new_callback)
 
     #
     # Public API
     #
 
+    def add_ui_actions(self, app, actions, name):
+        for spec in actions:
+            spec = list(spec)
+            act_name, icon, label = spec[:3]
+            accel, long_desc, callback = None, None, None
+            spec[:3] = []
+            if spec:
+                accel = spec.pop(0)
+            if spec:
+                long_desc = spec.pop(0)
+            if spec:
+                callback = spec.pop(0)
+
+            param_type = None
+            if name == 'Actions':
+                action = Gio.SimpleAction.new(act_name, param_type)
+                self._wrap_action_callback(app, act_name)
+            elif name in ('ToggleActions', 'RadioActions'):
+                action = Gio.SimpleAction.new_stateful(act_name, param_type,
+                                                       GLib.Variant.new_boolean(False))
+
+                def set_active(value):
+                    # TODO: colocar deprecation warning aqui.
+                    action.set_state(GLib.Variant.new_boolean(value))
+                    # XXX: The change-state event is not being emitted
+                    method_name = 'on_%s__activate' % act_name
+                    getattr(app, method_name)(action, None)
+
+                def get_active():
+                    value = action.get_state().get_boolean()
+                    return value
+
+                action.set_active = set_active
+                action.get_active = get_active
+
+            app.action_group.add_action(action)
+            app.window._action_specs[act_name] = (
+                app.app_name + '.' + act_name, icon, label, accel, long_desc)
+            # Save the action in the app so that auto signal connections work
+            setattr(app, act_name, action)
+
+            if callback:
+                action.connect('activate', callback)
+
+    def set_close_button_icon(self, icon_name):
+        image = self.close_btn.get_child().get_children()[0]
+        image.set_from_icon_name(icon_name, Gtk.IconSize.BUTTON)
+        image.set_size_request(16, 16)
+
     def show_app(self, app, app_window, **params):
-        app_window.reparent(self.application_box)
+        self.stoq_menu.set_visible(False)
+        app_window.get_parent().remove(app_window)
+        self.application_box.add(app_window)
         self.application_box.set_child_packing(app_window, True, True, 0,
-                                               gtk.PACK_START)
-        # Default action settings for applications
-        self.Print.set_visible(True)
-        self.Print.set_sensitive(False)
-        self.ExportSpreadSheet.set_visible(True)
-        self.ExportSpreadSheet.set_sensitive(False)
-        self.ChangePassword.set_visible(False)
-        self.SignOut.set_visible(False)
-        self.Close.set_sensitive(True)
-        self.HomeToolItem.set_sensitive(True)
-        # We only care about Quit on OSX
-        self.Quit.set_visible(bool(self._osx_app))
+                                               Gtk.PackType.START)
 
-        self.NewToolItem.set_tooltip("")
-        self.NewToolItem.set_sensitive(True)
-        self.SearchToolItem.set_tooltip("")
-        self.SearchToolItem.set_sensitive(True)
-        self._update_toggle_actions(app.app_name)
+        self._current_app_settings = self._app_settings.setdefault(app.app_name, {})
 
-        self.get_toplevel().set_title(app.get_title())
+        self.header_bar.set_title(app.get_title())
+        self.header_bar.set_subtitle(app.app_title)
         self.application_box.show()
         app.toplevel = self.get_toplevel()
-        if app.app_name != 'launcher':
-            self.application_actions[app.app_name].set_visible(False)
 
         if self._birthdays_bar is not None:
             if app.app_name in ['launcher', 'sales']:
@@ -692,19 +839,24 @@ class ShellWindow(GladeDelegate):
             else:
                 self._birthdays_bar.hide()
 
+        if app.app_name == 'launcher':
+            icon_name = 'fa-power-off-symbolic'
+        else:
+            icon_name = 'fa-chevron-left-symbolic'
+        self.set_close_button_icon(icon_name)
+
         # StartApplicationEvent must be emitted before calling app.activate(),
         # so that the plugins can have the chance to modify the application
         # before any other event is emitted.
         StartApplicationEvent.emit(app.app_name, app)
         app.activate(**params)
 
-        self.uimanager.ensure_update()
         self.current_app = app
         self.current_widget = app_window
 
         if not self.in_ui_test:
-            while gtk.events_pending():
-                gtk.main_iteration()
+            while Gtk.events_pending():
+                Gtk.main_iteration()
             app_window.show()
         app.setup_focus()
 
@@ -715,18 +867,29 @@ class ShellWindow(GladeDelegate):
         :param bool empty: if ``True``, do not add the default launcher application
         """
         self.application_box.hide()
+        # Reset menus/headerbar
+        self.main_menu.remove_all()
+        self.search_menu.remove_all()
+        self.new_menu.remove_all()
+
         if self.current_app:
-            if self.current_app.app_name != 'launcher':
-                self.application_actions[self.current_app.app_name].set_visible(True)
             inventory_bar = getattr(self.current_app, 'inventory_bar', None)
             if inventory_bar:
                 inventory_bar.hide()
             if self.current_app.search:
                 self.current_app.search.save_columns()
             self.current_app.deactivate()
-            if self._help_ui:
-                self.uimanager.remove_ui(self._help_ui)
-                self._help_ui = None
+
+            # We need to remove the accels for this app, otherwise they would
+            # still be active from other applications
+            for spec in self._action_specs.values():
+                fullname, icon, label, accel = spec[:-1]
+                if accel:
+                    self.app.set_accels_for_action(fullname, [])
+
+            if self._help_section:
+                self.help_section.remove(0)
+                self._help_section = None
             self.current_widget.destroy()
 
             StopApplicationEvent.emit(self.current_app.app_name,
@@ -734,18 +897,13 @@ class ShellWindow(GladeDelegate):
             self.current_app = None
 
         self._empty_message_area()
-        for item in self.tool_items:
-            item.destroy()
-        self.tool_items = []
-        self._update_toggle_actions('launcher')
-
         if not empty:
             self.run_application(app_name=u'launcher')
 
     def add_info_bar(self, message_type, label, action_widget=None):
         """Show an information bar to the user.
 
-        :param message_type: message type, a gtk.MessageType
+        :param message_type: message type, a Gtk.MessageType
         :param label: label to display
         :param action_widget: optional, most likely a button
         :returns: the infobar
@@ -758,128 +916,74 @@ class ShellWindow(GladeDelegate):
         infobar.show()
 
         self.main_vbox.pack_start(infobar, False, False, 0)
-        self.main_vbox.reorder_child(infobar, 2)
-
+        self.main_vbox.reorder_child(infobar, 0)
         return infobar
 
-    def add_ui_actions(self, ui_string,
-                       actions,
-                       name='Actions',
-                       action_type='normal',
-                       filename=None,
-                       instance=None):
-        if instance is None:
-            instance = self
-        ag = self._get_action_group(name)
-
-        to_add = [entry[0] for entry in actions]
-        for action in ag.list_actions():
-            if action.get_name() in to_add:
-                ag.remove_action(action)
-
-        if action_type == 'normal':
-            ag.add_actions(actions)
-        elif action_type == 'toggle':
-            ag.add_toggle_actions(actions)
-        elif action_type == 'radio':
-            ag.add_radio_actions(actions)
-        else:
-            raise ValueError(action_type)
-        if filename is not None:
-            ui_string = environ.get_resource_string('stoq', 'uixml', filename)
-        ui_id = self.uimanager.add_ui_from_string(ui_string)
-
-        self.action_permissions.update(self.common_action_permissions)
-        pm = PermissionManager.get_permission_manager()
-        for action in ag.list_actions():
-            action_name = action.get_name()
-            setattr(instance, action_name, action)
-
-            # Check permissions
-            key, required = instance.action_permissions.get(action_name,
-                                                            (None, pm.PERM_ALL))
-            if not pm.get(key) & required:
-                action.set_visible(False)
-                # Disable keyboard shortcut
-                path = action.get_accel_path()
-                gtk.accel_map_change_entry(path, 0, 0, True)
-
-        return ui_id
-
-    def add_tool_menu_actions(self, actions):
-        group = self._get_action_group("ToolMenuGroup")
-        for name, label, tooltip, stock_id in actions:
-            action = ToolMenuAction(name=name,
-                                    label=label,
-                                    tooltip=tooltip,
-                                    stock_id=stock_id)
-            group.add_action(action)
-            setattr(self, action.get_name(), action)
-
     def set_help_section(self, label, section):
-        def on_HelpHelp__activate(action):
-            show_section(section)
-
-        ui_string = """<ui>
-        <menubar action="menubar">
-          <menu action="HelpMenu">
-            <placeholder name="HelpPH">
-              <menuitem action="HelpHelp"/>
-            </placeholder>
-          </menu>
-        </menubar>
-        </ui>"""
-        help_help_actions = [
-            ("HelpHelp", None, label,
-             get_accel('app.common.help'),
-             _("Show help for this application"),
-             on_HelpHelp__activate),
-        ]
-        self._help_ui = self.add_ui_actions(
-            ui_string,
-            help_help_actions, 'HelpHelpActions')
+        self._help_section = section
+        self.help_section.insert(0, label, 'stoq.HelpApp')
 
     def add_debug_ui(self):
-        ui_string = """<ui>
-          <menubar name="menubar">
-            <menu action="DebugMenu">
-              <menuitem action="Introspect"/>
-              <menuitem action="RemoveSettingsCache"/>
-            </menu>
-          </menubar>
-        </ui>"""
+        self.toplevel.set_interactive_debugging(True)
+        return
         actions = [
-            ('DebugMenu', None, _('Debug')),
             ('Introspect', None, _('Introspect slaves')),
             ('RemoveSettingsCache', None, _('Remove settings cache')),
         ]
 
-        self.add_ui_actions(ui_string, actions, 'DebugActions')
+        self.add_ui_actions(self, actions, 'Actions')
+        self.add_extra_items([self.Introspect, self.RemoveSettingsCache],
+                             _('Debug'))
 
-    def set_new_menu_sensitive(self, sensitive):
-        new_items = self.NewToolItem.get_proxies()
-        if not new_items:
+    def add_domain_header(self, options):
+        if self.domain_header:
+            self.header_bar.remove(self.domain_header)
+            self.domain_header = None
+
+        if not options:
             return
-        widget = new_items[0].get_children()
-        if isinstance(widget, gtk.Container):
-            button = widget.get_children()[0]
-            button.set_sensitive(sensitive)
 
-    def add_new_items(self, actions):
-        self.tool_items.extend(
-            self.NewToolItem.add_actions(self.uimanager, actions))
+        buttons = []
+        for (icon, label, action, in_header) in options:
+            if not in_header:
+                continue
+            buttons.append(self.create_button(icon, action=action,
+                                              tooltip=label))
+        self.domain_header = ButtonGroup(buttons)
+        self.domain_header.show_all()
+        self.header_bar.pack_start(self.domain_header)
 
-    def add_search_items(self, actions):
-        self.tool_items.extend(
-            self.SearchToolItem.add_actions(self.uimanager, actions))
+    def add_new_items(self, actions, label=None):
+        self.new_menu.append_section(label, self._create_menu(actions))
 
-    def new_window(self):
-        """
-        Creates a new shell window, with an application selector in it
-        """
-        shell_window = self.shell.create_window()
-        shell_window.run_application(u'launcher')
-        shell_window.show()
+    def add_new_items2(self, actions, label=None):
+        self.new_menu.append_section(label, self._create_menu2(actions))
+
+    def add_export_items(self, actions=None):
+        self._export_menu = self._create_menu(actions)
+        self._export_menu.insert(0, _('Export to spreadsheet...'), 'stoq.export')
+        self.main_menu.append_section(None, self._export_menu)
+
+    def add_print_items(self, actions=None):
+        self._print_menu = self._create_menu(actions)
+        self._print_menu.insert(0, _('Print this report...'), 'stoq.print')
+        self.main_menu.append_section(None, self._print_menu)
+
+    def add_print_items2(self, actions=None):
+        self._print_menu = self._create_menu2(actions)
+        self._print_menu.insert(0, _('Print this report...'), 'stoq.print')
+        self.main_menu.append_section(None, self._print_menu)
+
+    def add_extra_items(self, actions=None, label=None):
+        self._extra_items = self._create_menu(actions)
+        self.main_menu.append_section(label, self._extra_items)
+
+    def add_extra_items2(self, actions=None, label=None):
+        self._extra_items = self._create_menu2(actions)
+        self.main_menu.append_section(label, self._extra_items)
+
+    def add_search_items(self, actions, label=None):
+        self.search_menu.append_section(label, self._create_menu(actions))
 
     def close(self):
         """
@@ -890,7 +994,7 @@ class ShellWindow(GladeDelegate):
         self.hide()
 
     def switch_application(self, app_name, **params):
-        self.hide_app(empty=True)
+        params['hide'] = True
         self.run_application(app_name, **params)
 
     def run_application(self, app_name, **params):
@@ -904,6 +1008,19 @@ class ShellWindow(GladeDelegate):
           access to open the application
         :rtype: ShellApp
         """
+        # FIXME: Maybe we should really have an app that would be responsible
+        # for doing administration tasks related to stoqlink here? Right now
+        # we are only going to open the stoq.link url
+        if app_name == 'link':
+            toplevel = self.get_toplevel()
+            user_hash = api.sysparam.get_string('USER_HASH')
+            url = 'https://stoq.link?source=stoq&hash={}'.format(user_hash)
+            open_browser(url, toplevel.get_screen())
+            return
+
+        if params.pop('hide', False):
+            self.hide_app(empty=True)
+
         shell_app = self._load_shell_app(app_name)
         if shell_app is None:
             return None
@@ -911,8 +1028,7 @@ class ShellWindow(GladeDelegate):
         # Set the icon for the application
         app_icon = get_application_icon(app_name)
         toplevel = self.get_toplevel()
-        icon = toplevel.render_icon(app_icon, gtk.ICON_SIZE_MENU)
-        toplevel.set_icon(icon)
+        toplevel.set_icon_name(app_icon)
 
         # FIXME: We should remove the toplevel windows of all ShellApp's
         #        glade files, as we don't use them any longer.
@@ -925,10 +1041,7 @@ class ShellWindow(GladeDelegate):
     def get_available_applications(self):
         user = api.get_current_user(self.store)
 
-        permissions = {}
-        for settings in user.profile.profile_settings:
-            permissions[settings.app_dir_name] = settings.has_permission
-
+        permissions = user.profile.get_permissions()
         descriptions = get_utility(IApplicationDescriptions).get_descriptions()
 
         available_applications = []
@@ -936,10 +1049,6 @@ class ShellWindow(GladeDelegate):
         # sorting by app_full_name
         for name, full, icon, descr in locale_sorted(
                 descriptions, key=operator.itemgetter(1)):
-            # FIXME:
-            # if name in self._hidden_apps:
-            #    continue
-            # and name not in self._blocked_apps:
             if permissions.get(name):
                 available_applications.append(
                     Application(name, full, icon, descr))
@@ -950,9 +1059,7 @@ class ShellWindow(GladeDelegate):
     #
 
     def key_F5(self):
-        # Backwards-compatibility
-        if self.current_app and self.current_app.can_change_application():
-            self.hide_app()
+        self.switch_application('launcher')
         return True
 
     def _on_osx__block_termination(self, app):
@@ -961,7 +1068,6 @@ class ShellWindow(GladeDelegate):
     def _on_show_changelog__clicked(self, button):
         show_section('changelog')
         self._changelog_bar.hide()
-        api.user_settings.set('actual-version', stoq.stoq_version)
 
     def _on_check_calendar__clicked(self, button):
         self.switch_application(u'calendar')
@@ -984,61 +1090,12 @@ class ShellWindow(GladeDelegate):
 
         self._shutdown_application()
 
-    def on_uimanager__connect_proxy(self, uimgr, action, widget):
-        tooltip = action.get_tooltip()
-        if not tooltip:
-            return
-        if isinstance(widget, gtk.MenuItem):
-            widget.connect('select', self._on_menu_item__select, tooltip)
-            widget.connect('deselect', self._on_menu_item__deselect)
-        elif isinstance(widget, gtk.ToolItem):
-            child = widget.get_child()
-            if child is None:
-                return
-            child.connect('enter-notify-event',
-                          self._on_tool_item__enter_notify_event, tooltip)
-            child.connect('leave-notify-event',
-                          self._on_tool_item__leave_notify_event)
-
-    def on_uimanager__disconnect_proxy(self, uimgr, action, widget):
-        tooltip = action.get_tooltip()
-        if not tooltip:
-            return
-        if isinstance(widget, gtk.MenuItem):
-            try:
-                widget.disconnect_by_func(self._on_menu_item__select)
-                widget.disconnect_by_func(self._on_menu_item__deselect)
-            except TypeError:
-                # Maybe it was already disconnected
-                pass
-        elif isinstance(widget, gtk.ToolItem):
-            child = widget.get_child()
-            try:
-                child.disconnect_by_func(
-                    self._on_tool_item__enter_notify_event)
-                child.disconnect_by_func(
-                    self._on_tool_item__leave_notify_event)
-            except TypeError:
-                pass
-
-    def _on_menu_item__select(self, menuitem, tooltip):
-        self.statusbar.push(0xff, tooltip)
-
-    def _on_menu_item__deselect(self, menuitem):
-        self.statusbar.pop(0xff)
-
-    def _on_tool_item__enter_notify_event(self, toolitem, event, tooltip):
-        self.statusbar.push(0xff, tooltip)
-
-    def _on_tool_item__leave_notify_event(self, toolitem, event):
-        self.statusbar.pop(0xff)
-
     def _on_enable_production__clicked(self, button):
         if not self.current_app.can_close_application():
             return
         if not yesno(_(u"This will enable production mode and finish the "
                        u"demonstration. Are you sure?"),
-                     gtk.RESPONSE_NO,
+                     Gtk.ResponseType.NO,
                      _(u"Enable production mode"), _(u"Continue testing")):
             return
 
@@ -1046,39 +1103,22 @@ class ShellWindow(GladeDelegate):
         api.config.flush()
         self._shutdown_application(restart=True, force=True)
 
-    # File
+    def on_min_btn__clicked(self, button):
+        self.get_toplevel().iconify()
 
-    def on_NewToolItem__activate(self, action):
-        if self.current_app:
-            self.current_app.new_activate()
-        else:
-            self.new_window()
+    # File
 
     def on_SearchToolItem__activate(self, action):
         if self.current_app:
             self.current_app.search_activate()
-        else:
-            print('FIXME')
 
-    def on_NewWindow__activate(self, action):
-        self.new_window()
+    def on_print__activate(self, action, parameter):
+        self.current_app.print_activate()
 
-    def on_Print__activate(self, action):
-        if self.current_app:
-            self.current_app.print_activate()
-        else:
-            print('FIXME')
+    def on_export__activate(self, action, parameter):
+        self.current_app.export_spreadsheet_activate()
 
-    def on_ExportSpreadSheet__activate(self, action):
-        if self.current_app:
-            self.current_app.export_spreadsheet_activate()
-        else:
-            print('FIXME')
-
-    def on_Close__activate(self, action):
-        self._hide_current_application()
-
-    def on_ChangePassword__activate(self, action):
+    def on_change_password__activate(self, action, parameter):
         from stoqlib.gui.slaves.userslave import PasswordEditor
         store = api.new_store()
         user = api.get_current_user(store)
@@ -1086,72 +1126,55 @@ class ShellWindow(GladeDelegate):
         store.confirm(retval)
         store.close()
 
-    def on_SignOut__activate(self, action):
+    def on_sign_out__activate(self, action, parameter):
         from stoqlib.lib.interfaces import ICookieFile
         get_utility(ICookieFile).clear()
         self._shutdown_application(restart=True)
 
-    def on_Quit__activate(self, action):
+    def on_quit__activate(self, action, parameter):
         if self._hide_current_application():
             return
 
         self._shutdown_application()
         self.get_toplevel().destroy()
 
-    def on_HomeToolItem__activate(self, action):
-        self._hide_current_application()
-
-    # Edit
-
-    def _on_ToggleToolbar__notify_active(self, action, pspec):
-        toolbar = self.uimanager.get_widget('/toolbar')
-        toolbar.set_visible(action.get_active())
-        self._current_app_settings['show-toolbar'] = action.get_active()
-
-    def _on_ToggleStatusbar__notify_active(self, action, pspec):
-        self.statusbar.set_visible(action.get_active())
-        self._current_app_settings['show-statusbar'] = action.get_active()
-
-    def _on_ToggleFullscreen__notify_active(self, action, spec):
-        window = self.get_toplevel()
-        if not window.get_realized():
-            return
-        is_active = action.get_active()
-        window = window.get_window()
-        is_fullscreen = window.get_state() & gtk.gdk.WINDOW_STATE_FULLSCREEN
-        if is_active != is_fullscreen:
-            if is_active:
-                window.fullscreen()
-            else:
-                window.unfullscreen()
-
-        # This is shared between apps, since it's weird to change fullscreen
-        # between applications
-        self._app_settings['show-fullscreen'] = is_active
+    def on_home_button__clicked(self, action):
+        self.stoq_menu.toggle()
 
     # View
 
-    def on_Preferences__activate(self, action):
+    def on_preferences__activate(self, action, parameter):
         with api.new_store() as store:
             run_dialog(PreferencesEditor, self, store)
-        self._update_toolbar_style()
 
     # Help
 
-    def on_HelpContents__activate(self, action):
+    def on_HelpApp__activate(self, action, parameter):
+        show_section(self._help_section)
+
+    def on_HelpContents__activate(self, action, parameter):
         show_contents()
 
-    def on_HelpTranslate__activate(self, action):
+    def on_HelpTranslate__activate(self, action, parameter):
         self._show_uri("https://www.transifex.com/projects/p/stoq")
 
-    def on_HelpChat__activate(self, action):
-        self._show_uri("http://chat.stoq.com.br/")
+    def on_HelpChat__activate(self, action, parameter):
+        self._show_uri("http://www.stoq.com.br/")
 
-    def on_HelpSupport__activate(self, action):
+    def on_HelpSupport__activate(self, action, parameter):
         self._show_uri("http://www.stoq.com.br/suporte")
 
-    def on_HelpAbout__activate(self, action):
+    def on_HelpAbout__activate(self, action, parameter):
         self._run_about()
+
+    def on_main_menu__items_changed(self, menu, position, removed, added):
+        self.menu_button.set_sensitive(menu.get_n_items() > 0)
+
+    def on_search_menu__items_changed(self, menu, position, removed, added):
+        self.search_button.set_sensitive(menu.get_n_items() > 0)
+
+    def on_new_menu__items_changed(self, menu, position, removed, added):
+        self.new_button.set_sensitive(menu.get_n_items() > 0)
 
     # Debug
 
@@ -1172,7 +1195,7 @@ class ShellWindow(GladeDelegate):
 
 
 class VersionChecker(object):
-    DAYS_BETWEEN_CHECKS = 7
+    DAYS_BETWEEN_CHECKS = 1
 
     #
     #   Private API
@@ -1186,12 +1209,12 @@ class VersionChecker(object):
         # Only display version message in admin app
         if 'AdminApp' not in self.window.__class__.__name__:
             return
-        button = gtk.LinkButton(
+        button = Gtk.LinkButton(
             'http://www.stoq.com.br/novidades',
             _(u'Learn More...'))
         msg = _('<b>There is a new Stoq version available (%s)</b>') % (
             latest_version, )
-        self.window.add_info_bar(gtk.MESSAGE_INFO, msg, action_widget=button)
+        self.window.add_info_bar(Gtk.MessageType.INFO, msg, action_widget=button)
 
     def _check_details(self, latest_version):
         current_version = tuple(stoq.version.split('.'))
@@ -1204,10 +1227,14 @@ class VersionChecker(object):
     def _download_details(self):
         log.debug('Downloading new version information')
         webapi = WebService()
-        response = webapi.version(self.store, stoq.version)
-        response.addCallback(self._on_response_done)
+        webapi.version(self.store, stoq.version,
+                       callback=self._on_response_done)
 
-    def _on_response_done(self, details):
+    def _on_response_done(self, response):
+        if response.status_code != 200:
+            return
+
+        details = response.json()
         self._check_details(details['version'])
         api.user_settings.set('last-version-check',
                               datetime.date.today().strftime('%Y-%m-%d'))

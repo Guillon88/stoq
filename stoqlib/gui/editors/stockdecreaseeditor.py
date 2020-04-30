@@ -24,7 +24,7 @@
 ##
 """ Stock decrease editors """
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 from kiwi.python import Settable
 
@@ -63,8 +63,8 @@ class StockDecreaseItemSlave(BaseEditorSlave):
     def _setup_widgets(self):
         self.original_cost.update(self.model.sellable.cost)
         for widget in [self.quantity, self.cost]:
-            widget.set_adjustment(gtk.Adjustment(lower=0, upper=MAX_INT,
-                                                 step_incr=1, page_incr=10))
+            widget.set_adjustment(Gtk.Adjustment(lower=0, upper=MAX_INT,
+                                                 step_increment=1, page_increment=10))
 
     def setup_proxies(self):
         self._setup_widgets()

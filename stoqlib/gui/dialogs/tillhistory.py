@@ -26,7 +26,7 @@
 
 import datetime
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column, ColoredColumn
 
@@ -36,8 +36,6 @@ from stoqlib.gui.search.searchdialog import SearchDialog
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.editors.tilleditor import (CashAdvanceEditor, CashInEditor,
                                             CashOutEditor)
-from stoqlib.gui.stockicons import (STOQ_MONEY, STOQ_MONEY_ADD,
-                                    STOQ_MONEY_REMOVE)
 from stoqlib.gui.search.searchcolumns import IdentifierColumn
 from stoqlib.gui.search.searchfilters import DateSearchFilter
 from stoqlib.gui.search.searchoptions import Today
@@ -52,7 +50,7 @@ _ = stoqlib_gettext
 class TillHistoryDialog(SearchDialog):
     size = (780, -1)
     search_spec = TillEntry
-    selection_mode = gtk.SELECTION_MULTIPLE
+    selection_mode = Gtk.SelectionMode.MULTIPLE
     searchbar_labels = _('Till Entries matching:')
     title = _('Till history')
 
@@ -85,17 +83,14 @@ class TillHistoryDialog(SearchDialog):
         self.results.set_visible_rows(10)
         self.results.connect('has-rows', self._has_rows)
 
-        self._add_editor_button(_('Cash _Add...'), CashAdvanceEditor,
-                                STOQ_MONEY)
-        self._add_editor_button(_('Cash _In...'), CashInEditor,
-                                STOQ_MONEY_ADD)
-        self._add_editor_button(_('Cash _Out...'), CashOutEditor,
-                                STOQ_MONEY_REMOVE)
+        self._add_editor_button(_('Cash _Add...'), CashAdvanceEditor)
+        self._add_editor_button(_('Cash _In...'), CashInEditor)
+        self._add_editor_button(_('Cash _Out...'), CashOutEditor)
 
-        self.print_button = gtk.Button(None, gtk.STOCK_PRINT, True)
+        self.print_button = Gtk.Button.new_from_stock(Gtk.STOCK_PRINT)
         self.print_button.set_property("use-stock", True)
         self.print_button.connect('clicked', self._print_button_clicked)
-        self.action_area.set_layout(gtk.BUTTONBOX_START)
+        self.action_area.set_layout(Gtk.ButtonBoxStyle.START)
         self.action_area.pack_end(self.print_button, False, False, 6)
         self.print_button.show()
         self.print_button.set_sensitive(False)
@@ -104,8 +99,8 @@ class TillHistoryDialog(SearchDialog):
     # Private API
     #
 
-    def _add_editor_button(self, name, editor_class, stock):
-        button = self.add_button(name, stock=stock)
+    def _add_editor_button(self, name, editor_class):
+        button = self.add_button(name)
         button.connect('clicked', self._run_editor, editor_class)
         button.show()
 

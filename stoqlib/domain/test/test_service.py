@@ -69,6 +69,7 @@ class TestServiceSellableItem(DomainTest):
     def test_add_item(self):
         sale = self.create_sale()
         delivery = Delivery(store=self.store)
+        delivery.invoice = sale.invoice
 
         service = self.create_service()
         service_item = sale.add_sellable(service.sellable, quantity=1, price=10)
@@ -169,11 +170,11 @@ class TestService(DomainTest):
         service_id = service.id
 
         total = self.store.find(Service, id=service_id).count()
-        self.assertEquals(total, 1)
+        self.assertEqual(total, 1)
 
         service.remove()
         total = self.store.find(Service, id=service_id).count()
-        self.assertEquals(total, 0)
+        self.assertEqual(total, 0)
 
     def test_can_remove(self):
         service = self.create_service()
@@ -212,7 +213,7 @@ class TestService(DomainTest):
 
     def test_get_description(self):
         service = self.create_service(description=u'My Service')
-        self.assertEquals(service.get_description(), u'My Service')
+        self.assertEqual(service.get_description(), u'My Service')
 
 
 class TestServiceView(DomainTest):
@@ -225,7 +226,7 @@ class TestServiceView(DomainTest):
     def test_get_unit(self):
         service = self.create_service()
         sv = self.store.find(ServiceView, service_id=service.id).one()
-        self.assertEquals(sv.get_unit(), u'')
+        self.assertEqual(sv.get_unit(), u'')
         service.sellable.unit = self.create_sellable_unit(description=u'Unid.')
         sv = self.store.find(ServiceView, service_id=service.id).one()
-        self.assertEquals(sv.get_unit(), u'Unid.')
+        self.assertEqual(sv.get_unit(), u'Unid.')

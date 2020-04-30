@@ -1,124 +1,15 @@
 app: SalesApp
-GtkWindow(toplevel): title='[Moda Stoq] - Sales', hidden
-  GtkVBox():
-    GtkMenuBar():
-      GtkImageMenuItem(): '_File'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): 'New'
-            GtkMenu(): hidden
-              GtkImageMenuItem(): 'Sale quote...'
-              GtkImageMenuItem(): 'Sale with work order...'
-              GtkImageMenuItem(): 'Loan...'
-              GtkSeparatorMenuItem():
-              GtkImageMenuItem(): '_Window'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Close loan...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Print...'
-          GtkImageMenuItem(): 'Export to spreadsheet...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Change password...', hidden
-          GtkImageMenuItem(): 'Sign out...', hidden
-          GtkImageMenuItem(): 'Close'
-          GtkImageMenuItem(): 'Quit', hidden
-      GtkImageMenuItem(): '_Edit'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): '_Preferences'
-      GtkImageMenuItem(): '_View'
-        GtkMenu(): hidden
-          GtkCheckMenuItem(): '_Toolbar'
-          GtkCheckMenuItem(): '_Statusbar'
-          GtkSeparatorMenuItem():
-          GtkCheckMenuItem(): '_Fullscreen'
-      GtkImageMenuItem(): 'Sale'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): 'Details...', insensitive
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Edit...', insensitive
-          GtkImageMenuItem(): 'Change client...', hidden, insensitive
-          GtkImageMenuItem(): 'Change salesperson...', hidden, insensitive
-          GtkImageMenuItem(): 'Cancel...', insensitive
-          GtkImageMenuItem(): 'Return...', insensitive
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): '_Print invoice...', insensitive
-      GtkImageMenuItem(): '_Search'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): 'Products...'
-          GtkImageMenuItem(): 'Services...'
-          GtkImageMenuItem(): 'Deliveries...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Clients...'
-          GtkImageMenuItem(): 'Client Calls...'
-          GtkImageMenuItem(): 'Client credit check history...'
-          GtkImageMenuItem(): 'Clients with sales...'
-          GtkImageMenuItem(): 'Clients with credit...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Sales by payment method...'
-          GtkImageMenuItem(): 'Returned sales...'
-          GtkImageMenuItem(): 'Commissions...'
-          GtkImageMenuItem(): 'Total sales made by salesperson...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Unconfirmed sale items...'
-          GtkImageMenuItem(): 'Sold items by branch...'
-          GtkImageMenuItem(): 'Sold items by client...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Loans...'
-          GtkImageMenuItem(): 'Loan items...'
-      GtkImageMenuItem(): '_Help'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): 'Sales help'
-          GtkImageMenuItem(): 'Contents'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Get support online...'
-          GtkImageMenuItem(): 'Online chat...'
-          GtkImageMenuItem(): 'Translate Stoq...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): '_About'
-    GtkToolbar():
-      GtkMenuToolButton(): 'Home'
-          GtkMenu(): hidden
-            GtkImageMenuItem(): 'Accounts Payable'
-            GtkImageMenuItem(): 'Accounts Receivable'
-            GtkImageMenuItem(): 'Administrative'
-            GtkImageMenuItem(): 'Calendar'
-            GtkImageMenuItem(): 'Financial'
-            GtkImageMenuItem(): 'Inventory'
-            GtkImageMenuItem(): 'Point of Sales'
-            GtkImageMenuItem(): 'Production'
-            GtkImageMenuItem(): 'Purchase'
-            GtkImageMenuItem(): 'Sales', hidden
-            GtkImageMenuItem(): 'Services'
-            GtkImageMenuItem(): 'Stock'
-            GtkImageMenuItem(): 'Till'
-      GtkSeparatorToolItem():
-      GtkMenuToolButton(): 'New'
-          GtkMenu(): hidden
-            GtkImageMenuItem(): 'Sale quote'
-            GtkImageMenuItem(): 'Sale with work order'
-            GtkSeparatorMenuItem():
-            GtkImageMenuItem(): '_Window'
-      GtkMenuToolButton(): 'Search'
-          GtkMenu(): hidden
-            GtkImageMenuItem(): 'Products'
-            GtkImageMenuItem(): 'Clients'
-            GtkImageMenuItem(): 'Services'
-            GtkImageMenuItem(): 'Deliveries'
-      GtkSeparatorToolItem():
-      GtkToolButton(): 'Print'
-      GtkToolButton(): 'Quit', hidden
-      GtkSeparatorToolItem():
-      GtkToolButton(): 'Edit', insensitive
-      GtkToolButton(): 'Details', insensitive
-      GtkToolButton(): 'Return', insensitive
-    GtkVBox(expand=True, fill=True):
-      GtkVBox(main_vbox, expand=True, fill=True):
-        GtkHBox(menu_hbox, fill=True): hidden
-        GtkVBox(vbox4, expand=True, fill=True):
+GtkApplicationWindow(toplevel): title='Moda Stoq', hidden
+  GtkBox(orientation=vertical):
+    GtkBox(orientation=horizontal, expand=True, fill=True):
+      GtkBox(main_vbox, orientation=vertical, expand=True, fill=True):
+        GtkBox(menu_hbox, orientation=horizontal, fill=True): hidden
+        GtkBox(vbox4, orientation=vertical, expand=True, fill=True):
           GtkEventBox(search_holder, expand=True, fill=True): slave SearchSlave is attached
-            GtkVBox(vbox):
-              GtkHBox(fill=True, padding=6):
-                GtkVBox(filters_box, padding=6):
-                  GtkHBox(hbox):
+            GtkBox(vbox, orientation=vertical):
+              GtkBox(orientation=horizontal, fill=True, padding=6):
+                GtkBox(filters_box, orientation=vertical, padding=6):
+                  GtkBox(hbox, orientation=horizontal):
                     ComboSearchFilter():
                       GtkLabel(): 'Branch:'
                       ProxyComboBox(padding=6):
@@ -141,16 +32,13 @@ GtkWindow(toplevel): title='[Moda Stoq] - Sales', hidden
                         item: 'Cancelled'
                         item: 'Returned'
                         item: 'Renegotiated'
-                    SearchFilter(_primary_filter):
+                    StringSearchFilter(_primary_filter):
                       GtkLabel(): 'matching:'
                       ProxyComboBox(padding=6): hidden
                         item: 'Contains All Words', selected
-                        item: 'Contains Exactly'
-                        item: 'Identical to'
-                        item: 'Does Not Contain'
-                      HintedEntry(search_entry, padding=6): ''
-                    GtkButton(search_button): 'gtk-find'
-              SearchResultListView(result_view, expand=True, fill=True):
+                      GtkEntry(search_entry, padding=6): ''
+                    stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(search_button): 'Find'
+              SearchResultListView(results, expand=True, fill=True):
                 column: title='Sale #'
                 column: title='Coupon #', hidden
                 column: title='Paid', hidden
@@ -162,37 +50,118 @@ GtkWindow(toplevel): title='[Moda Stoq] - Sales', hidden
                 column: title='Expire date', hidden
                 column: title='Status', hidden
                 column: title='Client', expand
+                column: title='Client fancy name', hidden, expand
                 column: title='Salesperson'
                 column: title='Items'
-                column: title='Total'
-                row: 1, 1001, True, datetime.datetime(2012, 1, 1, 0, 0), datetime.datetime(2012, 4, 5, 0, 0), datetime.datetime(2012, 2, 3, 0, 0), None, None, None, u'Confirmed', u'Vitalina Claudino', u'Deivis Alexandre Junior', Decimal('3.000'), <currency $436>
-                row: 2, 1002, False, datetime.datetime(2012, 1, 1, 0, 0), datetime.datetime(2012, 4, 5, 0, 0), datetime.datetime(2012, 2, 3, 0, 0), None, None, None, u'Confirmed', u'Alessandra Almeida Itaber\xe1', u'Deivis Alexandre Junior', Decimal('3.000'), <currency $706>
-                row: 3, 1003, False, datetime.datetime(2012, 1, 1, 0, 0), datetime.datetime(2012, 4, 5, 0, 0), datetime.datetime(2012, 2, 3, 0, 0), None, None, None, u'Confirmed', u'Luis Sergio da Silva Marin', u'Deivis Alexandre Junior', Decimal('3.000'), <currency $873>
-          GtkVBox(list_vbox, fill=True):
+                column: title='Gross total'
+                column: title='Net total'
+                row: 1, 1001, True, datetime.datetime(2012, 1, 1, 0, 0), datetime.datetime(2012, 4, 5, 0, 0), datetime.datetime(2012, 2, 3, 0, 0), None, None, None, 'Confirmed', 'Vitalina Claudino', None, 'Deivis Alexandre Junior', Decimal('3.000'), <currency $436>, <currency $436>
+                row: 2, 1002, False, datetime.datetime(2012, 1, 1, 0, 0), datetime.datetime(2012, 4, 5, 0, 0), datetime.datetime(2012, 2, 3, 0, 0), None, None, None, 'Confirmed', 'Alessandra Almeida Itaberá', None, 'Deivis Alexandre Junior', Decimal('3.000'), <currency $706>, <currency $706>
+                row: 3, 1003, False, datetime.datetime(2012, 1, 1, 0, 0), datetime.datetime(2012, 4, 5, 0, 0), datetime.datetime(2012, 2, 3, 0, 0), None, None, None, 'Confirmed', 'Luis Sergio da Silva Marin', None, 'Deivis Alexandre Junior', Decimal('3.000'), <currency $873>, <currency $873>
+          GtkBox(list_vbox, orientation=vertical, fill=True):
           GtkEventBox(list_toolbar_holder, fill=True):
     ShellStatusbar():
       GtkFrame(expand=True, fill=True): hidden
-        GtkHBox():
-          GtkLabel(expand=True, fill=True):
-      GtkHBox(expand=True, fill=True):
-        GtkAlignment(expand=True, fill=True):
-          GtkHBox():
-            GtkLabel(expand=True, fill=True): 'Test Statusbar test'
-            GtkVSeparator():
-            GtkButton(): 'Feedback'
-            GtkVSeparator():
-        GtkHBox(_summary_label):
-          GtkLabel(expand=True, fill=True, padding=6): '<b>Total:</b>'
-          GtkLabel(): '<b>$2015.00</b>'
-
-popup: SaleSelection
-GtkMenu(popup): hidden
-  GtkImageMenuItem(): 'Details...', insensitive
-  GtkSeparatorMenuItem():
-  GtkImageMenuItem(): 'Edit...', insensitive
-  GtkImageMenuItem(): 'Change client...', hidden, insensitive
-  GtkImageMenuItem(): 'Change salesperson...', hidden, insensitive
-  GtkImageMenuItem(): 'Cancel...', insensitive
-  GtkImageMenuItem(): 'Return...', insensitive
-  GtkSeparatorMenuItem():
-  GtkImageMenuItem(): '_Print invoice...', insensitive
+        GtkBox(orientation=horizontal):
+          GtkLabel(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
+        GtkBox(orientation=horizontal, expand=True, fill=True):
+          GtkLabel(expand=True, fill=True): 'Test Statusbar test'
+          GtkVSeparator():
+          GtkButton(): 'Feedback'
+        SummaryLabel(summary_label):
+          GtkLabel(expand=True, fill=True, padding=6): '<b>Gross total:</b>'
+          GtkLabel(): '<b>$2,015.00</b>'
+        LazySummaryLabel(_extra_summary):
+          GtkLabel(expand=True, fill=True, padding=6): '<b>Net total:</b>'
+          GtkLabel():
+  GtkHeaderBar():
+    stoq+gui+widgets+ButtonGroup():
+      GtkButton():
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Sale quote...
+                      GtkModelButton(fill=True): Sale with work order...
+                      GtkModelButton(fill=True): Loan...
+    stoq+gui+widgets+ButtonGroup():
+      GtkButton(): insensitive
+      GtkButton(): insensitive
+      GtkButton(): insensitive
+      GtkButton(): insensitive
+    GtkBox(orientation=horizontal):
+      GtkButton():
+      GtkButton():
+    stoq+gui+widgets+ButtonGroup():
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Print this report...
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Export to spreadsheet...
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Close loan...
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Products...
+                      GtkModelButton(fill=True): Services...
+                      GtkModelButton(fill=True): Deliveries...
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Clients...
+                      GtkModelButton(fill=True): Client Calls...
+                      GtkModelButton(fill=True): Client credit check history...
+                      GtkModelButton(fill=True): Clients with sales...
+                      GtkModelButton(fill=True): Clients with credit...
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Sales by payment method...
+                      GtkModelButton(fill=True): Returned sales...
+                      GtkModelButton(fill=True): Commissions...
+                      GtkModelButton(fill=True): Total sales made by salesperson...
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Unconfirmed sale items...
+                      GtkModelButton(fill=True): Sold items by branch...
+                      GtkModelButton(fill=True): Sold items by client...
+                      GtkModelButton(fill=True): Sold items by salesperson..
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Loans...
+                      GtkModelButton(fill=True): Loan items...
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Preferences...
+                      GtkModelButton(fill=True): Change password...
+                      GtkModelButton(fill=True): Sign out...
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Sales help
+                      GtkModelButton(fill=True): Contents
+                      GtkModelButton(fill=True): Translate Stoq...
+                      GtkModelButton(fill=True): Get support online...
+                      GtkModelButton(fill=True): Online chat...
+                      GtkModelButton(fill=True): About
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Quit

@@ -1,14 +1,14 @@
 wizard: SaleReturnWizard
 GtkDialog(toplevel): title='Return Sale Order', hidden
-  GtkVBox(PluggableWizard-vbox):
-    GtkVBox(vbox1, expand=True, fill=True):
+  GtkBox(PluggableWizard-vbox, orientation=vertical):
+    GtkBox(vbox1, orientation=vertical, expand=True, fill=True):
       ProxyLabel(header_lbl, fill=True): hidden
       GtkEventBox(slave_area, expand=True, fill=True): slave SaleReturnItemsStep is attached
-        GtkVBox(step.toplevel):
+        GtkBox(step.toplevel, orientation=vertical):
           GtkTable(step.item_table, fill=True): hidden
-            GtkHBox(step.hbox2):
+            GtkBox(step.hbox2, orientation=horizontal):
               ProxyLabel(step.item_lbl, fill=True): 'Item:'
-              GtkEntry(step.barcode, fill=True): ''
+              ProxyEntry(step.barcode, fill=True): '', invalid
               GtkButton(step.product_button):
             ProxyLabel(step.kiwilabel2): 'Quantity:'
             ProxySpinButton(step.quantity): '0.000', insensitive
@@ -21,39 +21,45 @@ GtkDialog(toplevel): title='Return Sale Order', hidden
             ProxyLabel(step.minimum_quantity): '<span >0.0</span>', hidden
             GtkLabel(step.stock_quantity_lbl): 'Stock:', hidden
             ProxyLabel(step.stock_quantity): '<span >0.0</span>', hidden
-          GtkEventBox(step.list_holder, expand=True, fill=True): slave AdditionListSlave is attached
-            GtkVBox(toplevel):
-              GtkVBox(list_vbox, expand=True, fill=True):
-                ObjectTree(klist, expand=True, fill=True):
-                  column: title='Return'
-                  column: title='Code', hidden
-                  column: title='Barcode', hidden
-                  column: title='Description', expand
-                  column: title='Sale price'
-                  column: title='Sold quantity'
-                  column: title='Quantity'
-                  column: title='Total'
-                  row: True, u'', u'', u'Package', <currency $10>, Decimal('1.000'), Decimal('1.000'), Decimal('10.000')
-                    row: True, u'', u'', u'Component', <currency $ 0>, Decimal('1.000'), Decimal('1.000'), Decimal('0.000')
-                  row: True, u'1234', u'', u'Description', <currency $10>, Decimal('1.000'), Decimal('1.000'), Decimal('10.000')
-                  row: True, u'5678', u'', u'Description', <currency $10>, Decimal('2.000'), Decimal('2.000'), Decimal('20.000')
-                GtkHBox(step.summary, fill=True):
-                  GtkLabel(expand=True, fill=True, padding=6): '<b>Total to return:</b>'
-                  GtkLabel(): '<b>$40.00</b>'
-              GtkHBox(hbox1, fill=True):
-                GtkHBox(button_box):
-                  GtkButton(add_button): hidden
-                  GtkButton(edit_button): hidden, insensitive
-                  GtkButton(delete_button): hidden, insensitive
-                GtkHBox(message_hbox, expand=True, fill=True): hidden
-                  GtkLabel(message_label, expand=True, fill=True):
-                  GtkButton(message_details_button, fill=True): 'Details'
+          GtkOverlay(step.overlay, expand=True, fill=True):
+            GtkEventBox(step.list_holder): slave AdditionListSlave is attached
+              GtkBox(vbox1, orientation=vertical):
+                GtkBox(list_vbox, orientation=vertical, expand=True, fill=True):
+                  ObjectTree(klist, expand=True, fill=True):
+                    column: title='Return'
+                    column: title='Code', hidden
+                    column: title='Barcode', hidden
+                    column: title='Description', expand
+                    column: title='Sale price'
+                    column: title='Sold quantity'
+                    column: title='Quantity'
+                    column: title='Total'
+                    row: True, '', '', 'Package', <currency $10>, Decimal('1.000'), Decimal('1.000'), Decimal('10.00')
+                      row: True, '', '', 'Component', <currency $2>, Decimal('5.000'), Decimal('5.000'), Decimal('10.00')
+                    row: True, '1234', '', 'Description', <currency $10>, Decimal('1.000'), Decimal('1.000'), Decimal('10.00')
+                    row: True, '5678', '', 'Description', <currency $10>, Decimal('2.000'), Decimal('2.000'), Decimal('20.00')
+                  SummaryLabel(step.summary, fill=True):
+                    GtkLabel(expand=True, fill=True, padding=6): '<b>Total to return:</b>'
+                    GtkLabel(): '<b>$50.00</b>'
+                GtkBox(hbox1, orientation=horizontal, fill=True):
+                  GtkBox(button_box, orientation=horizontal):
+                    GtkButton(add_button): hidden
+                    GtkButton(edit_button): hidden, insensitive
+                    GtkButton(delete_button): hidden, insensitive
+                  GtkBox(message_hbox, orientation=horizontal, expand=True, fill=True): hidden
+                    GtkLabel(message_label, expand=True, fill=True):
+                    GtkButton(message_details_button, fill=True): 'Details'
+            GtkBox(step.box, orientation=horizontal):
+              GtkBox(step.warning_box, orientation=vertical, fill=True):
+                GtkLabel(step.warning_label, fill=True):
+                GtkLabel(step.dismiss_label, fill=True):
       ProxyLabel(notification_lbl, fill=True): hidden
-      GtkHBox(hbox1, fill=True, pack-end):
-        GtkHButtonBox(buttonbox, expand=True, fill=True, pack-end):
+      GtkBox(hbox1, orientation=horizontal, fill=True, pack-end):
+        GtkButtonBox(buttonbox, orientation=horizontal, expand=True, fill=True, pack-end):
           GtkButton(cancel_button): 'gtk-cancel'
           GtkButton(previous_button): 'gtk-go-back', insensitive
           GtkButton(next_button): 'gtk-go-forward'
           GtkButton(ok_button): 'gtk-ok', hidden
-          GtkButton(help_button): 'gtk-help'
-    GtkHButtonBox(dialog-action_area1, fill=True, pack-end):
+          GtkButton(help_button, expand=True, fill=True): 'gtk-help'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(dialog-action_area1, orientation=horizontal, fill=True, pack-end):

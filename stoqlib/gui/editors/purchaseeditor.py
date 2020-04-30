@@ -24,7 +24,7 @@
 """ Purchase editors """
 
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 
 from stoqlib.gui.editors.baseeditor import BaseEditor
@@ -66,11 +66,11 @@ class PurchaseItemEditor(BaseEditor):
             self.expected_receival_date.set_sensitive(False)
 
     def _setup_widgets(self):
-        self.order.set_text(unicode(self.model.order.identifier))
+        self.order.set_text(str(self.model.order.identifier))
         for widget in [self.quantity, self.cost, self.quantity_sold,
                        self.quantity_returned]:
-            widget.set_adjustment(gtk.Adjustment(lower=0, upper=MAX_INT,
-                                                 step_incr=1))
+            widget.set_adjustment(Gtk.Adjustment(lower=0, upper=MAX_INT,
+                                                 step_increment=1))
 
         unit = self.model.sellable.unit
         digits = QUANTITY_PRECISION if unit and unit.allow_fraction else 0

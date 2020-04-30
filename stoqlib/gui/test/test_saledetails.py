@@ -67,8 +67,8 @@ class TestSaleDetails(GUITest):
         payment.identifier = 999
         payment.group.payer = client.person
 
-        sale.order()
-        sale.confirm()
+        sale.order(self.current_user)
+        sale.confirm(self.current_user)
         sale.group.pay()
 
         payment.paid_date = today
@@ -88,8 +88,9 @@ class TestSaleDetails(GUITest):
         date = localdate(2010, 12, 10).date()
 
         sale = self._create_sale()
-        returned_sale = sale.create_sale_return_adapter()
-        returned_sale.return_()
+        returned_sale = sale.create_sale_return_adapter(self.current_branch, self.current_user,
+                                                        self.current_station)
+        returned_sale.return_(self.current_user)
         returned_sale.return_date = date
 
         # payments[0] is the sale's payment created on self._create_sale
@@ -120,11 +121,12 @@ class TestSaleDetails(GUITest):
         sale.add_sellable(component1.sellable, quantity=1, parent=parent)
         sale.add_sellable(component2.sellable, quantity=1, parent=parent)
 
-        sale.create_sale_return_adapter()
+        sale.create_sale_return_adapter(self.current_branch, self.current_user,
+                                        self.current_station)
 
         model = self.store.find(SaleView, id=sale.id).one()
         dialog = SaleDetailsDialog(self.store, model)
-        self.assertEquals(len(list(dialog.items_list)), 3)
+        self.assertEqual(len(list(dialog.items_list)), 3)
 
     @mock.patch('stoqlib.gui.dialogs.saledetails.run_dialog')
     def test_client_details(self, run_dialog):
@@ -138,9 +140,9 @@ class TestSaleDetails(GUITest):
 
         args, kwargs = run_dialog.call_args
         editor, parent, store, model = args
-        self.assertEquals(editor, ClientDetailsDialog)
-        self.assertEquals(parent, dialog)
-        self.assertEquals(model, sale.client)
+        self.assertEqual(editor, ClientDetailsDialog)
+        self.assertEqual(parent, dialog)
+        self.assertEqual(model, sale.client)
         self.assertTrue(isinstance(store, StoqlibStore))
 
     @mock.patch('stoqlib.gui.dialogs.saledetails.BillReport.check_printable')
@@ -208,12 +210,12 @@ class TestSaleDetails(GUITest):
 
         args, kwargs = run_dialog.call_args
         editor, parent, store, model, prop_name = args
-        self.assertEquals(editor, NoteEditor)
-        self.assertEquals(parent, dialog)
+        self.assertEqual(editor, NoteEditor)
+        self.assertEqual(parent, dialog)
         self.assertTrue(isinstance(model, SaleComment))
         self.assertTrue(isinstance(store, StoqlibStore))
-        self.assertEquals(prop_name, 'comment')
-        self.assertEquals(kwargs['title'], 'New Sale Comment')
+        self.assertEqual(prop_name, 'comment')
+        self.assertEqual(kwargs['title'], 'New Sale Comment')
 
 
 if __name__ == '__main__':

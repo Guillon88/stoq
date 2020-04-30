@@ -28,8 +28,7 @@
 import contextlib
 import io
 import os
-import shutil
-import tempfile
+import zipfile
 
 import mock
 from kiwi.python import Settable
@@ -43,7 +42,7 @@ from stoqlib.lib.pluginmanager import (PluginError, register_plugin,
                                        PluginManager, get_plugin_manager,
                                        PluginDescription)
 
-plugin_desc = """
+plugin_desc = """\
 [Plugin]
 Module=testplugin
 Version=1
@@ -93,14 +92,14 @@ class TestPluginDescription(DomainTest):
         ZipFile.return_value = mock.MagicMock()
         egg = ZipFile.return_value.__enter__.return_value
         egg.namelist.return_value = ['test.plugin']
-        egg.open.return_value = io.BytesIO(plugin_desc)
+        egg.open.return_value = io.BytesIO(plugin_desc.encode())
 
         desc = PluginDescription('tmpfile', is_egg=True)
 
         is_zipfile.assert_called_once_with('tmpfile')
-        self.assertEquals(desc.filename, 'test.plugin')
-        self.assertEquals(desc.plugin_path, 'tmpfile')
-        self.assertEquals(desc.long_name, 'Test plugin')
+        self.assertEqual(desc.filename, 'test.plugin')
+        self.assertEqual(desc.plugin_path, 'tmpfile')
+        self.assertEqual(desc.long_name, 'Test plugin')
 
 
 class TestPluginManager(DomainTest):
@@ -139,75 +138,135 @@ class TestPluginManager(DomainTest):
     #  Tests
     #
 
-    @mock.patch('stoqlib.lib.pluginmanager.get_application_dir')
     @mock.patch('stoqlib.lib.pluginmanager.get_default_store')
-    def test_create_eggs_cache(self, get_default_store, get_application_dir):
-        temp_dir = tempfile.mkdtemp()
+    def test_create_eggs_cache(self, get_default_store):
+        original_eggs_cache = self._manager._eggs_cache
         try:
             get_default_store.return_value = self.store
-            get_application_dir.return_value = temp_dir
-            plugins_dir = os.path.join(temp_dir, 'plugins')
-            os.makedirs(plugins_dir)
-
-            with open(os.path.join(plugins_dir, 'foobar.egg'), 'wb') as f:
-                f.write('wrong_content')
-
-            with open(os.path.join(plugins_dir, 'foo.egg'), 'wb') as f:
-                f.write('foo_content')
 
             PluginEgg(store=self.store, plugin_name=u'foobar',
-                      egg_content='right_content',
+                      egg_content=b'lorem',
                       egg_md5sum=u'e194544df936c31ebf9b4c2d4a6ef213')
             PluginEgg(store=self.store, plugin_name=u'foo',
-                      egg_content='will_not_be_overwritten',
+                      egg_content=b'ipsum',
                       egg_md5sum=u'2b3bd636ec90eb39c3c171dd831b8c30')
             PluginEgg(store=self.store, plugin_name=u'bar',
-                      egg_content='bar_content',
+                      egg_content=b'lorem ipsum',
                       egg_md5sum=u'5f084b7281515082703bd903708c977a')
 
             self._manager._create_eggs_cache()
+            plugins_dir = self._manager._eggs_cache
 
-            # foobar didn't match md5 so it should have been overwritten
             with open(os.path.join(plugins_dir, 'foobar.egg')) as f:
-                self.assertEqual(f.read(), 'right_content')
+                self.assertEqual(f.read(), 'lorem')
 
-            # foo matched so it should be untouched
             with open(os.path.join(plugins_dir, 'foo.egg')) as f:
-                self.assertEqual(f.read(), 'foo_content')
+                self.assertEqual(f.read(), 'ipsum')
 
-            # bar didn't exist so it should have been created
             with open(os.path.join(plugins_dir, 'bar.egg')) as f:
-                self.assertEqual(f.read(), 'bar_content')
+                self.assertEqual(f.read(), 'lorem ipsum')
 
             self.assertEqual(set(self._manager.egg_plugins_names),
                              {'foobar', 'foo', 'bar'})
         finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            self._manager._eggs_cache = original_eggs_cache
 
     @mock.patch('stoqlib.lib.webservice.WebService.download_plugin')
     @mock.patch('stoqlib.lib.pluginmanager.new_store')
-    def test_download_plugin(self, new_store, download_plugin):
+    def test_download_plugin_error(self, new_store, download_plugin):
         new_store.return_value = self.store
-
-        self._manager.download_plugin(u'foo')
-        args, kwargs = download_plugin.call_args
-        plugin_name = args[0]
-        callback = kwargs['callback']
-        self.assertEqual(plugin_name, u'foo')
 
         with contextlib.nested(
                 mock.patch.object(self.store, 'commit'),
                 mock.patch.object(self.store, 'close'),
-                mock.patch.object(self._manager, '_reload')):
-            with tempfile.NamedTemporaryFile() as f:
-                f.write('foo bar baz')
-                f.flush()
-                callback(f.name)
+                mock.patch.object(self._manager, '_reload')) as (commit, close, r):
+            response = mock.Mock()
+            response.status_code = 400
+            res = mock.Mock()
+            res.get_response.return_value = response
+            download_plugin.return_value = res
+            self.assertEqual(
+                self._manager.download_plugin(u'foo'),
+                (False, 'Plugin not available for this stoq version'))
+            self.assertCalledOnceWith(download_plugin, 'foo', md5sum=None, channel=None)
+
+            self.assertNotCalled(commit)
+            self.assertNotCalled(r)
+
+    @mock.patch('stoqlib.lib.webservice.WebService.download_plugin')
+    @mock.patch('stoqlib.lib.pluginmanager.new_store')
+    def test_download_plugin_no_update_needed(self, new_store, download_plugin):
+        new_store.return_value = self.store
+
+        with contextlib.nested(
+                mock.patch.object(self.store, 'commit'),
+                mock.patch.object(self.store, 'close'),
+                mock.patch.object(self._manager, '_reload')) as (commit, close, r):
+            response = mock.Mock()
+            response.status_code = 204
+            res = mock.Mock()
+            res.get_response.return_value = response
+            download_plugin.return_value = res
+            self.assertEqual(
+                self._manager.download_plugin(u'foo'),
+                (True, 'No update needed. The plugin is already up to date.'))
+            self.assertCalledOnceWith(download_plugin, 'foo', md5sum=None, channel=None)
+
+            self.assertNotCalled(commit)
+            self.assertNotCalled(r)
+
+    @mock.patch('stoqlib.lib.webservice.WebService.download_plugin')
+    @mock.patch('stoqlib.lib.pluginmanager.new_store')
+    def test_download_plugin_corrupted(self, new_store, download_plugin):
+        new_store.return_value = self.store
+
+        with contextlib.nested(
+                mock.patch.object(self.store, 'commit'),
+                mock.patch.object(self.store, 'close'),
+                mock.patch.object(self._manager, '_reload')) as (commit, close, r):
+            response = mock.Mock()
+            response.status_code = 200
+            response.content = b'foo bar baz'
+            res = mock.Mock()
+            res.get_response.return_value = response
+            download_plugin.return_value = res
+            self.assertEqual(
+                self._manager.download_plugin(u'foo'),
+                (False, 'The downloaded plugin is corrupted'))
+            self.assertCalledOnceWith(download_plugin, 'foo', md5sum=None, channel=None)
+
+            self.assertNotCalled(commit)
+            self.assertNotCalled(r)
+
+    @mock.patch('stoqlib.lib.webservice.WebService.download_plugin')
+    @mock.patch('stoqlib.lib.pluginmanager.new_store')
+    def test_download_plugin_success(self, new_store, download_plugin):
+        new_store.return_value = self.store
+
+        with contextlib.nested(
+                mock.patch.object(self.store, 'commit'),
+                mock.patch.object(self.store, 'close'),
+                mock.patch.object(self._manager, '_reload')) as (commit, close, r):
+            response = mock.Mock()
+            response.status_code = 200
+            with io.BytesIO() as f:
+                with zipfile.ZipFile(f, 'w') as zf:
+                    zf.writestr('/foo/bar.egg', b'foo bar baz')
+                zip_content = f.getvalue()
+                response.content = zip_content
+            res = mock.Mock()
+            res.get_response.return_value = response
+            download_plugin.return_value = res
+            self.assertEqual(
+                self._manager.download_plugin(u'foo'),
+                (True, 'Plugin download successful'))
+            self.assertCalledOnceWith(download_plugin, 'foo', md5sum=None, channel=None)
+
+            self.assertCalledOnceWith(commit)
+            self.assertCalledOnceWith(r)
 
         plugin_egg = self.store.find(PluginEgg, plugin_name=u'foo').one()
-        self.assertEqual(plugin_egg.egg_content, 'foo bar baz')
-        self.assertEqual(plugin_egg.egg_md5sum,
-                         u'ab07acbb1e496801937adfa772424bf7')
+        self.assertEqual(plugin_egg.egg_content, zip_content)
 
     def test_get_plugin_manager(self):
         # PluginManager should be a singleton
@@ -273,17 +332,32 @@ class TestPluginManager(DomainTest):
 
         # Both the dependend and independent plugins should not be
         # installed yet.
-        self.assertFalse(ind_name in self._manager.installed_plugins_names)
-        self.assertFalse(dep_name in self._manager.installed_plugins_names)
+        self.assertFalse(
+            ind_name in self._manager.get_installed_plugins_names(self.store))
+        self.assertFalse(
+            dep_name in self._manager.get_installed_plugins_names(self.store))
 
         self.assertFalse(ind_plugin.had_migration_gotten)
         self.assertFalse(dep_plugin.had_migration_gotten)
 
-        self.assertFalse(self._manager.is_installed(ind_name))
-        self.assertFalse(self._manager.is_installed(dep_name))
+        self.assertFalse(
+            self._manager.is_installed(ind_name, store=self.store))
+        self.assertFalse(
+            self._manager.is_installed(dep_name, store=self.store))
 
-        # Install the dependent plugin, this should install both plugins
-        self._manager.install_plugin(dep_name)
+        # Create a new plugin to be registered with no version
+        self._manager.pre_install_plugin(self.store, dep_name)
+
+        # Install the dependent plugin, this should install both plugins.
+        # This will also test whether or not a pre installed plugin can be
+        # installed on a later moment.
+        with mock.patch.object(self.store, 'commit'):
+            self._manager.install_plugin(self.store, dep_name)
+            # Commit should be executed 2 times, one for the dependency, and
+            # one for the plugin that we actually want to install
+            self.assertEqual(self.store.commit.call_count, 2)
+            self.assertHasCalls(self.store.commit,
+                                [mock.call(close=False)] * 2)
 
         # So it is checked if both plugins were installed
         self._check_plugin_installed(ind_plugin, True)
@@ -294,8 +368,10 @@ class TestPluginManager(DomainTest):
         self.assertFalse(dep_plugin.was_activated)
 
         # Test if both plugins are installed
-        self.assertTrue(ind_name in self._manager.installed_plugins_names)
-        self.assertTrue(dep_name in self._manager.installed_plugins_names)
+        self.assertTrue(
+            ind_name in self._manager.get_installed_plugins_names(self.store))
+        self.assertTrue(
+            dep_name in self._manager.get_installed_plugins_names(self.store))
 
         ind_plugin.reset()
         dep_plugin.reset()
@@ -365,7 +441,7 @@ class TestPluginManager(DomainTest):
             installed_plugins.__get__ = mock.Mock(
                 return_value=['b', 'c', 'f'])
 
-            with self.assertRaisesRegexp(
+            with self.assertRaisesRegex(
                     AssertionError,
                     ("Plugin 'f' not found on the system. "
                      "Available plugins: \['a', 'b', 'c', 'd', 'e'\]")):
@@ -376,15 +452,17 @@ class TestPluginManager(DomainTest):
     #
 
     def _check_plugin_active(self, plugin, status):
-        self.assertEquals(plugin.was_activated, status)
-        self.assertEquals(self._manager.is_active(plugin.name), status)
+        self.assertEqual(plugin.was_activated, status)
+        self.assertEqual(self._manager.is_active(plugin.name), status)
 
     def _check_plugin_installed(self, plugin, status):
-        contained = plugin.name in self._manager.installed_plugins_names
-        self.assertEquals(contained, status)
+        installed_names = self._manager.get_installed_plugins_names(self.store)
+        contained = plugin.name in installed_names
+        self.assertEqual(contained, status)
 
-        self.assertEquals(plugin.had_migration_gotten, status)
-        self.assertEquals(self._manager.is_installed(plugin.name), status)
+        self.assertEqual(plugin.had_migration_gotten, status)
+        self.assertEqual(
+            self._manager.is_installed(plugin.name, self.store), status)
 
     def _register_test_plugin(self):
         # Workaround to register _TestPlugin since it is not really a plugin.

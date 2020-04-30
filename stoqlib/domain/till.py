@@ -26,25 +26,29 @@
 
 # pylint: enable=E1101
 
+import collections
 import logging
 
 from kiwi.currency import currency
 from storm.expr import And, Eq, Join, LeftJoin, Or
 from storm.info import ClassAlias
-from storm.references import Reference
+from storm.references import Reference, ReferenceSet
 
-from stoqlib.database.runtime import get_current_user
 from stoqlib.database.expr import Date, TransactionTimestamp
 from stoqlib.database.properties import (PriceCol, DateTimeCol, UnicodeCol,
                                          IdentifierCol, IdCol, EnumCol)
-from stoqlib.database.runtime import get_current_station
 from stoqlib.database.viewable import Viewable
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
+from stoqlib.domain.events import TillOpenedEvent, TillClosedEvent
+from stoqlib.domain.payment.card import CreditCardData
 from stoqlib.domain.payment.payment import Payment
+from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.domain.person import Person, LoginUser
 from stoqlib.domain.station import BranchStation
 from stoqlib.exceptions import TillError
 from stoqlib.lib.dateutils import localnow, localtoday
+from stoqlib.lib.parameters import sysparam
+from stoqlib.lib.pluginmanager import get_plugin_manager
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
@@ -56,7 +60,7 @@ log = logging.getLogger(__name__)
 #
 
 
-class Till(Domain):
+class Till(IdentifiableDomain):
     """The Till describes the financial operations of a specific day.
 
     The operations that are recorded in a Till:
@@ -84,9 +88,19 @@ class Till(Domain):
     #: financial operations can be done in this store.
     STATUS_CLOSED = u'closed'
 
-    statuses = {STATUS_PENDING: _(u'Pending'),
-                STATUS_OPEN: _(u'Opened'),
-                STATUS_CLOSED: _(u'Closed')}
+    #: after the till is closed, it can optionally be verified by a different user
+    #: (usually a manager or supervisor)
+    STATUS_VERIFIED = u'verified'
+
+    statuses = collections.OrderedDict([
+        (STATUS_PENDING, _(u'Pending')),
+        (STATUS_OPEN, _(u'Opened')),
+        (STATUS_CLOSED, _(u'Closed')),
+        (STATUS_VERIFIED, _(u'Verified')),
+    ])
+
+    #: A sequencial number that identifies this till.
+    identifier = IdentifierCol()
 
     status = EnumCol(default=STATUS_PENDING)
 
@@ -102,36 +116,45 @@ class Till(Domain):
     #: When the till was closed or None if it has not yet been closed
     closing_date = DateTimeCol(default=None)
 
-    station_id = IdCol()
+    #: When the till was verifyed or None if it's not yet verified
+    verify_date = DateTimeCol(default=None)
 
+    station_id = IdCol()
     #: the |branchstation| associated with the till, eg the computer
     #: which opened it.
     station = Reference(station_id, 'BranchStation.id')
 
+    branch_id = IdCol()
+    #: the branch this till is from
+    branch = Reference(branch_id, 'Branch.id')
+
     observations = UnicodeCol(default=u"")
 
     responsible_open_id = IdCol()
-
     #: The responsible for opening the till
     responsible_open = Reference(responsible_open_id, "LoginUser.id")
 
     responsible_close_id = IdCol()
-
     #: The responsible for closing the till
     responsible_close = Reference(responsible_close_id, "LoginUser.id")
+
+    responsible_verify_id = IdCol()
+    #: The responsible for verifying the till
+    responsible_verify = Reference(responsible_verify_id, "LoginUser.id")
+
+    summary = ReferenceSet('id', 'TillSummary.till_id')
 
     #
     # Classmethods
     #
 
     @classmethod
-    def get_current(cls, store):
+    def get_current(cls, store, station: BranchStation):
         """Fetches the Till for the current station.
 
         :param store: a store
         :returns: a Till instance or None
         """
-        station = get_current_station(store)
         assert station is not None
 
         till = store.find(cls, status=Till.STATUS_OPEN, station=station).one()
@@ -143,30 +166,25 @@ class Till(Domain):
         return till
 
     @classmethod
-    def get_last_opened(cls, store):
+    def get_last_opened(cls, store, station: BranchStation):
         """Fetches the last Till which was opened.
         If in doubt, use Till.get_current instead. This method is a special case
         which is used to be able to close a till without calling get_current()
 
         :param store: a store
         """
-
-        result = store.find(Till,
-                            status=Till.STATUS_OPEN,
-                            station=get_current_station(store))
+        result = store.find(Till, status=Till.STATUS_OPEN, station=station)
         result = result.order_by(Till.opening_date)
         if not result.is_empty():
             return result[0]
 
     @classmethod
-    def get_last(cls, store):
-        station = get_current_station(store)
+    def get_last(cls, store, station: BranchStation):
         result = store.find(Till, station=station).order_by(Till.opening_date)
         return result.last()
 
     @classmethod
-    def get_last_closed(cls, store):
-        station = get_current_station(store)
+    def get_last_closed(cls, store, station: BranchStation):
         result = store.find(Till, station=station,
                             status=Till.STATUS_CLOSED).order_by(Till.opening_date)
         return result.last()
@@ -175,7 +193,7 @@ class Till(Domain):
     # Till methods
     #
 
-    def open_till(self):
+    def open_till(self, user: LoginUser):
         """Open the till.
 
         It can only be done once per day.
@@ -185,12 +203,16 @@ class Till(Domain):
         if self.status == Till.STATUS_OPEN:
             raise TillError(_('Till is already open'))
 
-        # Make sure that the till has not been opened today
-        today = localtoday().date()
-        if not self.store.find(Till,
-                               And(Date(Till.opening_date) >= today,
-                                   Till.station_id == self.station.id)).is_empty():
-            raise TillError(_("A till has already been opened today"))
+        manager = get_plugin_manager()
+        # The restriction to only allow opening the till only once per day comes from
+        # the (soon to be obsolete) ECF devices.
+        if manager.is_active('ecf'):
+            # Make sure that the till has not been opened today
+            today = localtoday().date()
+            if not self.store.find(Till,
+                                   And(Date(Till.opening_date) >= today,
+                                       Till.station_id == self.station.id)).is_empty():
+                raise TillError(_("A till has already been opened today"))
 
         last_till = self._get_last_closed_till()
         if last_till:
@@ -205,9 +227,11 @@ class Till(Domain):
 
         self.opening_date = TransactionTimestamp()
         self.status = Till.STATUS_OPEN
-        self.responsible_open = get_current_user(self.store)
+        self.responsible_open = user
+        assert self.responsible_open is not None
+        TillOpenedEvent.emit(self)
 
-    def close_till(self, observations=u""):
+    def close_till(self, user: LoginUser, observations=""):
         """This method close the current till operation with the confirmed
         sales associated. If there is a sale with a differente status than
         SALE_CONFIRMED, a new 'pending' till operation is created and
@@ -226,7 +250,9 @@ class Till(Domain):
         self.closing_date = TransactionTimestamp()
         self.status = Till.STATUS_CLOSED
         self.observations = observations
-        self.responsible_close = get_current_user(self.store)
+        self.responsible_close = user
+        assert self.responsible_open is not None
+        TillClosedEvent.emit(self)
 
     def add_entry(self, payment):
         """
@@ -278,6 +304,9 @@ class Till(Domain):
         if self.opening_date.date() == localtoday().date():
             return False
 
+        if localnow().hour < sysparam.get_int('TILL_TOLERANCE_FOR_CLOSING'):
+            return False
+
         return True
 
     def get_balance(self):
@@ -296,7 +325,6 @@ class Till(Domain):
         :returns: the cash amount on the till
         :rtype: currency
         """
-        from stoqlib.domain.payment.method import PaymentMethod
         store = self.store
         money = PaymentMethod.get_by_name(store, u'money')
 
@@ -337,6 +365,37 @@ class Till(Domain):
                            TillEntry.till_id == self.id))
         return currency(results.sum(TillEntry.value) or 0)
 
+    # FIXME: Rename to create_day_summary
+    def get_day_summary(self):
+        """Get the summary of this till for closing.
+
+        When using a blind closing process, this will create TillSummary entries that
+        will save the values all payment methods used.
+        """
+        money_method = PaymentMethod.get_by_name(self.store, u'money')
+        day_history = {}
+        # Keys are (method, provider, card_type), provider and card_type may be None if
+        # payment was not with card
+        day_history[(money_method, None, None)] = 0
+
+        for entry in self.get_entries():
+            provider = card_type = None
+            payment = entry.payment
+            method = payment.method if payment else money_method
+            if payment and payment.card_data:
+                provider = payment.card_data.provider
+                card_type = payment.card_data.card_type
+
+            key = (method, provider, card_type)
+            day_history.setdefault(key, 0)
+            day_history[key] += entry.value
+
+        summary = []
+        for (method, provider, card_type), value in day_history.items():
+            summary.append(TillSummary(till=self, method=method, provider=provider,
+                                       card_type=card_type, system_value=value))
+        return summary
+
     #
     # Private
     #
@@ -352,11 +411,12 @@ class Till(Domain):
                          description=description,
                          payment=payment,
                          till=self,
+                         station=self.station,
                          branch=self.station.branch,
                          store=self.store)
 
 
-class TillEntry(Domain):
+class TillEntry(IdentifiableDomain):
     """A TillEntry is a representing cash added or removed in a |till|.
      * A positive value represents addition.
      * A negative value represents removal.
@@ -392,6 +452,10 @@ class TillEntry(Domain):
     #: |branch| that received or gave money
     branch = Reference(branch_id, 'Branch.id')
 
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
+
     @property
     def time(self):
         """The time of the entry
@@ -405,6 +469,49 @@ class TillEntry(Domain):
     @property
     def branch_name(self):
         return self.branch.get_description()
+
+
+class TillSummary(Domain):
+    """A TillSummary is a summary of the state of all payment methods when the till was
+    closed.
+    """
+    __storm_table__ = 'till_summary'
+
+    #: The value that was registerd in Stoq when the till was closed.
+    system_value = PriceCol()
+
+    #: The value the user informed when closing the till. This can be different than the
+    #: system value when using a blind till closing process (where the user does not
+    #: know the system value)
+    user_value = PriceCol()
+
+    #: When using a blind closing process, this is the value that the manager verified
+    #: that actually was on the till. All values can differ.
+    verify_value = PriceCol()
+
+    notes = UnicodeCol()
+
+    method_id = IdCol(allow_none=False)
+    #: The method this item is for
+    method = Reference(method_id, 'PaymentMethod.id')
+
+    provider_id = IdCol(allow_none=True)
+    provider = Reference(provider_id, 'CreditProvider.id')
+
+    card_type = EnumCol(allow_none=True)
+
+    till_id = IdCol(allow_none=False)
+    #: the |till| this item takes part of
+    till = Reference(till_id, 'Till.id')
+
+    @property
+    def description(self):
+        if not self.card_type:
+            return self.method.get_description()
+
+        return '%s %s %s' % (self.method.get_description(),
+                             self.provider.short_name,
+                             CreditCardData.short_desc[self.card_type])
 
 
 class TillClosedView(Viewable):

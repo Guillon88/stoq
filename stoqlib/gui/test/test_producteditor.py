@@ -22,19 +22,30 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
+import base64
+from decimal import Decimal
+
 import mock
 from storm.expr import Update
 
-from decimal import Decimal
-from stoqlib.domain.product import Product
 from stoqlib.domain.commission import CommissionSource
+from stoqlib.domain.inventory import Inventory
+from stoqlib.domain.product import Product, ProductStockItem
 from stoqlib.domain.sellable import SellableCategory, Sellable
 from stoqlib.database.runtime import get_current_branch
 from stoqlib.gui.editors.producteditor import (ProductEditor,
-                                               ProductionProductEditor)
+                                               ProductionProductEditor,
+                                               ProductStockQuantityEditor)
 from stoqlib.gui.test.uitestutils import GUITest
 from stoqlib.gui.slaves.productslave import ProductComponentSlave
 from stoqlib.lib.parameters import sysparam
+
+# A (1px, 1px) image
+_image = base64.b64decode("""
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABmJLR0QA/wD/AP+gvaeTAAAACXBI
+WXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH3wEPEDYaIuf2wwAAABl0RVh0Q29tbWVudABDcmVhdGVk
+IHdpdGggR0lNUFeBDhcAAAANSURBVAjXY2BgYGAAAAAFAAFe8yo6AAAAAElFTkSuQmCC
+""")
 
 
 # TODO: Test product editor for products without storable
@@ -62,7 +73,7 @@ class TestProductEditor(GUITest):
     def test_create_grid_product(self):
         grid_product = self.create_product(is_grid=True)
         editor = ProductEditor(self.store, grid_product)
-        self.assertEquals(grid_product.product_type, Product.TYPE_GRID)
+        self.assertEqual(grid_product.product_type, Product.TYPE_GRID)
         self.check_editor(editor, 'editor-product-create-grid-product')
 
     def test_create_with_template(self):
@@ -81,12 +92,16 @@ class TestProductEditor(GUITest):
         # But they have the same list of |grid_attribute|
         grid_product_attributes = set(attr.attribute for attr in grid_product.attributes)
         model_attributes = set(attr.attribute for attr in editor.model.attributes)
-        self.assertEquals(grid_product_attributes, model_attributes)
+        self.assertEqual(grid_product_attributes, model_attributes)
         # and they are not empty
-        self.assertNotEquals(len(model_attributes), 0)
+        self.assertNotEqual(len(model_attributes), 0)
 
     def test_show(self):
         product = self.create_product(storable=True)
+        image = self.create_image()
+        image.image = _image
+        image.sellable = product.sellable
+
         editor = ProductEditor(self.store, product)
         editor.code.update("12345")
         self.check_editor(editor, 'editor-product-show')
@@ -149,7 +164,7 @@ class TestProductProductionEditor(GUITest):
         compslave.component_combo.select_item_by_data(component.component)
         self.click(compslave.add_button)
 
-        self.assertEquals(run_dialog.call_count, 1)
+        self.assertEqual(run_dialog.call_count, 1)
 
         self.check_editor(editor, 'editor-product-prod-edit')
 
@@ -177,3 +192,100 @@ class TestProductComponentSlave(GUITest):
         component = self.create_product_component()
         slave = ProductComponentSlave(self.store, component.product)
         self.check_slave(slave, 'slave-production-component-show')
+
+
+class TestProductStockQuantityEditor(GUITest):
+
+    def test_initial_stock(self):
+        branch = get_current_branch(self.store)
+        product = self.create_product(branch=branch, storable=False)
+        product.manage_stock = False
+        editor = ProductStockQuantityEditor(self.store, product, branch)
+        self.check_editor(editor, 'editor-product-stock-quantity-initial-show')
+
+        # Update editor
+        editor.quantity.update(15)
+        editor.cost.update('3.45')
+
+        stock_items_before = self.store.find(ProductStockItem).count()
+
+        # Confirm
+        self.click(editor.main_dialog.ok_button)
+
+        # Check data
+        stock_items_after = self.store.find(ProductStockItem).count()
+        self.assertEqual(stock_items_after, stock_items_before + 1)
+
+        stock_item = product.storable.get_stock_item(branch, batch=None)
+        self.assertEqual(stock_item.quantity, 15)
+        self.assertEqual(stock_item.stock_cost, Decimal('3.45'))
+
+    def test_inventory(self):
+        branch = get_current_branch(self.store)
+        product = self.create_product(branch=branch, stock=10)
+        editor = ProductStockQuantityEditor(self.store, product, branch)
+        self.check_editor(editor, 'editor-product-stock-quantity-inventory-show')
+
+        # Update editor
+        editor.quantity.update(20)
+        editor.reason.update('test case')
+
+        inventories_before = self.store.find(Inventory).count()
+
+        # Confirm
+        self.click(editor.main_dialog.ok_button)
+
+        # Check data
+        inventories_after = self.store.find(Inventory).count()
+        self.assertEqual(inventories_after, inventories_before + 1)
+
+        stock_item = product.storable.get_stock_item(branch, batch=None)
+        self.assertEqual(stock_item.quantity, 20)
+
+        # Check Inventory
+        inventory = self.store.find(Inventory).order_by(Inventory.te_id).last()
+        # The inventory should have only one item
+        item = inventory.get_items().one()
+
+        self.assertEqual(item.recorded_quantity, 10)
+        self.assertEqual(item.counted_quantity, 20)
+        self.assertEqual(item.actual_quantity, 20)
+        self.assertEqual(item.is_adjusted, True)
+        self.assertEqual(inventory.status, Inventory.STATUS_CLOSED)
+
+    def test_same_branch(self):
+        branch = get_current_branch(self.store)
+        product = self.create_product(branch=branch, stock=10)
+
+        editor = ProductStockQuantityEditor(self.store, product, branch)
+        # Using set_text because update() will not show the validation
+        editor.quantity.set_text('-4')
+        editor.reason.update('test')
+        # Do not let the user decrease stock to a negative number
+        self.assertInvalid(editor, ['quantity'])
+
+        # Let the user decrease stock
+        editor.quantity.update(9)
+        self.assertValid(editor, ['quantity'])
+
+        # Let the user increase stock
+        editor.quantity.update(11)
+        self.assertValid(editor, ['quantity'])
+        self.click(editor.main_dialog.ok_button)
+
+    def test_other_branch(self):
+        other_branch = self.create_branch()
+        product = self.create_product(branch=other_branch, stock=10)
+
+        with self.sysparam(SYNCHRONIZED_MODE=True):
+            editor = ProductStockQuantityEditor(self.store, product, other_branch)
+            editor.quantity.set_text('9')
+            # Do not let the user decrease stock from other branches in
+            # synchronized mode
+            self.assertInvalid(editor, ['quantity'])
+
+            # The user can increase stock from other branches
+            editor.quantity.set_text('11')
+            editor.reason.update('test')
+            self.assertValid(editor, ['quantity'])
+            self.click(editor.main_dialog.ok_button)

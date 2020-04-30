@@ -25,8 +25,6 @@
 import datetime
 import json
 
-from twisted.web.resource import Resource
-
 from stoqlib.api import api
 from stoqlib.domain.payment.views import InPaymentView, OutPaymentView
 from stoqlib.domain.person import ClientCallsView
@@ -50,7 +48,8 @@ def _color_to_rgb(c, alpha):
         int(c[4:], 16), alpha)
 
 
-class CalendarEvents(Resource):
+class CalendarEvents(object):
+
     def render_GET(self, resource):
         start = datetime.date.fromtimestamp(float(resource.args['start'][0]))
         end = datetime.date.fromtimestamp(float(resource.args['end'][0]))
@@ -93,7 +92,7 @@ class CalendarEvents(Resource):
         branch = api.get_current_branch(store)
         for v in ClientWithSalesView.find_by_birth_date(
                 store, (start, end), branch=branch):
-            for year in xrange(start.year, end.year + 1):
+            for year in range(start.year, end.year + 1):
                 date, ev = self._create_client_birthday(v, year)
                 self._append_event(day_events, date, 'client_birthdays', ev)
 

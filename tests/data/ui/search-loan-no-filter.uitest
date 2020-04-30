@@ -1,22 +1,19 @@
 search: LoanSearch
 GtkDialog(toplevel): title='Loan Search', hidden
-  GtkVBox(_main_vbox):
-    GtkVBox(vbox, expand=True, fill=True):
+  GtkBox(_main_vbox, orientation=vertical):
+    GtkBox(vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(header): hidden
       GtkEventBox(main, expand=True, fill=True, padding=6): slave SearchSlave is attached
-        GtkVBox(vbox):
-          GtkHBox(fill=True, padding=6):
-            GtkVBox(filters_box, padding=6):
-              GtkHBox(hbox):
-                SearchFilter(_primary_filter):
+        GtkBox(vbox, orientation=vertical):
+          GtkBox(orientation=horizontal, fill=True, padding=6):
+            GtkBox(filters_box, orientation=vertical, padding=6):
+              GtkBox(hbox, orientation=horizontal):
+                StringSearchFilter(_primary_filter):
                   GtkLabel(): 'Search:'
                   ProxyComboBox(padding=6): hidden
                     item: 'Contains All Words', selected
-                    item: 'Contains Exactly'
-                    item: 'Identical to'
-                    item: 'Does Not Contain'
-                  HintedEntry(search_entry, padding=6): ''
-                GtkButton(search_button): 'gtk-find'
+                  GtkEntry(search_entry, padding=6): ''
+                stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(search_button): 'Find'
               DateSearchFilter(date_filter):
                 GtkLabel(): 'Date:'
                 ProxyComboBox(padding=6):
@@ -31,26 +28,27 @@ GtkDialog(toplevel): title='Loan Search', hidden
                 ProxyDateEntry(padding=6): None, insensitive
                 GtkLabel(): 'To:', insensitive
                 ProxyDateEntry(padding=6): None, insensitive
-          SearchResultListView(result_view, expand=True, fill=True):
+          SearchResultListView(results, expand=True, fill=True):
             column: title='Loan #'
             column: title='Open date'
             column: title='Expire date'
             column: title='Branch', expand
             column: title='Client'
             column: title='Removed by'
-            row: 54952, datetime.datetime(2012, 1, 1, 0, 0), None, u'Moda Stoq', u'Dane Cook', u''
-            row: 45978, datetime.datetime(2012, 2, 2, 0, 0), None, u'Moda Stoq', u'Carmen Sandiego', u''
-      GtkHBox(fill=True):
+            row: 54952, datetime.datetime(2012, 1, 1, 0, 0), None, 'Moda Stoq', 'Dane Cook', ''
+            row: 45978, datetime.datetime(2012, 2, 2, 0, 0), None, 'Moda Stoq', 'Carmen Sandiego', ''
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(extra_holder, expand=True, fill=True, padding=6):
         GtkEventBox(print_holder, expand=True, fill=True):
         GtkEventBox(notice, fill=True):
         GtkEventBox(details_holder, padding=6, pack-end): slave _SearchDialogDetailsSlave is attached
-          GtkVBox(toplevel):
-            GtkHBox(hbox1, fill=True):
+          GtkBox(vbox1, orientation=vertical):
+            GtkBox(hbox1, orientation=horizontal, fill=True):
               GtkLabel(label3, expand=True, fill=True):
-              GtkHButtonBox(hbuttonbox1, fill=True):
-                GtkButton(details_button):
-                GtkButton(print_button): 'gtk-print'
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
-      GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden
+              GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+                GtkButton(details_button, expand=True, fill=True):
+                GtkButton(print_button, expand=True, fill=True): 'gtk-print'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
+        GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden

@@ -212,17 +212,17 @@ def _ensure_card_providers():
     log.info("Creating Card Providers")
     from stoqlib.domain.payment.card import CreditProvider, CardPaymentDevice
 
-    providers = [u'VISANET', u'REDECARD', u'AMEX', u'HIPERCARD',
-                 u'BANRISUL', u'PAGGO', u'CREDISHOP', u'CERTIF']
-
+    providers = {u'VISA': u'VISA',
+                 u'MASTER': u'MASTER',
+                 u'AMEX': u'AMEX'}
     store = new_store()
-    for name in providers:
-        provider = CreditProvider.get_provider_by_provider_id(name, store)
+    for short_name, provider_id in providers.items():
+        provider = CreditProvider.get_provider_by_provider_id(provider_id, store)
         if not provider.is_empty():
             continue
 
-        CreditProvider(short_name=name,
-                       provider_id=name,
+        CreditProvider(short_name=short_name,
+                       provider_id=providers[short_name],
                        open_contract_date=TransactionTimestamp(),
                        store=store)
     devices = store.find(CardPaymentDevice)
@@ -312,7 +312,8 @@ def create_database_functions():
 
     This will simply read data/sql/functions.sql and execute it
     """
-    with tempfile.NamedTemporaryFile(suffix='stoqfunctions-') as tmp_f:
+    # We cant remove the file, otherwise it will fail on windows.
+    with tempfile.NamedTemporaryFile(prefix='stoqfunctions-', delete=False) as tmp_f:
         functions = environ.get_resource_string('stoq', 'sql', 'functions.sql')
         tmp_f.write(render_template_string(functions))
         tmp_f.flush()

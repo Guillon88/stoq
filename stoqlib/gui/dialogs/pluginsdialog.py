@@ -24,13 +24,11 @@
 ##
 """ Dialogs for payment method management"""
 
-import platform
-
-import gtk
+from gi.repository import Gtk
 from kiwi.ui.objectlist import ObjectList, Column
 
 from stoqlib.api import api
-from stoqlib.database.runtime import get_default_store
+from stoqlib.database.runtime import get_default_store, new_store
 from stoqlib.gui.base.dialogs import BasicDialog, run_dialog
 from stoqlib.gui.stockicons import STOQ_PLUGIN
 from stoqlib.lib.translation import stoqlib_gettext
@@ -81,27 +79,21 @@ class PluginManagerDialog(BasicDialog):
 
     def _update_widgets(self):
         selected = self.klist.get_selected()
-        assert selected
-
-        self.ok_button.set_sensitive(selected.can_activate())
+        self.ok_button.set_sensitive(selected and selected.can_activate())
 
     def _setup_widgets(self):
-        self.set_ok_label(_(u'Activate'), gtk.STOCK_APPLY)
+        self.set_ok_label(_(u'Activate'), Gtk.STOCK_APPLY)
         self.ok_button.set_sensitive(False)
         plugins = []
 
         for name in sorted(self._manager.available_plugins_names):
-            if platform.system() == 'Windows':
-                if name in ['ecf', 'tef']:
-                    continue
-
             desc = self._manager.get_description_by_name(name)
             plugins.append(_PluginModel(name, name in
                                         self._manager.installed_plugins_names,
                                         desc))
 
         self.klist = ObjectList(self._get_columns(), plugins,
-                                gtk.SELECTION_BROWSE)
+                                Gtk.SelectionMode.BROWSE)
         self.klist.set_headers_visible(False)
         self.klist.connect("selection-changed",
                            self._on_klist__selection_changed)
@@ -112,7 +104,7 @@ class PluginManagerDialog(BasicDialog):
     def _get_columns(self):
         return [Column('is_active', title=_('Active'), width=20, data_type=bool),
                 Column('icon', data_type=str, width=24, use_stock=True,
-                       icon_size=gtk.ICON_SIZE_BUTTON),
+                       icon_size=Gtk.IconSize.BUTTON),
                 Column('description', data_type=str, expand=True,
                        use_markup=True)]
 
@@ -122,7 +114,8 @@ class PluginManagerDialog(BasicDialog):
         # activating the plugin. See bug 5272
         default_store = get_default_store()
         default_store.commit()
-        self._manager.install_plugin(plugin_name)
+        with new_store() as store:
+            self._manager.install_plugin(store, plugin_name)
         self._manager.activate_plugin(plugin_name)
 
         info(_("The plugin %s was successfully activated. Please, restart all "
@@ -136,7 +129,7 @@ class PluginManagerDialog(BasicDialog):
         msg = _("Are you sure you want activate this plugin?\n"
                 "Please note that, once activated you will not "
                 "be able to disable it.")
-        response = yesno(msg, gtk.RESPONSE_NO,
+        response = yesno(msg, Gtk.ResponseType.NO,
                          _("Activate plugin"), _("Not now"))
 
         if response:

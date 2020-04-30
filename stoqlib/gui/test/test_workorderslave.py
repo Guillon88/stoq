@@ -24,7 +24,7 @@
 
 import contextlib
 import decimal
-import gtk
+from gi.repository import Gtk
 import mock
 
 from stoqlib.api import api
@@ -100,7 +100,7 @@ class TestWorkOrderItemEditor(GUITest):
         # Nothing made
         product = self.create_product(stock=10)
         item = workorder.add_sellable(product.sellable, quantity=1)
-        item.reserve(1)
+        item.reserve(self.current_user, 1)
         editor = _WorkOrderItemEditor(self.store, model=item)
         with contextlib.nested(
                 mock.patch.object(item, 'return_to_stock'),
@@ -113,7 +113,7 @@ class TestWorkOrderItemEditor(GUITest):
         # Reserving more quantity
         product = self.create_product(stock=10)
         item = workorder.add_sellable(product.sellable, quantity=10)
-        item.reserve(2)
+        item.reserve(self.current_user, 2)
         editor = _WorkOrderItemEditor(self.store, model=item)
         editor.quantity.update(8)
         with contextlib.nested(
@@ -127,7 +127,7 @@ class TestWorkOrderItemEditor(GUITest):
         # Returning some quantity to stock
         product = self.create_product(stock=10)
         item = workorder.add_sellable(product.sellable, quantity=10)
-        item.reserve(6)
+        item.reserve(self.current_user, 6)
         editor = _WorkOrderItemEditor(self.store, model=item)
         editor.quantity.update(4)
         with contextlib.nested(
@@ -181,7 +181,7 @@ class TestWorkOrderItemSlave(GUITest):
             yesno.return_value = True
             self.click(editor.slave.delete_button)
             yesno.assert_called_once_with(
-                'Delete this item?', gtk.RESPONSE_NO, 'Delete item', 'Keep it')
+                'Delete this item?', Gtk.ResponseType.NO, 'Delete item', 'Keep it')
 
         self.assertEqual(len(editor.slave.klist), 0)
         self.assertEqual(

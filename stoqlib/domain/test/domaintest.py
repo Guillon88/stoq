@@ -25,8 +25,11 @@
 
 import contextlib
 import datetime
+import functools
+from decimal import Decimal
 import os
 
+from kiwi.python import cmp
 import mock
 import unittest
 
@@ -34,9 +37,8 @@ from stoqlib.lib.kiwilibrary import library
 library  # pylint: disable=W0104
 
 import stoqlib
-from stoqlib.database.runtime import (get_current_branch,
-                                      new_store,
-                                      StoqlibStore)
+from stoqlib.database.runtime import (get_current_branch, get_current_user, get_current_station,
+                                      new_store, StoqlibStore)
 from stoqlib.database.testsuite import StoqlibTestsuiteTracer
 from stoqlib.domain.base import Domain
 from stoqlib.domain.exampledata import ExampleCreator
@@ -92,7 +94,7 @@ class FakeDatabaseSettings:
 
     def get_command_line_arguments(self):
         return ['-d', self.dbname,
-                '-p', unicode(self.port),
+                '-p', str(self.port),
                 '-u', self.username,
                 '-w', self.password]
 
@@ -112,6 +114,8 @@ class ReadOnlyStore(StoqlibStore):
         # creates an additional database connection
         self.real_store = real_store
         self.retval = False
+
+    __hash__ = StoqlibStore.__hash__
 
     # Store
 
@@ -144,9 +148,11 @@ class ReadOnlyStore(StoqlibStore):
 
 class FakeNamespace(object):
     """Commonly used mock objects goes in here"""
+
     def __init__(self):
         self.api = mock.Mock()
         self.api.get_current_branch = get_current_branch
+        self.api.get_current_station = get_current_station
         self.DatabaseSettings = FakeDatabaseSettings
         self.StoqConfig = FakeStoqConfig
         self.datetime = mock.MagicMock(datetime)
@@ -176,6 +182,18 @@ class DomainTest(unittest.TestCase, ExampleCreator):
         unittest.TestCase.__init__(self, test)
         ExampleCreator.__init__(self)
 
+    @property
+    def current_user(self):
+        return get_current_user(self.store)
+
+    @property
+    def current_branch(self):
+        return get_current_branch(self.store)
+
+    @property
+    def current_station(self):
+        return get_current_station(self.store)
+
     @classmethod
     def setUpClass(cls):
         cls.store = new_store()
@@ -193,6 +211,15 @@ class DomainTest(unittest.TestCase, ExampleCreator):
         self.store.rollback(close=False)
         self.clear()
 
+    def assertNotCalled(self, mocked):
+        self.assertEqual(mocked.call_count, 0)
+
+    def assertCalledOnceWith(self, mocked, *args, **kwargs):
+        mocked.assert_called_once_with(*args, **kwargs)
+
+    def assertHasCalls(self, mocked, *args, **kwargs):
+        mocked.assert_has_calls(*args, **kwargs)
+
     def get_oficial_plugins_names(self):
         """Get official plugins names
 
@@ -202,8 +229,8 @@ class DomainTest(unittest.TestCase, ExampleCreator):
         """
         base_dir = os.path.dirname(os.path.dirname(stoqlib.__file__))
         plugins_dir = os.path.join(base_dir, 'plugins')
-        return set(unicode(d) for d in os.listdir(plugins_dir) if
-                   not d.startswith('__init__'))
+        return set(str(d) for d in os.listdir(plugins_dir) if
+                   not d.startswith('__init__') and not d.startswith('__pycache__'))
 
     @contextlib.contextmanager
     def count_tracer(self):
@@ -225,6 +252,29 @@ class DomainTest(unittest.TestCase, ExampleCreator):
         tracer.remove()
 
     @contextlib.contextmanager
+    def user_setting(self, new_settings):
+        """
+        Updates a set of user settings within a context.
+        The values will be reverted when leaving the scope.
+        kwargs contains a dictionary of parameter name->value
+        """
+        from stoqlib.lib.settings import get_settings
+        settings = get_settings()
+        old_values = {}
+        for key, value in new_settings.items():
+            old_values[key] = settings.get(key, None)
+            settings.set(key, value)
+
+        try:
+            yield
+        finally:
+            for param, value in old_values.items():
+                if value is None:
+                    settings.remove(key)
+                else:
+                    settings.set(key, value)
+
+    @contextlib.contextmanager
     def sysparam(self, **kwargs):
         """
         Updates a set of system parameters within a context.
@@ -234,43 +284,52 @@ class DomainTest(unittest.TestCase, ExampleCreator):
         from stoqlib.lib.parameters import sysparam
         old_values = {}
         for param, value in kwargs.items():
-            if type(value) is bool:
+            if isinstance(value, bool):
                 old_values[param] = sysparam.get_bool(param)
                 sysparam.set_bool(self.store, param, value)
-            elif type(value) is int:
+            elif isinstance(value, int):
                 old_values[param] = sysparam.get_int(param)
                 sysparam.set_int(self.store, param, value)
             elif isinstance(value, Domain) or value is None:
                 old_values[param] = sysparam.get_object(self.store, param)
                 sysparam.set_object(self.store, param, value)
-            elif isinstance(value, basestring):
+            elif isinstance(value, str):
                 old_values[param] = sysparam.get_string(param)
                 sysparam.set_string(self.store, param, value)
+            elif isinstance(value, Decimal):
+                old_values[param] = sysparam.get_decimal(param)
+                sysparam.set_decimal(self.store, param, value)
             else:
                 raise NotImplementedError(type(value))
         try:
             yield
         finally:
             for param, value in old_values.items():
-                if type(value) is bool:
+                if isinstance(value, bool):
                     sysparam.set_bool(self.store, param, value)
-                elif type(value) is int:
+                elif isinstance(value, int):
                     sysparam.set_int(self.store, param, value)
                 elif isinstance(value, Domain) or value is None:
                     sysparam.set_object(self.store, param, value)
-                elif isinstance(value, basestring):
+                elif isinstance(value, str):
                     sysparam.set_string(self.store, param, value)
+                elif isinstance(value, Decimal):
+                    sysparam.set_decimal(self.store, param, value)
                 else:
                     raise NotImplementedError(type(value))
 
     def collect_sale_models(self, sale):
         models = [sale,
-                  sale.group]
+                  sale.group,
+                  sale.invoice]
         models.extend(sale.payments)
         branch = get_current_branch(self.store)
+
+        def _cmp(a, b):
+            return cmp(a.sellable.description, b.sellable.description)
+
         for item in sorted(sale.get_items(),
-                           cmp=lambda a, b: cmp(a.sellable.description,
-                                                b.sellable.description)):
+                           key=functools.cmp_to_key(_cmp)):
             models.append(item.sellable)
             stock_item = item.sellable.product_storable.get_stock_item(
                 branch, batch=item.batch)

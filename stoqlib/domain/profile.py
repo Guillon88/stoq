@@ -27,6 +27,7 @@
 # pylint: enable=E1101
 
 from kiwi.component import get_utility
+from storm.expr import And, Eq
 from storm.references import Reference, ReferenceSet
 
 from stoqlib.database.properties import BoolCol, IdCol, PercentCol, UnicodeCol
@@ -52,6 +53,29 @@ class ProfileSettings(Domain):
 
     #: Has this user permission to use this app?
     has_permission = BoolCol(default=False)
+
+    #: Virtual apps. They will have permission if one of the apps mapped
+    #: on the list have permission
+    virtual_apps = {
+        'link': ['admin'],
+    }
+
+    @classmethod
+    def get_permission(cls, store, profile, app):
+        """Check if a profile has access to an app
+
+        :param store: A store
+        :param profile: The :class:`.UserProfile` to check for permission
+        :param app: The name of the application
+        :return: Whether the profile has access to the profile or not
+        """
+        apps = [app] + cls.virtual_apps.get(app, [])
+        res = store.find(
+            cls, And(cls.user_profile_id == profile.id,
+                     Eq(cls.has_permission, True),
+                     cls.app_dir_name.is_in(apps)))
+        res.config(limit=1)
+        return res.one() is not None
 
     @classmethod
     def set_permission(cls, store, profile, app, permission):
@@ -107,20 +131,29 @@ class UserProfile(Domain):
             profile = store.find(cls).any()
         return profile
 
+    def get_description(self):
+        return self.name
+
     def add_application_reference(self, app_name, has_permission=False):
-        store = self.store
-        ProfileSettings(store=store, app_dir_name=app_name,
-                        has_permission=has_permission, user_profile=self)
+        return ProfileSettings(
+            store=self.store,
+            app_dir_name=app_name,
+            has_permission=has_permission,
+            user_profile=self)
 
     def check_app_permission(self, app_name):
         """Check if the user has permission to use an application
         :param app_name: name of application to check
         """
-        store = self.store
-        return bool(store.find(ProfileSettings,
-                               user_profile=self,
-                               app_dir_name=app_name,
-                               has_permission=True).one())
+        return ProfileSettings.get_permission(self.store, self, app_name)
+
+    def get_permissions(self):
+        apps = {setting.app_dir_name: setting.has_permission
+                for setting in self.profile_settings}
+        for virtual_app, references in ProfileSettings.virtual_apps.items():
+            apps[virtual_app] = any(apps.get(r, False) for r in references)
+
+        return apps
 
 
 def update_profile_applications(store, profile=None):

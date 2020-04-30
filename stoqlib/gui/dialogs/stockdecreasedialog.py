@@ -26,10 +26,9 @@
 
 import datetime
 
-import gtk
+from gi.repository import Gtk, Pango
 from kiwi.ui.objectlist import Column, SummaryLabel
 from kiwi.currency import currency
-import pango
 
 from stoqlib.api import api
 from stoqlib.domain.stockdecrease import StockDecrease, StockDecreaseItem
@@ -49,18 +48,30 @@ class StockDecreaseDetailsDialog(BaseEditor):
     model_type = StockDecrease
     report_class = StockDecreaseReceipt
     gladefile = "StockDecreaseDetails"
-    proxy_widgets = ('identifier',
-                     'confirm_date',
-                     'branch_name',
-                     'responsible_name',
-                     'removed_by_name',
-                     'cfop_description',
-                     'reason',
-                     'invoice_number')
+    decrease_widgets = ['identifier',
+                        'confirm_date',
+                        'branch_name',
+                        'responsible_name',
+                        'removed_by_name',
+                        'cfop_description',
+                        'reason']
+    invoice_widgets = ['invoice_number']
+    proxy_widgets = decrease_widgets + invoice_widgets
 
     def __init__(self, store, model):
         BaseEditor.__init__(self, store, model)
         self._setup_widgets()
+
+    def add_tab(self, slave, name):
+        """Add a new tab on the notebook
+
+        :param slave: the slave we are attaching to the new tab
+        :param name: the name of the tab
+        """
+        event_box = Gtk.EventBox()
+        self.notebook.insert_page(event_box, Gtk.Label(label=name), -1)
+        self.attach_slave(name, slave, event_box)
+        event_box.show()
 
     def _setup_widgets(self):
         self.product_list.set_columns(self._get_product_columns())
@@ -73,7 +84,7 @@ class StockDecreaseDetailsDialog(BaseEditor):
                                                        label=total_cost_label,
                                                        value_format=value_format)
             products_cost_summary_label.show()
-            self.products_vbox.pack_start(products_cost_summary_label, False)
+            self.products_vbox.pack_start(products_cost_summary_label, False, True, 0)
         products = self.store.find(StockDecreaseItem, stock_decrease=self.model)
         self.product_list.add_list(list(products))
 
@@ -101,13 +112,13 @@ class StockDecreaseDetailsDialog(BaseEditor):
 
     def _get_product_columns(self):
         columns = [Column("sellable.code", title=_("Code"), data_type=str,
-                          justify=gtk.JUSTIFY_RIGHT, ellipsize=pango.ELLIPSIZE_END),
+                          justify=Gtk.Justification.RIGHT, ellipsize=Pango.EllipsizeMode.END),
                    Column("sellable.description", title=_("Description"),
                           data_type=str, expand=True),
                    Column('batch.batch_number', title=_("Batch"),
                           data_type=str),
                    Column("quantity", title=_("Qty"),
-                          data_type=int, justify=gtk.JUSTIFY_RIGHT),
+                          data_type=int, justify=Gtk.Justification.RIGHT),
                    ]
         if api.sysparam.get_bool("CREATE_PAYMENTS_ON_STOCK_DECREASE"):
             columns.append(Column('total_cost', title=_("Cost"),
@@ -119,7 +130,8 @@ class StockDecreaseDetailsDialog(BaseEditor):
     #
 
     def setup_proxies(self):
-        self.proxy = self.add_proxy(self.model, self.proxy_widgets)
+        self.decrease_proxy = self.add_proxy(self.model, self.decrease_widgets)
+        self.invoice_proxy = self.add_proxy(self.model.invoice, self.invoice_widgets)
 
     #
     # Callbacks

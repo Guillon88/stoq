@@ -26,10 +26,11 @@
 import datetime
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column
 
+from stoqlib.api import api
 from stoqlib.domain.loan import Loan
 from stoqlib.domain.views import LoanView, LoanItemView
 from stoqlib.enums import SearchFilterPosition
@@ -98,7 +99,7 @@ class LoanSearch(SearchDialog):
     size = (750, 500)
     search_spec = LoanView
     report_class = LoanReceipt
-    selection_mode = gtk.SELECTION_MULTIPLE
+    selection_mode = Gtk.SelectionMode.MULTIPLE
     advanced_search = False
 
     def __init__(self, store):
@@ -106,8 +107,10 @@ class LoanSearch(SearchDialog):
         self._setup_widgets()
 
     def _show_details(self, item):
-        run_dialog(LoanDetailsDialog, self, self.store,
-                   item)
+        with api.new_store() as store:
+            model = store.fetch(item)
+            run_dialog(LoanDetailsDialog, self, store, model)
+            store.retval = store.get_pending_count() > 0
 
     def _setup_widgets(self):
         self.results.connect('row_activated', self.on_row_activated)
@@ -141,10 +144,10 @@ class LoanSearch(SearchDialog):
                 Column('expire_date', _('Expire date'),
                        data_type=datetime.date, width=100),
                 Column('branch_name', _('Branch'),
-                       data_type=unicode, expand=True),
+                       data_type=str, expand=True),
                 Column('client_name', _('Client'),
-                       data_type=unicode, width=120),
-                Column('removed_by', _('Removed by'), data_type=unicode,
+                       data_type=str, width=120),
+                Column('removed_by', _('Removed by'), data_type=str,
                        width=120),
                 ]
 

@@ -1,10 +1,10 @@
 dialog: StockDecreaseDetailsDialog
-GtkVBox(details_vbox):
+GtkBox(toplevel, orientation=vertical):
   GtkTable(table1, fill=True, padding=6):
     ProxyLabel(kiwilabel4): 'Identifier:'
     ProxyLabel(identifier): '<span >08888</span>'
     ProxyLabel(invoice_number_lbl): 'Invoice number:'
-    ProxyLabel(invoice_number): '<span >1337</span>'
+    ProxyLabel(invoice_number): '<span ></span>'
     ProxyLabel(kiwilabel1): 'Date:'
     ProxyLabel(confirm_date): '<span >YYYY-MM-DD</span>'
     ProxyLabel(kiwilabel3): 'Branch:'
@@ -16,17 +16,17 @@ GtkVBox(details_vbox):
     ProxyLabel(kiwilabel2): 'Cfop:'
     ProxyLabel(cfop_description): '<span >123 test</span>'
   GtkNotebook(notebook, expand=True, fill=True):
-    GtkVBox(products_vbox):
+    GtkBox(products_vbox, orientation=vertical):
       ObjectList(product_list, expand=True, fill=True):
         column: title='Code'
         column: title='Description', expand
         column: title='Batch'
         column: title='Qty'
-        row: u'', u'Description', None, Decimal('1.000')
-    GtkHBox(hbox1):
+        row: '', 'Description', None, Decimal('1.000')
+    GtkBox(hbox1, orientation=horizontal):
       GtkScrolledWindow(scrolledwindow1, expand=True, fill=True):
         ProxyTextView(reason):
-    GtkVBox(vbox2):
+    GtkBox(vbox2, orientation=vertical):
       ObjectList(payment_list, expand=True, fill=True):
         column: title='Payment #'
         column: title='Type'
@@ -35,6 +35,6 @@ GtkVBox(details_vbox):
         column: title='Paid date'
         column: title='Value'
         column: title='Paid value'
-        row: 7777, u'Money', u'1/1 Money for stock decrease 08888', datetime.today(), None, <currency $100>, None
-  GtkHButtonBox(hbuttonbox1, fill=True):
+        row: 7777, 'Money', '1/1 Money for stock decrease 08888', datetime.today(), None, <currency $100>, None
+  GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
     GtkButton(print_button): 'gtk-print'

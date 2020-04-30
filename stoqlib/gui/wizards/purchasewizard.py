@@ -25,10 +25,8 @@
 """ Purchase wizard definition """
 
 import datetime
-from decimal import Decimal
 
-import gtk
-from kiwi.component import get_utility
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
 from kiwi.ui.objectlist import Column
@@ -36,24 +34,21 @@ from kiwi.ui.objectlist import Column
 from stoqlib.api import api
 from stoqlib.domain.inventory import Inventory
 from stoqlib.domain.payment.group import PaymentGroup
-from stoqlib.domain.payment.payment import Payment
 from stoqlib.domain.person import Branch, Supplier, Transporter
 from stoqlib.domain.product import ProductSupplierInfo
 from stoqlib.domain.purchase import PurchaseOrder, PurchaseItem
-from stoqlib.domain.receiving import ReceivingOrder
+from stoqlib.domain.receiving import ReceivingOrder, ReceivingInvoice
 from stoqlib.domain.sellable import Sellable
 from stoqlib.domain.views import ProductFullStockItemSupplierView
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.base.wizards import WizardEditorStep, BaseWizard
 from stoqlib.gui.editors.purchaseeditor import PurchaseItemEditor
 from stoqlib.gui.editors.personeditor import SupplierEditor, TransporterEditor
-from stoqlib.gui.interfaces import IDomainSlaveMapper
+from stoqlib.gui.wizards.abstractwizard import BasePaymentStep
 from stoqlib.gui.wizards.personwizard import run_person_role_dialog
 from stoqlib.gui.wizards.receivingwizard import ReceivingInvoiceStep
 from stoqlib.gui.wizards.abstractwizard import SellableItemStep
 from stoqlib.gui.search.sellablesearch import PurchaseSellableSearch
-from stoqlib.gui.slaves.paymentmethodslave import SelectPaymentMethodSlave
-from stoqlib.gui.slaves.paymentslave import register_payment_slaves
 from stoqlib.gui.utils.printing import print_report
 from stoqlib.lib.defaults import MAX_INT
 from stoqlib.lib.dateutils import localtoday
@@ -210,8 +205,8 @@ class PurchaseItemStep(SellableItemStep):
     def _set_expected_receival_date(self, item):
         supplier = self.model.supplier
         product = item.sellable.product
-        supplier_info = self.store.find(ProductSupplierInfo, product=product,
-                                        supplier=supplier).one()
+        supplier_info = ProductSupplierInfo.find_by_product_supplier(
+            self.store, product, supplier, api.get_current_branch(self.store))
         if supplier_info is not None:
             delta = datetime.timedelta(days=supplier_info.lead_time)
             expected_receival = self.model.open_date + delta
@@ -264,16 +259,11 @@ class PurchaseItemStep(SellableItemStep):
             supplier_info = ProductSupplierInfo(product=sellable.product,
                                                 supplier=self.model.supplier,
                                                 store=self.store)
-        if parent:
-            component_quantity = self.get_component_quantity(parent, sellable)
-            quantity = quantity * component_quantity
-            cost = Decimal('0')
-        else:
+        if not parent:
             supplier_info.base_cost = cost
 
-        item = self.model.add_item(sellable, quantity, parent=parent)
+        item = self.model.add_item(sellable, quantity, parent=parent, cost=cost)
         self._set_expected_receival_date(item)
-        item.cost = cost
         return item
 
     def get_saved_items(self):
@@ -286,9 +276,9 @@ class PurchaseItemStep(SellableItemStep):
             return
 
         minimum = supplier_info.minimum_purchase
-        self.quantity.set_adjustment(gtk.Adjustment(lower=minimum,
+        self.quantity.set_adjustment(Gtk.Adjustment(lower=minimum,
                                                     upper=MAX_INT,
-                                                    step_incr=1))
+                                                    step_increment=1))
         self.quantity.set_value(minimum)
         self.cost.set_value(supplier_info.base_cost)
 
@@ -335,8 +325,8 @@ class PurchaseItemStep(SellableItemStep):
             return
         product = sellable.product
         supplier = self.model.supplier
-        return self.store.find(ProductSupplierInfo, product=product,
-                               supplier=supplier).one()
+        return ProductSupplierInfo.find_by_product_supplier(
+            self.store, product, supplier, api.get_current_branch(self.store))
 
     #
     # Callbacks
@@ -359,105 +349,10 @@ class PurchaseItemStep(SellableItemStep):
         self.slave.delete_button.set_sensitive(can_delete)
 
 
-class PurchasePaymentStep(WizardEditorStep):
-    gladefile = 'PurchasePaymentStep'
-    model_type = PaymentGroup
-
-    def __init__(self, wizard, previous, store, model,
-                 outstanding_value=currency(0)):
-        self.order = model
-        self.slave = None
-        self.discount_surcharge_slave = None
-        self.outstanding_value = outstanding_value
-
-        if not model.payments.count():
-            # Default values
-            self._installments_number = None
-            self._first_duedate = None
-            self._method = 'bill'
-        else:
-            # FIXME: SqlObject returns count as long, but we need it as int.
-            self._installments_number = int(model.payments.count())
-            self._method = model.payments[0].method.method_name
-
-            # due_date is datetime.datetime. Converting it to datetime.date
-            due_date = model.payments[0].due_date.date()
-            self._first_duedate = (due_date >= localtoday().date() and
-                                   due_date or None)
-
-        WizardEditorStep.__init__(self, store, wizard, model.group, previous)
-
-    def _setup_widgets(self):
-        register_payment_slaves()
-
-        self._ms = SelectPaymentMethodSlave(store=self.store,
-                                            payment_type=Payment.TYPE_OUT,
-                                            default_method=self._method,
-                                            no_payments=True)
-        self._ms.connect_after('method-changed',
-                               self._after_method_select__method_changed)
-
-        self.attach_slave('method_select_holder', self._ms)
-        self._update_payment_method_slave()
-
-    def _set_method_slave(self):
-        """Sets the payment method slave"""
-        method = self._ms.get_selected_method()
-        if not method:
-            return
-        domain_mapper = get_utility(IDomainSlaveMapper)
-        slave_class = domain_mapper.get_slave_class(method)
-        if slave_class:
-            self.wizard.payment_group = self.model
-            self.slave = slave_class(self.wizard, self,
-                                     self.store, self.order, method,
-                                     outstanding_value=self.outstanding_value,
-                                     first_duedate=self._first_duedate,
-                                     installments_number=self._installments_number,
-                                     temporary_identifiers=self.wizard.is_for_another_branch())
-            self.attach_slave('method_slave_holder', self.slave)
-
-    def _update_payment_method_slave(self):
-        """Updates the payment method slave """
-        holder_name = 'method_slave_holder'
-        if self.get_slave(holder_name):
-            self.slave.get_toplevel().hide()
-            self.detach_slave(holder_name)
-            self.slave = None
-
-        # remove all payments created last time, if any
-        self.model.clear_unused()
-        if not self.slave:
-            self._set_method_slave()
-
-    #
-    # WizardStep hooks
-    #
-
-    def validate_step(self):
-        if self.slave:
-            return self.slave.finish()
-        return True
+class PurchasePaymentStep(BasePaymentStep):
 
     def next_step(self):
-        return FinishPurchaseStep(self.store, self.wizard, self.order, self)
-
-    def post_init(self):
-        self.model.clear_unused()
-        self.main_box.set_focus_chain([self.method_select_holder,
-                                       self.method_slave_holder])
-        self.register_validate_function(self.wizard.refresh_next)
-        self.force_validation()
-
-    def setup_proxies(self):
-        self._setup_widgets()
-
-    #
-    # callbacks
-    #
-
-    def _after_method_select__method_changed(self, slave, method):
-        self._update_payment_method_slave()
+        return FinishPurchaseStep(self.store, self.wizard, self.parent, self)
 
 
 class FinishPurchaseStep(WizardEditorStep):
@@ -491,13 +386,24 @@ class FinishPurchaseStep(WizardEditorStep):
         # purchase first. Note that the purchase may already be confirmed
         if self.model.status in [PurchaseOrder.ORDER_PENDING,
                                  PurchaseOrder.ORDER_CONSIGNED]:
-            self.model.confirm()
+            self.model.confirm(api.get_current_user(self.store))
 
-        receiving_model = ReceivingOrder(
-            responsible=api.get_current_user(self.store),
+        temporary_identifier = None
+        if self.wizard.is_for_another_branch():
+            temporary_identifier = ReceivingOrder.get_temporary_identifier(self.store)
+
+        receiving_invoice = ReceivingInvoice(
+            store=self.store,
             supplier=self.model.supplier,
             branch=self.model.branch,
-            transporter=self.model.transporter,
+            station=api.get_current_station(self.store),
+            responsible=api.get_current_user(self.store))
+        receiving_model = ReceivingOrder(
+            identifier=temporary_identifier,
+            receiving_invoice=receiving_invoice,
+            responsible=receiving_invoice.responsible,
+            branch=self.model.branch,
+            station=api.get_current_station(self.store),
             invoice_number=None,
             store=self.store)
         receiving_model.add_purchase(self.model)
@@ -540,7 +446,7 @@ class FinishPurchaseStep(WizardEditorStep):
         self._set_receival_date_suggestion()
 
         # If the purchase is for another branch, we should not allow receiving
-        if self.model.has_batch_item() or self.wizard.is_for_another_branch():
+        if self.model.has_batch_item():
             self.receive_now.hide()
 
         self.register_validate_function(self.wizard.refresh_next)
@@ -642,6 +548,7 @@ class PurchaseWizard(BaseWizard):
         return PurchaseOrder(supplier_id=supplier_id,
                              responsible=api.get_current_user(store),
                              branch=branch,
+                             station=api.get_current_station(store),
                              status=status,
                              group=group,
                              store=store)
@@ -666,7 +573,7 @@ class PurchaseWizard(BaseWizard):
 
         if self.receiving_model:
             # Confirming the receiving will close the purchase
-            self.receiving_model.confirm()
+            self.receiving_model.confirm(api.get_current_user(self.store))
 
         self.close()
 

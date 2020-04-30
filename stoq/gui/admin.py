@@ -26,11 +26,11 @@
 import logging
 import operator
 
-import glib
-import gtk
+from gi.repository import Gtk, GLib
 
 from stoqlib.api import api
 from stoqlib.domain.invoice import InvoiceLayout
+from stoqlib.gui.dialogs.certificatedialog import CertificateListDialog
 from stoqlib.gui.dialogs.clientcategorydialog import ClientCategoryDialog
 from stoqlib.gui.dialogs.devices import DeviceSettingsDialog
 from stoqlib.gui.editors.formfieldeditor import FormFieldEditor
@@ -39,6 +39,7 @@ from stoqlib.gui.dialogs.invoicedialog import (InvoiceLayoutDialog,
 from stoqlib.gui.dialogs.paymentcategorydialog import PaymentCategoryDialog
 from stoqlib.gui.dialogs.paymentmethod import PaymentMethodsDialog
 from stoqlib.gui.dialogs.personmergedialog import PersonMergeDialog
+from stoqlib.gui.dialogs.pindialog import PinDialog
 from stoqlib.gui.dialogs.pluginsdialog import PluginManagerDialog
 from stoqlib.gui.dialogs.sellabledialog import SellableTaxConstantsDialog
 from stoqlib.gui.dialogs.sintegradialog import SintegraDialog
@@ -46,6 +47,7 @@ from stoqlib.gui.editors.personeditor import UserEditor
 from stoqlib.gui.search.costcentersearch import CostCenterSearch
 from stoqlib.gui.search.eventsearch import EventSearch
 from stoqlib.gui.search.fiscalsearch import CfopSearch, FiscalBookEntrySearch
+from stoqlib.gui.search.messagesearch import MessageSearch
 from stoqlib.gui.search.parametersearch import ParameterSearch
 from stoqlib.gui.search.productsearch import ProductSearch
 from stoqlib.gui.search.gridsearch import (GridGroupSearch,
@@ -63,10 +65,16 @@ from stoqlib.gui.search.salesearch import SaleTokenSearch
 from stoqlib.gui.search.servicesearch import ServiceSearch
 from stoqlib.gui.search.taxclasssearch import TaxTemplatesSearch
 from stoqlib.gui.stockicons import (
-    STOQ_CALC, STOQ_ADMIN_APP, STOQ_CLIENTS, STOQ_DEVICES, STOQ_DELIVERY,
-    STOQ_DOCUMENTS, STOQ_EDIT, STOQ_FORMS, STOQ_HR, STOQ_MONEY,
-    STOQ_PAYABLE_APP, STOQ_PLUGIN, STOQ_SUPPLIERS, STOQ_SYSTEM, STOQ_TAXES,
-    STOQ_USER_PROFILES, STOQ_USERS, STOQ_PRODUCTS, STOQ_SERVICES)
+    STOQ_BOOK, STOQ_BRANCHES, STOQ_CLIENTS,
+    STOQ_CONNECT, STOQ_DEVICES, STOQ_TRANSPORTER,
+    STOQ_DOCUMENTS, STOQ_EMPLOYEE,
+    STOQ_EMPLOYEE_CARD, STOQ_FORMS, STOQ_HR,
+    STOQ_MOVEMENT_PRODUCT, STOQ_PARAMETERS,
+    STOQ_PAYMENT_CATEGORY, STOQ_PAYMENT_TYPE,
+    STOQ_PLUGIN, STOQ_PRINTER, STOQ_PRODUCTS,
+    STOQ_SERVICES, STOQ_STATUS_WARNING,
+    STOQ_SUPPLIERS, STOQ_SYSTEM, STOQ_TAX_TYPE,
+    STOQ_USER_PROFILES)
 from stoqlib.gui.utils.keybindings import get_accels
 from stoqlib.gui.wizards.personwizard import run_person_role_dialog
 from stoqlib.lib.decorators import public
@@ -74,6 +82,7 @@ from stoqlib.lib.message import info
 from stoqlib.lib.permissions import PermissionManager
 from stoqlib.lib.translation import locale_sorted, stoqlib_gettext
 
+import stoq
 from stoq.gui.shell.shellapp import ShellApp
 
 _ = stoqlib_gettext
@@ -89,7 +98,7 @@ class Tasks(object):
     def __init__(self, app):
         self.app = app
 
-        self.theme = gtk.icon_theme_get_default()
+        self.theme = Gtk.IconTheme.get_default()
 
     def set_model(self, model):
         self.model = model
@@ -97,30 +106,31 @@ class Tasks(object):
 
     def add_defaults(self):
         items = [
-            (_('Branches'), 'branches', gtk.STOCK_HOME),
-            (_('C.F.O.P.'), 'cfop', STOQ_CALC),
+            (_('Branches'), 'branches', STOQ_BRANCHES),
+            (_('C.F.O.P.'), 'cfop', STOQ_MOVEMENT_PRODUCT),
             (_('Client Categories'), 'client_categories', STOQ_CLIENTS),
             (_('Clients'), 'clients', STOQ_CLIENTS),
             (_('Computers'), 'stations', STOQ_SYSTEM),
             (_('Devices'), 'devices', STOQ_DEVICES),
-            (_('Employees'), 'employees', STOQ_ADMIN_APP),
-            (_('Events'), 'events', gtk.STOCK_DIALOG_WARNING),
-            (_('Fiscal Books'), 'fiscal_books', STOQ_EDIT),
+            (_('Employees'), 'employees', STOQ_EMPLOYEE),
+            (_('Events'), 'events', STOQ_STATUS_WARNING),
+            (_('Fiscal Books'), 'fiscal_books', STOQ_BOOK),
             (_('Forms'), 'forms', STOQ_FORMS),
-            (_('Invoice Printers'), 'invoice_printers', gtk.STOCK_PRINT),
-            (_('Parameters'), 'parameters', gtk.STOCK_PREFERENCES),
-            (_('Payment Categories'), 'payment_categories', STOQ_PAYABLE_APP),
-            (_('Payment Methods'), 'payment_methods', STOQ_MONEY),
+            (_('Invoice Printers'), 'invoice_printers', STOQ_PRINTER),
+            (_('Parameters'), 'parameters', STOQ_PARAMETERS),
+            (_('Payment Categories'), 'payment_categories', STOQ_PAYMENT_CATEGORY),
+            (_('Payment Methods'), 'payment_methods', STOQ_PAYMENT_TYPE),
             (_('Plugins'), 'plugins', STOQ_PLUGIN),
             (_('Products'), 'products', STOQ_PRODUCTS),
-            (_('Roles'), 'employee_roles', STOQ_USERS),
+            (_('Roles'), 'employee_roles', STOQ_EMPLOYEE_CARD),
             (_('Services'), 'services', STOQ_SERVICES),
-            (_('Taxes'), 'taxes', STOQ_TAXES),
+            (_('Taxes'), 'taxes', STOQ_DOCUMENTS),
             (_('Suppliers'), 'suppliers', STOQ_SUPPLIERS),
-            (_('Tax Classes'), 'tax_templates', STOQ_DOCUMENTS),
-            (_('Transporters'), 'transporters', STOQ_DELIVERY),
+            (_('Tax Classes'), 'tax_templates', STOQ_TAX_TYPE),
+            (_('Transporters'), 'transporters', STOQ_TRANSPORTER),
             (_('User Profiles'), 'user_profiles', STOQ_USER_PROFILES),
             (_('Users'), 'users', STOQ_HR),
+            (_('Connect to Stoq.Link'), 'stoq_link_connect', STOQ_CONNECT),
         ]
 
         for label, name, pixbuf in locale_sorted(
@@ -135,12 +145,12 @@ class Tasks(object):
         @param pixbuf: a pixbuf or stock-id/icon-name for the item
         @param cb: callback
         """
-        if type(pixbuf) == str:
+        if isinstance(pixbuf, str):
             stock_id = pixbuf
             try:
                 pixbuf = self.theme.load_icon(pixbuf, 32, 0)
-            except glib.GError:
-                pixbuf = self.app.get_toplevel().render_icon(pixbuf, gtk.ICON_SIZE_DIALOG)
+            except GLib.GError:
+                pixbuf = self.app.get_toplevel().render_icon(pixbuf, Gtk.IconSize.DIALOG)
             if pixbuf is not None:
                 pixbuf.stock_id = stock_id
         self.model.append([label, name, pixbuf])
@@ -297,6 +307,14 @@ class Tasks(object):
     def _open_token(self):
         self._open_sale_token()
 
+    def _open_stoq_link_connect(self):
+        if stoq.trial_mode:
+            return info(_('Online features are not available in trial mode'))
+        self.app.run_dialog(PinDialog, self.app.store)
+
+    def _open_certificates(self):
+        self.app.run_dialog(CertificateListDialog, None)
+
 
 class AdminApp(ShellApp):
 
@@ -328,6 +346,8 @@ class AdminApp(ShellApp):
         'ConfigureInvoices': 'invoice_layouts',
         'ConfigureInvoicePrinters': 'invoice_printers',
         'ConfigurePlugins': 'plugins',
+        'StoqLinkConnect': 'stoq_link_connect',
+        'ConfigureCertificates': 'certificates',
     }
 
     action_permissions = {
@@ -366,6 +386,7 @@ class AdminApp(ShellApp):
             ("SearchComputer", None, _('Computers...'),
              group.get('search_computers')),
             ("SearchTaxTemplate", None, _('Tax Classes...')),
+            ("SearchMessages", None, _("Messages...")),
             ("ConfigureMenu", None, _("_Configure")),
             ("ConfigureDevices", None, _("Devices..."),
              group.get('config_devices')),
@@ -392,16 +413,18 @@ class AdminApp(ShellApp):
              group.get('config_parameters')),
             ("NewUser", None, _("User..."), '',
              _("Create a new user")),
+            ("StoqLinkConnect", None, _("Connect to Stoq.Link..."), '',
+             _("Connect this Stoq installation to Stoq.Link")),
+            ("ConfigureCertificates", None, _("Configure certificates...")),
         ]
-        self.admin_ui = self.add_ui_actions('', actions,
-                                            filename='admin.xml')
+        self.admin_ui = self.add_ui_actions(actions)
         self.set_help_section(_("Admin help"), 'app-admin')
 
     def create_ui(self):
         self.tasks = Tasks(self)
         self.tasks.set_model(self.model)
         self.tasks.add_defaults()
-        self.model.set_sort_column_id(COL_LABEL, gtk.SORT_ASCENDING)
+        self.model.set_sort_column_id(COL_LABEL, Gtk.SortType.ASCENDING)
         self.iconview.set_text_column(COL_LABEL)
         self.iconview.set_pixbuf_column(COL_PIXBUF)
         self.iconview.connect('item-activated', self.tasks.on_item_activated)
@@ -411,34 +434,41 @@ class AdminApp(ShellApp):
         for action_name, task in self.ACTION_TASKS.items():
             action = getattr(self, action_name)
             action.connect('activate', self._on_action__activate, task)
-            if not action.get_visible():
+            if not action.get_enabled():
                 self.tasks.hide_item(task)
 
     def activate(self, refresh=True):
-        # Admin app doesn't have anything to print/export
-        for widget in [self.window.Print,
-                       self.window.ExportSpreadSheet]:
-            widget.set_visible(False)
-
         self.window.add_new_items([self.NewUser])
-        self.window.add_search_items([self.SearchUser,
-                                      self.SearchEmployee])
-        self.window.NewToolItem.set_tooltip(
-            _("Create a new user"))
-        self.window.SearchToolItem.set_tooltip(
-            _("Search for users"))
+        self.window.add_search_items([
+            self.SearchRole,
+            self.SearchEmployee,
+            self.SearchCfop,
+            self.SearchFiscalBook,
+            self.SearchUserProfile,
+            self.SearchUser,
+            self.SearchBranch,
+            self.SearchComputer,
+            self.SearchTaxTemplate,
+            self.SearchEvents,
+            self.SearchCostCenters,
+            self.SearchDuplicatedPersons,
+            self.SearchMessages,
+        ])
 
-    def deactivate(self):
-        self.uimanager.remove_ui(self.admin_ui)
+        self.window.add_extra_items(
+            [self.ConfigureDevices, self.ConfigurePaymentMethods,
+             self.ConfigurePaymentCategories, self.ConfigureClientCategories,
+             self.ConfigureTaxes, self.ConfigureSintegra,
+             self.ConfigureParameters, self.ConfigureInvoices,
+             self.ConfigureInvoicePrinters, self.ConfigureGridGroup,
+             self.ConfigureGridAttribute, self.ConfigureUIForm,
+             self.ConfigureSaleToken, self.ConfigureCertificates],
+            _('Configure'))
+
+        self.window.add_extra_items([self.ConfigurePlugins, self.StoqLinkConnect])
 
     def setup_focus(self):
         self.iconview.grab_focus()
-
-    def new_activate(self):
-        self._new_user()
-
-    def search_activate(self):
-        self.tasks.run_task('users')
 
     # Private
 
@@ -451,7 +481,7 @@ class AdminApp(ShellApp):
     # Callbacks
     #
 
-    def _on_action__activate(self, action, task):
+    def _on_action__activate(self, action, parameter, task):
         self.tasks.run_task(task)
 
     # New
@@ -465,3 +495,6 @@ class AdminApp(ShellApp):
 
     def on_SearchDuplicatedPersons__activate(self, action):
         self.run_dialog(PersonMergeDialog, self.store)
+
+    def on_SearchMessages__activate(self, action):
+        self.run_dialog(MessageSearch, self.store)

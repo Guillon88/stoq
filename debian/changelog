@@ -1,3 +1,279 @@
+stoq (4.8~rc1) xenial; urgency=medium
+
+  * Release 4.8~rc1
+
+ -- Ronaldo Maia <romaia@async.com.br>  Sun, 19 Apr 2020 23:43:35 -0300
+
+stoq (4.7) xenial; urgency=medium
+
+  * Release 4.7
+
+ -- Fabricio C Zuardi <fcz@laptop40.localdomain>  Tue, 24 Mar 2020 08:44:10 -0300
+
+stoq (4.7~rc1) xenial; urgency=medium
+
+  * Release 4.7~rc1
+
+ -- Fabricio C Zuardi <fcz@laptop40.localdomain>  Tue, 17 Mar 2020 08:43:05 -0300
+
+stoq (4.6~rc1) xenial; urgency=medium
+
+  * Release 4.6~rc1
+
+ -- almada <almada@timon>  Wed, 19 Feb 2020 14:29:29 -0300
+
+stoq (4.5~rc2) xenial; urgency=medium
+
+  * Release 4.5~rc2
+
+ -- Fabricio C Zuardi <fcz@laptop40.localdomain>  Tue, 11 Feb 2020 13:34:52 -0300
+
+stoq (4.5~rc1) xenial; urgency=medium
+
+  * Release 4.5~rc1
+
+ -- Lucas Fonseca <lucasl2f@zazu>  Mon, 03 Feb 2020 15:02:42 -0300
+
+stoq (4.4~rc1) xenial; urgency=medium
+
+  * Release 4.4~rc1
+
+ -- vmcamillo <vmcamillo@vmcamillo-HP-260-G1-DM>  Mon, 16 Dec 2019 10:41:07 -0300
+
+stoq (4.3~rc1) xenial; urgency=medium
+
+  * Release 4.3~rc1
+
+ -- Fabricio C Zuardi <fcz@laptop39>  Tue, 19 Nov 2019 10:09:55 -0300
+
+stoq (4.2~rc1) xenial; urgency=medium
+
+  * Release 4.2~rc1
+
+ -- Fabricio C Zuardi <fcz@laptop39>  Wed, 06 Nov 2019 11:13:52 -0300
+
+stoq (4.1) xenial; urgency=medium
+
+  * Release 4.1
+
+ -- Fabricio C Zuardi <fcz@laptop39>  Mon, 14 Oct 2019 15:58:49 -0300
+
+stoq (4.1~rc1) xenial; urgency=medium
+
+  * Release 4.1~rc1
+
+ -- Fabricio C Zuardi <fcz@laptop39>  Tue, 08 Oct 2019 11:29:03 -0300
+
+stoq (4.0~rc1) xenial; urgency=medium
+
+  * Release 4.0~rc1
+
+ -- Fabricio C Zuardi <fcz@laptop39>  Wed, 11 Sep 2019 12:13:40 -0300
+
+stoq (3.3~rc1) xenial; urgency=medium
+
+  * Release 3.3~rc1
+
+ -- Fabricio C Zuardi <fcz@laptop39>  Tue, 10 Sep 2019 17:08:54 -0300
+
+stoq (3.2~rc1) xenial; urgency=medium
+
+  * Release 3.2~rc1
+
+ -- Luis Tadashi Oishi <luis.shi@gmail.com>  Tue, 30 Jul 2019 14:56:48 -0300
+
+stoq (3.1.1) xenial; urgency=medium
+
+  * Release 3.1.1
+
+ -- Ronaldo Maia <romaia@async.com.br>  Tue, 05 Mar 2019 15:26:04 -0300
+
+stoq (3.1) xenial; urgency=medium
+
+  * Release 3.1 final
+
+ -- Ronaldo Maia <romaia@async.com.br>  Sat, 02 Mar 2019 11:18:03 -0300
+
+stoq (3.1~rc10) xenial; urgency=medium
+
+  * Release 3.1~rc10
+
+ -- Ronaldo Maia <romaia@async.com.br>  Fri, 22 Feb 2019 16:53:53 -0300
+
+stoq (3.1~rc9) xenial; urgency=medium
+
+  * Release 3.1~rc9
+
+ -- Luis Tadashi Oishi <luis.shi@gmail.com>  Wed, 14 Nov 2018 18:22:10 -0200
+
+stoq (3.1~rc8) xenial; urgency=medium
+
+  * Release 3.1~rc8
+
+ -- Ronaldo Maia <romaia@async.com.br>  Tue, 30 Oct 2018 08:06:57 -0300
+
+stoq (3.1~rc7) xenial; urgency=medium
+
+  * Release 3.1~rc7
+
+ -- Ronaldo Maia <romaia@async.com.br>  Thu, 11 Oct 2018 21:46:36 -0300
+
+stoq (3.1~rc6) xenial; urgency=medium
+
+  * Release 3.1~rc6
+
+ -- Ronaldo Maia <romaia@async.com.br>  Thu, 27 Sep 2018 13:51:52 -0300
+
+stoq (3.1~rc5) xenial; urgency=medium
+
+  * Release 3.1~rc5
+
+ -- Ronaldo Maia <romaia@async.com.br>  Thu, 27 Sep 2018 10:45:03 -0300
+
+stoq (3.1~rc4) xenial; urgency=medium
+
+  * Release 3.1~rc4
+
+ -- Ronaldo Maia <romaia@async.com.br>  Fri, 24 Aug 2018 00:09:36 -0300
+
+stoq (3.1~rc3) xenial; urgency=medium
+
+  * 3.1 rc3
+
+ -- Ronaldo Maia <romaia@async.com.br>  Wed, 22 Aug 2018 09:43:02 -0300
+
+stoq (3.1~rc2) xenial; urgency=medium
+
+  * 3.1 RC2
+
+ -- Ronaldo Maia <romaia@async.com.br>  Tue, 14 Aug 2018 16:58:55 -0300
+
+stoq (3.1~rc1) xenial; urgency=medium
+
+  * 3.1 rc1
+
+ -- Ronaldo Maia <romaia@async.com.br>  Wed, 01 Aug 2018 16:19:21 -0300
+
+stoq (3.0) xenial; urgency=medium
+
+  * 3.0 final release
+
+ -- Ronaldo Maia <romaia@async.com.br>  Mon, 25 Jun 2018 11:40:47 -0300
+
+stoq (3.0~rc5) xenial; urgency=medium
+
+  * 3.0 rc5
+
+ -- Ronaldo Maia <romaia@async.com.br>  Tue, 05 Jun 2018 11:52:07 -0300
+
+stoq (3.0~rc4) xenial; urgency=medium
+
+  * 3.0 rc4
+
+ -- Ronaldo Maia <romaia@async.com.br>  Thu, 26 Apr 2018 18:15:19 -0300
+
+stoq (3.0~rc3) xenial; urgency=medium
+
+  * 3.0 RC 3
+
+ -- Ronaldo Maia <romaia@async.com.br>  Thu, 26 Apr 2018 18:15:19 -0300
+
+stoq (3.0~rc2) xenial; urgency=medium
+
+  * 3.0 Release Candidate 2
+
+ -- Ronaldo Maia <romaia@async.com.br>  Thu, 26 Apr 2018 14:42:00 -0300
+
+stoq (3.0~rc1) xenial; urgency=medium
+
+  * 3.0 Release Candidate 1
+
+ -- Felipe Nehmi <felipe@async.com.br>  Wed, 18 Apr 2018 10:16:51 -0300
+
+stoq (3.0~beta5) xenial; urgency=medium
+
+  * Release 3.0 beta 5
+
+ -- Felipe Nehmi <felipe@async.com.br>  Thu, 05 Apr 2018 08:35:40 -0300
+
+stoq (3.0~beta4) xenial; urgency=medium
+
+  * Release 3.0 beta 4
+
+ -- Felipe Nehmi <felipe@async.com.br>  Thu, 22 Mar 2018 13:49:54 -0300
+
+stoq (3.0~beta3) xenial; urgency=medium
+
+  * Release 3.0 beta 3
+
+ -- Felipe Nehmi <felipe@async.com.br>  Thu, 01 Mar 2018 10:12:35 -0300
+
+stoq (3.0~beta2) xenial; urgency=medium
+
+  * Release 3.0 beta 2
+
+ -- Felipe Nehmi <felipe@async.com.br>  Tue, 12 Dec 2017 09:06:07 -0200
+
+stoq (3.0~beta1) xenial; urgency=medium
+
+  * Release 3.0 beta 1
+
+ -- Felipe Nehmi <felipe@async.com.br>  Fri, 13 Oct 2017 10:21:53 -0300
+
+stoq (2.1.90) trusty; urgency=low
+
+  * 2.1.90 unstable release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Fri, 12 May 2017 15:04:13 -0300
+
+stoq (1.13~rc1) trusty; urgency=low
+
+  * 1.13 release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Thu, 02 Feb 2017 14:46:48 -0200
+
+stoq (1.12.93) trusty; urgency=low
+
+  * 1.12.93 release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Mon, 23 Jan 2017 16:20:53 -0200
+
+stoq (1.12.92) trusty; urgency=low
+
+  * 1.12.92 release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Mon, 19 Dec 2016 11:05:34 -0200
+
+stoq (1.12.91) trusty; urgency=low
+
+  * 1.12.91 release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Fri, 16 Dec 2016 15:19:52 -0200
+
+stoq (1.12.90) trusty; urgency=low
+
+  * 1.12.90 release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Wed, 14 Dec 2016 17:04:03 -0200
+
+stoq (1.11.92) trusty; urgency=low
+
+  * 1.11.92 release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Wed, 14 Sep 2016 16:01:15 -0300
+
+stoq (1.11.91) trusty; urgency=low
+
+  * 1.11.91 release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Fri, 26 Aug 2016 13:50:00 -0300
+
+stoq (1.11.90) trusty; urgency=low
+
+  * 1.11.90 release
+
+ -- Thiago Bellini Ribeiro <hackedbellini@async.com.br>  Wed, 17 Aug 2016 16:32:21 -0300
+
 stoq (1.11~rc1) trusty; urgency=low
 
   * 1.11 Release candidate 1

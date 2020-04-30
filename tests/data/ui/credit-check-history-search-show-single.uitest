@@ -1,40 +1,38 @@
 dialog: CreditCheckHistorySearch
 GtkDialog(toplevel): title='Client Credit Check History Search', hidden
-  GtkVBox(_main_vbox):
-    GtkVBox(vbox, expand=True, fill=True):
+  GtkBox(_main_vbox, orientation=vertical):
+    GtkBox(vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(header): hidden
       GtkEventBox(main, expand=True, fill=True, padding=6): slave SearchSlave is attached
-        GtkVBox(vbox):
-          GtkHBox(fill=True, padding=6):
-            GtkVBox(filters_box, padding=6):
-              GtkHBox(hbox):
-                SearchFilter(_primary_filter):
+        GtkBox(vbox, orientation=vertical):
+          GtkBox(orientation=horizontal, fill=True, padding=6):
+            GtkBox(filters_box, orientation=vertical, padding=6):
+              GtkBox(hbox, orientation=horizontal):
+                StringSearchFilter(_primary_filter):
                   GtkLabel(): 'Search:'
                   ProxyComboBox(padding=6): hidden
                     item: 'Contains All Words', selected
-                    item: 'Contains Exactly'
-                    item: 'Identical to'
-                    item: 'Does Not Contain'
-                  HintedEntry(search_entry, padding=6): ''
-                GtkButton(search_button): 'gtk-find'
-          SearchResultListView(result_view, expand=True, fill=True):
+                  GtkEntry(search_entry, padding=6): ''
+                stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(search_button): 'Find'
+          SearchResultListView(results, expand=True, fill=True):
             column: title='Date'
             column: title='Identifier'
             column: title='Status'
             column: title='Notes', expand
             column: title='User'
-            row: datetime.datetime(2011, 1, 1, 0, 0), u'2', u'not-included', u'random note', u'individual'
-            row: datetime.datetime(2011, 1, 1, 0, 0), u'3', u'not-included', u'random note', u'individual'
-      GtkHBox(fill=True):
+            row: datetime.datetime(2011, 1, 1, 0, 0), '2', 'not-included', 'random note', 'individual'
+            row: datetime.datetime(2011, 1, 1, 0, 0), '3', 'not-included', 'random note', 'individual'
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(extra_holder, expand=True, fill=True, padding=6): slave SearchEditorToolBar is attached
-          GtkHBox(toplevel):
-            GtkHButtonBox(hbuttonbox1, fill=True):
-              GtkButton(new_button):
-              GtkButton(edit_button): insensitive
+          GtkBox(toplevel, orientation=horizontal):
+            GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+              GtkButton(new_button, expand=True, fill=True):
+              GtkButton(edit_button, expand=True, fill=True): insensitive
             GtkEventBox(toolbar_holder, expand=True, fill=True):
         GtkEventBox(print_holder, expand=True, fill=True):
         GtkEventBox(notice, fill=True):
         GtkEventBox(details_holder, padding=6, pack-end):
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
-      GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden, insensitive
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
+        GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden, insensitive

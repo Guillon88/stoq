@@ -27,7 +27,7 @@
 import datetime
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column
@@ -58,7 +58,7 @@ class _BaseBillCheckSearch(SearchDialog):
 
     title = _(u"Bill & Check Payments Search")
     size = (-1, 500)
-    selection_mode = gtk.SELECTION_MULTIPLE
+    selection_mode = Gtk.SelectionMode.MULTIPLE
     report_class = BillCheckPaymentReport
     search_label = _(u'Bill or check number:')
     branch_filter_column = Payment.branch_id
@@ -80,11 +80,11 @@ class _BaseBillCheckSearch(SearchDialog):
                 SearchColumn('payment_number', title=_(u'Number'),
                              data_type=str, width=100),
                 SearchColumn('due_date', title=_('Due date'),
-                             data_type=datetime.date,
-                             width=120),
+                             data_type=datetime.date, width=120),
+                SearchColumn('open_date', title=_('Open date'),
+                             data_type=datetime.date, width=120, visible=False),
                 SearchColumn('paid_date', title=_('Paid date'),
-                             data_type=datetime.date,
-                             width=120),
+                             data_type=datetime.date, width=120),
                 SearchColumn('status_str', title=_('Status'), data_type=str,
                              valid_values=self._get_status_values(),
                              search_attribute='status'),
@@ -123,7 +123,7 @@ class CardPaymentSearch(SearchEditor):
     editor_class = CardPaymentDetailsEditor
     report_class = CardPaymentReport
     search_label = (u'Client:')
-    selection_mode = gtk.SELECTION_BROWSE
+    selection_mode = Gtk.SelectionMode.BROWSE
     text_field_columns = [CardPaymentView.drawee_name,
                           CardPaymentView.identifier_str]
     branch_filter_column = Payment.branch_id
@@ -139,7 +139,8 @@ class CardPaymentSearch(SearchEditor):
         return values
 
     def _get_device_values(self):
-        devices = CardPaymentDevice.get_devices(self.store)
+        devices = CardPaymentDevice.get_devices(self.store).order_by(
+            CardPaymentDevice.description)
         # This is used in a int filter, so we must use the id
         values = [(d.description, d.id) for d in devices]
         values.insert(0, (_("Any"), None))
@@ -166,6 +167,10 @@ class CardPaymentSearch(SearchEditor):
         return [IdentifierColumn('identifier', title=_('Payment #'), sorted=True),
                 SearchColumn('description', title=_(u'Description'),
                              data_type=str, expand=True),
+                SearchColumn('card_type', title=_('Card Type'),
+                             format_func=self._format_card_type,
+                             valid_values=self._get_card_types(),
+                             width=100, visible=False),
                 SearchColumn('drawee_name', title=_(u'Drawee'), data_type=str,
                              expand=True),
                 SearchColumn('device_name', title=_(u'Card Device'),
@@ -175,6 +180,8 @@ class CardPaymentSearch(SearchEditor):
                 SearchColumn('provider_name', title=_(u'Provider'),
                              data_type=str),
                 SearchColumn('due_date', title=_(u'Due date'),
+                             data_type=datetime.date),
+                SearchColumn('open_date', title=_(u'Open date'), visible=False,
                              data_type=datetime.date),
                 SearchColumn('paid_date', title=_(u'Paid date'), visible=False,
                              data_type=datetime.date),
@@ -186,7 +193,7 @@ class CardPaymentSearch(SearchEditor):
                 SearchColumn('fee', title=_(u'% Fee'), data_type=Decimal,
                              visible=False),
                 SearchColumn('fee_calc', title=_(u'Fee'), data_type=currency),
-                SearchColumn('auth', title=_(u'Authorization'), data_type=int,
+                SearchColumn('auth', title=_(u'Authorization'), data_type=str,
                              visible=False)]
 
     def row_activate(self, obj):
@@ -200,6 +207,18 @@ class CardPaymentSearch(SearchEditor):
     #
     # Private
     #
+
+    def _format_card_type(self, card_type):
+        if card_type:
+            return CreditCardData.short_desc.get(card_type, u'')
+
+        return ''
+
+    def _get_card_types(self):
+        """Return a list of card types"""
+        values = [(v, k) for k, v in CreditCardData.short_desc.items()]
+        values.insert(0, (_("Any"), None))
+        return values
 
     def _show_details(self, receivable_view):
         if receivable_view.sale_id is not None:

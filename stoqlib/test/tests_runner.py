@@ -21,6 +21,7 @@
 ##
 ## Author(s): Stoq Team <stoq-devel@async.com.br> ##
 
+import contextlib
 import doctest
 import os
 import re
@@ -174,15 +175,18 @@ class Stoq(Plugin):
     name = "stoq"
 
     def begin(self):
-        # The tests require that the environment is currently set to C, to avoid
+        # The tests require that the environment is currently set to en_US, to avoid
         # translated strings and use the default date/number/currency formatting
-        os.environ['LC_ALL'] = 'C'
-        os.environ['LANG'] = 'C'
-        os.environ['LANGUAGE'] = 'C'
+        from stoqlib.lib.environment import configure_locale
+        configure_locale('en_US')
 
-        if 'STOQ_USE_GI' in os.environ:
-            from stoq.lib import gicompat
-            gicompat.enable()
+        # FIXME python3:
+        # This is to make our usage of contextlib.nested compatible for now
+        @contextlib.contextmanager
+        def _nested(*ctxs):
+            with contextlib.ExitStack() as stack:
+                yield tuple(stack.enter_context(ctx) for ctx in ctxs)
+        contextlib.nested = _nested
 
         # If we import tests.base before Cover.setup() in the coverage plugin
         # is called the statistics will skip the modules imported by tests.base
@@ -198,7 +202,7 @@ class Stoq(Plugin):
         config = os.path.join(
             os.path.dirname(stoqlib.__file__), 'tests', 'config.py')
         if os.path.exists(config):
-            execfile(config, globals(), locals())
+            exec(compile(open(config).read(), config, 'exec'), globals(), locals())
 
         bootstrap_suite(address=hostname, dbname=dbname, port=port,
                         username=username, password=password, quick=quick)
@@ -250,17 +254,14 @@ def _collect_coverage_modules(filenames):
             yield test_filename
             break
 
-# FIXME: This is mimicking what is done on the module containing the IPlugin
-# implemented class. Different from stoq that will always import that module,
-# nosetests will try to look for tests in each .py, producing ImportErrors.
-# This can be removed when the plugins import situation is solved.
-plugins_topdir = os.path.join(
-    os.path.dirname(os.path.dirname(stoqlib.__file__)), 'plugins')
-for plugin_dir in os.listdir(plugins_topdir):
-    sys.path.append(os.path.join(plugins_topdir, plugin_dir))
-
 
 def main(args, extra_plugins=None):
+    # FIXME: readline is segfaulting when the tests run inside a xvfb
+    # environment. Changing it to gnureadline seems to normalize it
+    if os.environ.get('PATCH_READLINE', '0') == '1':
+        import gnureadline
+        sys.modules['readline'] = gnureadline
+
     if '--sql' in args:
         args.remove('--sql')
         from stoqlib.database.debug import enable
@@ -281,7 +282,7 @@ def main(args, extra_plugins=None):
         '--nologcapture',
         # Be verbose, one line per test instead of just a dot (like trial)
         '--verbose',
-        # Detailed errors, useful for tracking down assertEquals
+        # Detailed errors, useful for tracking down assertEqual
         '--detailed-errors',
         # Enable doctests
         '--with-doctest',

@@ -1,38 +1,34 @@
 slave: CardMethodSlave
-GtkVBox(toplevel):
+GtkBox(vbox1, orientation=vertical):
   GtkFrame(frame1, fill=True):
     GtkTable(table1):
       GtkLabel(label5): 'Credit Provider:'
       ProxyComboBox(credit_provider):
         item: 'AMEX', selected
-        item: 'BANRISUL'
-        item: 'CERTIF'
-        item: 'CREDISHOP'
-        item: 'HIPERCARD'
-        item: 'PAGGO'
-        item: 'REDECARD'
-        item: 'VISANET'
+        item: 'MASTER'
+        item: 'VISA'
       GtkLabel(label6):
       ProxyLabel(kiwilabel4): 'Card Device:'
-      GtkVBox(vbox3):
+      GtkBox(vbox3, orientation=vertical):
         ProxyComboBox(card_device, fill=True):
           item: 'Default', selected
       GtkLabel(label3):
       ProxyLabel(kiwilabel2): 'Payment Type:'
-      GtkVBox(types_box):
+      GtkBox(types_box, orientation=vertical):
         GtkRadioButton(_radio_group, expand=True, fill=True): 'Credit Card', active
         GtkRadioButton(expand=True, fill=True): 'Debit Card'
         GtkRadioButton(expand=True, fill=True): 'Credit Card Installments Store'
         GtkRadioButton(expand=True, fill=True): 'Credit Card Installments Provider'
         GtkRadioButton(expand=True, fill=True): 'Debit Card Pre-dated'
+        GtkRadioButton(expand=True, fill=True): 'Voucher'
       GtkLabel(label2):
       ProxyLabel(kiwilabel3): 'Number of Installments:'
-      GtkHBox(hbox1):
+      GtkBox(hbox1, orientation=horizontal):
         ProxySpinButton(installments_number, expand=True, fill=True): '1', ineditable
         GtkLabel(label4, expand=True, fill=True):
       GtkLabel(label1):
       ProxyLabel(kiwilabel1): 'Authorization Number:'
-      GtkHBox(hbox2):
-        ProxyEntry(auth_number, expand=True, fill=True): '', mandatory
+      GtkBox(hbox2, orientation=horizontal):
+        ProxyEntry(auth_number, expand=True, fill=True): ''
         GtkLabel(label7, expand=True, fill=True):
       GtkLabel(label8):

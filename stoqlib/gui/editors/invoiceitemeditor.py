@@ -24,7 +24,7 @@
 ##
 """ Base editor for items that can use a tax template"""
 
-import gtk
+from gi.repository import Gtk
 
 from stoqlib.domain.taxes import (InvoiceItemCofins,
                                   InvoiceItemIcms,
@@ -46,7 +46,7 @@ class InvoiceItemEditor(BaseEditor):
 
     def __init__(self, store, model):
         manager = get_plugin_manager()
-        self.nfe_is_active = manager.is_active('nfe')
+        self.nfe_is_active = manager.is_any_active(['nfe', 'nfce'])
         self.proxy = None
         self.icms_slave = None
         self.ipi_slave = None
@@ -103,8 +103,8 @@ class InvoiceItemEditor(BaseEditor):
             self.add_tab(_('COFINS'), self.cofins_slave)
 
     def add_tab(self, name, slave):
-        event_box = gtk.EventBox()
+        event_box = Gtk.EventBox()
         event_box.set_border_width(6)
         event_box.show()
-        self.tabs.append_page(event_box, gtk.Label(name))
+        self.tabs.append_page(event_box, Gtk.Label(label=name))
         self.attach_slave(name, slave, event_box)

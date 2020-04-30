@@ -1,7 +1,7 @@
 dialog: MissingItemsDialog
 GtkDialog(toplevel): title='Missing items', hidden
-  GtkVBox(_main_vbox):
-    GtkVBox(vbox, expand=True, fill=True):
+  GtkBox(_main_vbox, orientation=vertical):
+    GtkBox(vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(header):
         GtkLabel(): '<b>The following items don&apos;t have enough stock to confirm.</b>'
       GtkEventBox(main, expand=True, fill=True, padding=6):
@@ -10,15 +10,16 @@ GtkDialog(toplevel): title='Missing items', hidden
           column: title='Ordered'
           column: title='Stock'
           row: 'desc', Decimal('1'), Decimal('0')
-      GtkHBox(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(extra_holder, expand=True, fill=True, padding=6):
         GtkEventBox(print_holder, expand=True, fill=True):
         GtkEventBox(notice, fill=True):
           GtkLabel(): 'Do you want to order the sale instead?'
         GtkEventBox(details_holder, padding=6, pack-end):
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
-      GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
+        GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok'
 
 model: Storable<1>
   is_batch: False
@@ -27,22 +28,22 @@ model: Storable<1>
 
 model: Sale<2>
   cancel_date: None
+  cancel_reason: None
   close_date: None
   confirm_date: None
-  discount_value: <currency $ 0>
+  discount_value: <currency $0>
   expire_date: None
-  invoice_number: None
+  invoice_id: Invoice<5>
   open_date: datetime.today()
-  operation_nature: u''
   paid: False
   return_date: None
   service_invoice_number: None
-  status: u'ordered'
-  surcharge_value: <currency $ 0>
-  total_amount: <currency $ 0>
+  status: 'ordered'
+  surcharge_value: <currency $0>
+  total_amount: <currency $0>
 
 model: SaleItem<3>
-  average_cost: <currency $ 0>
+  average_cost: <currency $0>
   base_price: <currency $10>
   completion_date: None
   estimated_fix_date: datetime.today()
@@ -53,23 +54,35 @@ model: SaleItem<3>
   sale_id: Sale<2>
 
 model: Product<4>
-  brand: u''
+  brand: ''
+  c_benef: None
+  cest: None
   consignment: False
   depth: Decimal('0')
   ex_tipi: None
-  family: u''
+  family: ''
   genero: None
   height: Decimal('0')
   internal_use: False
   is_composed: False
   is_grid: False
   is_package: False
-  location: u''
+  location: ''
   manage_stock: True
-  model: u''
+  model: ''
   ncm: None
-  part_number: u''
+  part_number: ''
   production_time: 1
   weight: Decimal('0')
   width: Decimal('0')
+  yield_quantity: Decimal('1.000')
+
+model: Invoice<5>
+  cnf: None
+  invoice_number: None
+  invoice_type: 'out'
+  key: None
+  mode: None
+  operation_nature: None
+  series: None
 

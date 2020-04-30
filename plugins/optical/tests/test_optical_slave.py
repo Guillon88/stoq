@@ -24,7 +24,7 @@
 
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gdk
 import mock
 
 from stoqlib.gui.editors.noteeditor import NoteEditor
@@ -32,7 +32,6 @@ from stoqlib.gui.test.uitestutils import GUITest
 from stoqlib.lib.dateutils import localdate
 
 from ..opticaldomain import OpticalWorkOrder
-from ..opticaleditor import MedicEditor
 from ..opticalslave import MedicDetailsSlave, WorkOrderOpticalSlave
 from .test_optical_domain import OpticalDomainTest
 
@@ -68,27 +67,11 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
 
         self.check_slave(slave, 'work-order-optical-slave-visual-mode')
 
-    def test_run_medic_editor(self):
-        medic = self.create_optical_medic()
-        workorder = self.create_workorder()
-        slave = WorkOrderOpticalSlave(self.store, workorder)
-        name = 'plugins.optical.opticalslave.run_person_role_dialog'
-        with mock.patch(name) as run_person_role_dialog:
-            run_person_role_dialog.return_value = medic
-            self.click(slave.medic_create)
-            args, kwargs = run_person_role_dialog.call_args
-            parent = slave.get_toplevel().get_toplevel()
-            assert args[0] == MedicEditor
-            assert args[1] == parent
-            assert kwargs['visual_mode'] is True
-
-        self.check_slave(slave, 'work-order-optical-slave-create-medic')
-
     def test_focus_event(self):
         workorder = self.create_workorder()
         slave = WorkOrderOpticalSlave(self.store, workorder)
 
-        e = gtk.gdk.Event(type=gtk.gdk.FOCUS_CHANGE)
+        e = Gdk.Event.new(type=Gdk.EventType.FOCUS_CHANGE)
         slave.le_near_pd.send_focus_change(e)
 
     def test_notes_button(self):
@@ -98,7 +81,7 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
         with mock.patch(name) as run_dialog:
             run_dialog.return_value = False
             self.click(slave.notes_button)
-            self.assertEquals(run_dialog.call_count, 1)
+            self.assertEqual(run_dialog.call_count, 1)
             args, kwargs = run_dialog.call_args
             assert args[0] == NoteEditor
             assert args[3] == workorder
@@ -111,10 +94,10 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
         assert not slave.le_near_pd.emit("validate", 0)
 
         res = slave.le_near_pd.emit("validate", -100)
-        assert unicode(res) == u'Value is out of range'
+        assert str(res) == u'Value is out of range'
 
         res = slave.le_near_pd.emit("validate", Decimal("30.05"))
-        assert unicode(res) == u'Value must be multiple of 0.1'
+        assert str(res) == u'Value must be multiple of 0.1'
 
         for widget_name, minv, maxv, prec, step_inc, page_inc in [
             ('le_distance_spherical', -30, 30, 2, Decimal('0.25'), 1),
@@ -150,14 +133,14 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
             self.assertFalse(widget.emit("validate", maxv - 1))
 
             res = widget.emit("validate", maxv + step_inc)
-            self.assertEquals(unicode(res), u'Value is out of range')
+            self.assertEqual(str(res), u'Value is out of range')
 
             res = widget.emit("validate", minv - step_inc)
-            self.assertEquals(unicode(res), u'Value is out of range')
+            self.assertEqual(str(res), u'Value is out of range')
 
             res = widget.emit("validate", minv + (step_inc / Decimal("2.0")))
-            self.assertEquals(unicode(res),
-                              u'Value must be multiple of %s' % (step_inc, ))
+            self.assertEqual(str(res),
+                             u'Value must be multiple of %s' % (step_inc, ))
 
     def test_validate_frame_field(self):
         workorder = self.create_workorder()
@@ -177,14 +160,14 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
             self.assertFalse(widget.emit("validate", maxv - 1))
 
             res = widget.emit("validate", maxv + step_inc)
-            self.assertEquals(unicode(res), u'Value is out of range')
+            self.assertEqual(str(res), u'Value is out of range')
 
             res = widget.emit("validate", minv - step_inc)
-            self.assertEquals(unicode(res), u'Value is out of range')
+            self.assertEqual(str(res), u'Value is out of range')
 
             res = widget.emit("validate", minv + (step_inc / 2))
-            self.assertEquals(unicode(res),
-                              u'Value must be multiple of %s' % (step_inc, ))
+            self.assertEqual(str(res),
+                             u'Value must be multiple of %s' % (step_inc, ))
 
     def test_lens_types(self):
         workorder = self.create_workorder()
@@ -213,23 +196,11 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
         slave = WorkOrderOpticalSlave(self.store, workorder)
         #localtoday_.return_value = localdate(2014, 1, 1)
         res = slave.estimated_finish.emit("validate", localdate(2015, 4, 1))
-        self.assertEquals(unicode(res),
-                          u'Estimated finish date cannot be in the past.')
+        self.assertEqual(str(res),
+                         u'Estimated finish date cannot be in the past.')
         # Can be edited without changing the estimated_finish
         res2 = slave.estimated_finish.emit("validate", localdate(2015, 4, 2))
-        self.assertEquals(res2, None)
-
-    def test_medic_details(self):
-        medic = self.create_optical_medic()
-        workorder = self.create_workorder()
-        slave = WorkOrderOpticalSlave(self.store, workorder)
-        slave.medic_combo.select(medic)
-        name = 'plugins.optical.opticalslave.run_dialog'
-        with mock.patch(name) as run_dialog:
-            self.click(slave.medic_details)
-            parent = slave.get_toplevel().get_toplevel()
-            run_dialog.assert_called_once_with(MedicEditor, parent, slave.store,
-                                               slave.model.medic, visual_mode=True)
+        self.assertEqual(res2, None)
 
     def test_axis_value_changed(self):
         workorder = self.create_workorder()
@@ -237,25 +208,25 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
 
         # Left
         slave.le_near_axis.update(Decimal("1"))
-        self.assertEquals(slave.le_distance_axis.get_value(), 0.0)
+        self.assertEqual(slave.le_distance_axis.get_value(), 0.0)
         slave.le_distance_axis.update(Decimal("2"))
-        self.assertEquals(slave.le_near_axis.get_value(), 1.0)
+        self.assertEqual(slave.le_near_axis.get_value(), 1.0)
         slave.model.le_addition = True
         slave.le_near_axis.update(Decimal("3.0"))
-        self.assertEquals(slave.le_distance_axis.get_value(), 3.0)
+        self.assertEqual(slave.le_distance_axis.get_value(), 3.0)
         slave.le_distance_axis.update(Decimal("4.0"))
-        self.assertEquals(slave.le_near_axis.get_value(), 4.0)
+        self.assertEqual(slave.le_near_axis.get_value(), 4.0)
 
         # Right
         slave.re_near_axis.update(Decimal("1"))
-        self.assertEquals(slave.re_distance_axis.get_value(), 0.0)
+        self.assertEqual(slave.re_distance_axis.get_value(), 0.0)
         slave.re_distance_axis.update(Decimal("2"))
-        self.assertEquals(slave.re_near_axis.get_value(), 1.0)
+        self.assertEqual(slave.re_near_axis.get_value(), 1.0)
         slave.model.re_addition = True
         slave.re_near_axis.update(Decimal("3.0"))
-        self.assertEquals(slave.re_distance_axis.get_value(), 3.0)
+        self.assertEqual(slave.re_distance_axis.get_value(), 3.0)
         slave.re_distance_axis.update(Decimal("4.0"))
-        self.assertEquals(slave.re_near_axis.get_value(), 4.0)
+        self.assertEqual(slave.re_near_axis.get_value(), 4.0)
 
     def test_cylindrical_value_changed(self):
         workorder = self.create_workorder()
@@ -263,56 +234,80 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
 
         # Left
         slave.le_near_cylindrical.update(Decimal("1"))
-        self.assertEquals(slave.le_distance_cylindrical.get_value(), 0.0)
+        self.assertEqual(slave.le_distance_cylindrical.get_value(), 0.0)
         slave.le_distance_cylindrical.update(Decimal("2"))
-        self.assertEquals(slave.le_near_cylindrical.get_value(), 1.0)
+        self.assertEqual(slave.le_near_cylindrical.get_value(), 1.0)
         slave.model.le_addition = Decimal("1.0")
         slave.le_near_cylindrical.update(Decimal("3.0"))
-        self.assertEquals(slave.le_distance_cylindrical.get_value(), 3.0)
+        self.assertEqual(slave.le_distance_cylindrical.get_value(), 3.0)
         slave.le_distance_cylindrical.update(Decimal("4.0"))
-        self.assertEquals(slave.le_near_cylindrical.get_value(), 4.0)
+        self.assertEqual(slave.le_near_cylindrical.get_value(), 4.0)
 
         # Right
         slave.re_near_cylindrical.update(Decimal("1"))
-        self.assertEquals(slave.re_distance_cylindrical.get_value(), 0.0)
+        self.assertEqual(slave.re_distance_cylindrical.get_value(), 0.0)
         slave.re_distance_cylindrical.update(Decimal("2"))
-        self.assertEquals(slave.re_near_cylindrical.get_value(), 1.0)
+        self.assertEqual(slave.re_near_cylindrical.get_value(), 1.0)
         slave.model.re_addition = Decimal("1.0")
         slave.re_near_cylindrical.update(Decimal("3.0"))
-        self.assertEquals(slave.re_distance_cylindrical.get_value(), 3.0)
+        self.assertEqual(slave.re_distance_cylindrical.get_value(), 3.0)
         slave.re_distance_cylindrical.update(Decimal("4.0"))
-        self.assertEquals(slave.re_near_cylindrical.get_value(), 4.0)
+        self.assertEqual(slave.re_near_cylindrical.get_value(), 4.0)
+
+    def test_spherical_value_changed(self):
+        workorder = self.create_workorder()
+        slave = WorkOrderOpticalSlave(self.store, workorder)
+
+        # Left
+        slave.le_near_spherical.update(Decimal("1"))
+        self.assertEqual(slave.le_addition.get_value(), 1)
+
+        slave.le_near_spherical.update(Decimal("0.25"))
+        self.assertEqual(slave.le_addition.get_value(), 0.25)
+
+        slave.le_near_spherical.update(Decimal("-0.25"))
+        self.assertEqual(slave.le_addition.get_value(), 0)
+
+        # Right
+        slave.re_near_spherical.update(Decimal("1"))
+        self.assertEqual(slave.re_addition.get_value(), 1)
+
+        slave.re_near_spherical.update(Decimal("0.25"))
+        self.assertEqual(slave.re_addition.get_value(), 0.25)
+
+        slave.re_near_spherical.update(Decimal("-0.25"))
+        self.assertEqual(slave.re_addition.get_value(), 0)
 
     def test_update(self):
         workorder = self.create_workorder()
         slave = WorkOrderOpticalSlave(self.store, workorder)
 
         slave.re_addition.update(Decimal("1"))
-        self.assertEquals(slave.re_near_spherical.get_value(), Decimal("1.0"))
+        self.assertEqual(slave.re_near_spherical.get_value(), Decimal("1.0"))
         slave.le_distance_spherical.update(Decimal("5.0"))
         slave.le_addition.update(Decimal("1.0"))
-        self.assertEquals(slave.le_near_spherical.get_value(), Decimal("6.0"))
+        self.assertEqual(slave.le_near_spherical.get_value(), Decimal("6.0"))
         slave.le_addition.update(Decimal("2.0"))
-        self.assertEquals(slave.le_distance_spherical.get_value(), Decimal("5.0"))
-        self.assertEquals(slave.le_near_spherical.get_value(), Decimal("7.0"))
+        self.assertEqual(slave.le_distance_spherical.get_value(), Decimal("5.0"))
+        self.assertEqual(slave.le_near_spherical.get_value(), Decimal("7.0"))
         slave.le_distance_spherical.update(Decimal("1.0"))
-        self.assertEquals(slave.le_near_spherical.get_value(), Decimal("3.0"))
+        self.assertEqual(slave.le_near_spherical.get_value(), Decimal("3.0"))
         slave.le_near_spherical.update(Decimal("1.5"))
-        self.assertEquals(slave.le_addition.get_value(), Decimal("0.5"))
+        self.assertEqual(slave.le_addition.get_value(), Decimal("0.5"))
 
         slave.le_addition.update(Decimal("0.0"))
-        self.assertEquals(slave.le_distance_spherical.get_value(), Decimal("0.0"))
+        self.assertEqual(slave.le_distance_spherical.get_value(), Decimal("0.0"))
 
         slave.le_distance_spherical.update(Decimal("5.0"))
         slave.le_distance_cylindrical.update(Decimal("1.0"))
         slave.le_addition.update(Decimal("1.0"))
-        self.assertEquals(slave.le_near_spherical.get_value(), Decimal("6.0"))
-        self.assertEquals(slave.le_near_cylindrical.get_value(), Decimal("1.0"))
+        self.assertEqual(slave.le_near_spherical.get_value(), Decimal("6.0"))
+        self.assertEqual(slave.le_near_cylindrical.get_value(), Decimal("1.0"))
 
         slave.le_addition.update(Decimal("0.0"))
-        self.assertEquals(slave.le_near_spherical.get_value(), Decimal("0.0"))
+        self.assertEqual(slave.le_near_spherical.get_value(), Decimal("0.0"))
 
-        self.assertEquals(slave.le_near_cylindrical.get_value(), Decimal("0.0"))
+        self.assertEqual(slave.le_near_cylindrical.get_value(), Decimal("0.0"))
 
         # FIXME: Need many more tests
 
@@ -336,27 +331,58 @@ class WorkOrderOpticalSlaveTest(GUITest, OpticalDomainTest):
                                near_axis, near_cylindrical):
         distance_cylindrical.update(Decimal("1.0"))
         addition.update(Decimal("1.0"))
-        self.assertEquals(near_cylindrical.get_value(), Decimal("1.0"))
+        self.assertEqual(near_cylindrical.get_value(), Decimal("1.0"))
         addition.update(Decimal("0.0"))
-        self.assertEquals(near_cylindrical.get_value(), Decimal("0.0"))
+        self.assertEqual(near_cylindrical.get_value(), Decimal("0.0"))
 
         near_cylindrical.update(Decimal("1.0"))
         addition.update(Decimal("1.0"))
-        self.assertEquals(distance_cylindrical.get_value(), Decimal("1.0"))
+        self.assertEqual(distance_cylindrical.get_value(), Decimal("1.0"))
         addition.update(Decimal("0.0"))
 
         # FIXME: Should be 1.0
-        #self.assertEquals(distance_cylindrical.get_value(), Decimal("0.0"))
+        #self.assertEqual(distance_cylindrical.get_value(), Decimal("0.0"))
 
         distance_axis.update(Decimal("1.0"))
         addition.update(Decimal("1.0"))
-        self.assertEquals(near_axis.get_value(), Decimal("1.0"))
+        self.assertEqual(near_axis.get_value(), Decimal("1.0"))
         addition.update(Decimal("0.0"))
-        self.assertEquals(near_axis.get_value(), Decimal("0.0"))
+        self.assertEqual(near_axis.get_value(), Decimal("0.0"))
 
         near_axis.update(Decimal("1.0"))
         addition.update(Decimal("1.0"))
-        self.assertEquals(distance_axis.get_value(), Decimal("1.0"))
+        self.assertEqual(distance_axis.get_value(), Decimal("1.0"))
         addition.update(Decimal("0.0"))
         # FIXME: Should be 1.0
-        #self.assertEquals(distance_cylindrical.get_value(), Decimal("0.0"))
+        #self.assertEqual(distance_cylindrical.get_value(), Decimal("0.0"))
+
+    def test_hide_description(self):
+        with self.sysparam(CUSTOM_WORK_ORDER_DESCRIPTION=True):
+            workorder = self.create_workorder()
+            slave = WorkOrderOpticalSlave(self.store, workorder)
+            self.assertTrue(slave.patient.get_visible())
+
+        with self.sysparam(CUSTOM_WORK_ORDER_DESCRIPTION=False):
+            workorder = self.create_workorder()
+            slave = WorkOrderOpticalSlave(self.store, workorder)
+            self.assertFalse(slave.patient.get_visible())
+
+    def test_copy_wo(self):
+        client = self.create_client()
+        workorder = self.create_workorder(client=client)
+        opt_wo = self.create_optical_work_order(work_order=workorder)
+        opt_wo.le_distance_spherical = Decimal("1.25")
+        opt_wo.re_distance_spherical = Decimal("1.50")
+
+        slave = WorkOrderOpticalSlave(self.store, workorder)
+        self.assertEqual(slave.le_distance_spherical.read(), Decimal("1.25"))
+        self.assertEqual(slave.re_distance_spherical.read(), Decimal("1.50"))
+
+    def test_copy_wo_without_client(self):
+        workorder = self.create_workorder()
+        workorder.client = None
+
+        slave = WorkOrderOpticalSlave(self.store, workorder)
+        # Since there is no client the slave should be without any information
+        self.assertEqual(slave.le_distance_spherical.read(), Decimal("0"))
+        self.assertEqual(slave.re_distance_spherical.read(), Decimal("0"))

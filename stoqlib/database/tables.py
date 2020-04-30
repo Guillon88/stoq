@@ -75,8 +75,9 @@ _tables = [
                 "CreditCheckHistory",
                 "UserBranchAccess"]),
     ('synchronization', ["BranchSynchronization"]),
-    ('station', ["BranchStation"]),
-    ('till', ["Till", "TillEntry"]),
+    ('station', ['StationType', "BranchStation"]),
+    ('till', ["Till", "TillEntry", 'TillSummary']),
+    ('token', ['AccessToken']),
     ('payment.card', ["CreditProvider", "CreditCardData", 'CardPaymentDevice',
                       'CardOperationCost']),
     ('payment.category', ["PaymentCategory"]),
@@ -91,7 +92,9 @@ _tables = [
               "Delivery",
               "Sale",
               'SaleComment',
-              'SaleToken']),
+              'SaleToken',
+              'Context',
+              "SaleContext"]),
     ('returnedsale', ["ReturnedSale",
                       "ReturnedSaleItem"]),
     ('sellable', ["SellableUnit",
@@ -100,6 +103,10 @@ _tables = [
                   'ClientCategoryPrice',
                   "Sellable"]),
     ('service', ["Service"]),
+    ('overrides', ["SellableBranchOverride",
+                   'ProductBranchOverride',
+                   'StorableBranchOverride',
+                   'ServiceBranchOverride']),
     ('product', ["Product",
                  "ProductComponent",
                  "ProductHistory",
@@ -120,7 +127,7 @@ _tables = [
                   "PurchaseItem",
                   "QuoteGroup"]),
     ('receiving', ["ReceivingOrder", "ReceivingOrderItem",
-                   'PurchaseReceivingMap']),
+                   'PurchaseReceivingMap', 'ReceivingInvoice']),
     ('devices', ["DeviceSettings",
                  "FiscalDayHistory",
                  "FiscalDayTax"]),
@@ -161,6 +168,8 @@ _tables = [
                    'WorkOrderPackageItem',
                    'WorkOrderHistory']),
     ('event', ['Event']),
+    ('certificate', ['Certificate']),
+    ('message', ['Message']),
 ]
 
 # table name (e.g. "Person") -> class
@@ -198,4 +207,4 @@ def get_table_type_by_name(table_name):
 
 
 def get_table_types():
-    return _get_tables_cache().values()
+    return list(_get_tables_cache().values())

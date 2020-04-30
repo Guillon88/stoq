@@ -24,7 +24,9 @@
 ##
 """ Templates implementation for person editors.  """
 
-import gtk
+from gi.repository import Gtk
+
+from kiwi.datatypes import ValidationError
 
 from stoqlib.domain.person import Company, Individual, Person, Supplier
 from stoqlib.exceptions import DatabaseInconsistency
@@ -39,6 +41,7 @@ from stoqlib.gui.slaves.addressslave import AddressSlave
 from stoqlib.gui.templates.companytemplate import CompanyEditorTemplate
 from stoqlib.gui.templates.individualtemplate import IndividualEditorTemplate
 from stoqlib.gui.utils.databaseform import DatabaseForm
+from stoqlib.lib.validators import validate_email
 from stoqlib.lib.message import warning
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
@@ -102,8 +105,8 @@ class _PersonEditorTemplate(BaseEditorSlave):
         :param slave: the slave that will be attached to the new tab
         :param position: the position the tab will be attached
         """
-        event_box = gtk.EventBox()
-        self.person_notebook.append_page(event_box, gtk.Label(tab_label))
+        event_box = Gtk.EventBox()
+        self.person_notebook.append_page(event_box, Gtk.Label(label=tab_label))
         self.attach_slave(tab_label, slave, event_box)
         event_box.show()
 
@@ -114,9 +117,11 @@ class _PersonEditorTemplate(BaseEditorSlave):
     def attach_role_slave(self, slave):
         self.attach_slave('role_holder', slave)
 
-    def attach_model_slave(self, name, slave_type, slave_model):
+    def attach_model_slave(self, name, slave_type, slave_model,
+                           ui_form_name=None):
         slave = slave_type(self.store, slave_model,
-                           visual_mode=self.visual_mode)
+                           visual_mode=self.visual_mode,
+                           ui_form_name=ui_form_name)
         self.attach_slave(name, slave)
         return slave
 
@@ -156,6 +161,13 @@ class _PersonEditorTemplate(BaseEditorSlave):
     def on_credit_check_history_button__clicked(self, button):
         run_dialog(CreditCheckHistorySearch, self._parent, self.store,
                    client=self.model.client, reuse_store=not self.visual_mode)
+
+    def on_email__validate(self, widget, value):
+        if not value:
+            return
+
+        if not validate_email(value):
+            return ValidationError(_("Invalid email"))
 
     #
     # Private API
@@ -292,7 +304,8 @@ class BasePersonRoleEditor(BaseEditor):
             slave = IndividualEditorTemplate(self.store,
                                              model=individual,
                                              person_slave=self._person_slave,
-                                             visual_mode=self.visual_mode)
+                                             visual_mode=self.visual_mode,
+                                             ui_form_name=self.ui_form_name)
             self.individual_slave = slave
             self.main_slave = slave
 

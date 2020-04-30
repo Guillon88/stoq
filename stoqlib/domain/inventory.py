@@ -25,6 +25,7 @@
 
 # pylint: enable=E1101
 
+import collections
 from decimal import Decimal
 
 from storm.expr import And, Eq, Cast, Join, LeftJoin, Or, Coalesce
@@ -35,12 +36,13 @@ from stoqlib.database.properties import (QuantityCol, PriceCol, DateTimeCol,
                                          IdCol, BoolCol, EnumCol)
 from stoqlib.database.expr import StatementTimestamp
 from stoqlib.database.viewable import Viewable
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
 from stoqlib.domain.fiscal import FiscalBookEntry
 from stoqlib.domain.person import LoginUser, Person, Branch
 from stoqlib.domain.product import (StockTransactionHistory, StorableBatch, Product,
                                     Storable, ProductStockItem)
 from stoqlib.domain.sellable import Sellable
+from stoqlib.domain.station import BranchStation
 from stoqlib.lib.dateutils import localnow
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -149,7 +151,7 @@ class InventoryItem(Domain):
     #  Public API
     #
 
-    def adjust(self, invoice_number):
+    def adjust(self, user: LoginUser, invoice_number):
         """Create an entry in fiscal book registering the adjustment
         with the related cfop data and change the product quantity
         available in stock.
@@ -160,8 +162,11 @@ class InventoryItem(Domain):
         assert not self.is_adjusted
         storable = self.product.storable
         if storable is None:
-            raise TypeError(
-                "The adjustment item must be a storable product.")
+            # This item is in the inventory but is not an storable. We should register the initial
+            # stock
+            self.product.set_as_storable_product(self.inventory.branch, user, self.actual_quantity)
+            self.is_adjusted = True
+            return
 
         adjustment_qty = self.actual_quantity - self.recorded_quantity
         if not adjustment_qty:
@@ -170,12 +175,12 @@ class InventoryItem(Domain):
             storable.increase_stock(adjustment_qty,
                                     self.inventory.branch,
                                     StockTransactionHistory.TYPE_INVENTORY_ADJUST,
-                                    self.id, batch=self.batch)
+                                    self.id, user, batch=self.batch)
         else:
             storable.decrease_stock(abs(adjustment_qty),
                                     self.inventory.branch,
                                     StockTransactionHistory.TYPE_INVENTORY_ADJUST,
-                                    self.id, batch=self.batch)
+                                    self.id, user, batch=self.batch)
 
         self._add_inventory_fiscal_entry(invoice_number)
         self.is_adjusted = True
@@ -206,7 +211,7 @@ class InventoryItem(Domain):
         return self.product_cost * self.actual_quantity
 
 
-class Inventory(Domain):
+class Inventory(IdentifiableDomain):
     """ The Inventory handles the logic related to creating inventories
     for the available |product| (or a group of) in a certain |branch|.
 
@@ -243,9 +248,11 @@ class Inventory(Domain):
     #: The inventory process was cancelled, eg never finished
     STATUS_CANCELLED = u'cancelled'
 
-    statuses = {STATUS_OPEN: _(u'Opened'),
-                STATUS_CLOSED: _(u'Closed'),
-                STATUS_CANCELLED: _(u'Cancelled')}
+    statuses = collections.OrderedDict([
+        (STATUS_OPEN, _(u'Opened')),
+        (STATUS_CLOSED, _(u'Closed')),
+        (STATUS_CANCELLED, _(u'Cancelled')),
+    ])
 
     #: A numeric identifier for this object. This value should be used instead of
     #: :obj:`Domain.id` when displaying a numerical representation of this object to
@@ -265,6 +272,12 @@ class Inventory(Domain):
     #: the date inventory process was closed
     close_date = DateTimeCol(default=None)
 
+    #: the date the inventory was cancelled
+    cancel_date = DateTimeCol(default=None)
+
+    #: the reason the inventory was cancelled
+    cancel_reason = UnicodeCol()
+
     responsible_id = IdCol(allow_none=False)
     #: the responsible for this inventory. At the moment, the
     #: |loginuser| that opened the inventory
@@ -273,6 +286,15 @@ class Inventory(Domain):
     branch_id = IdCol(allow_none=False)
     #: branch where the inventory process was done
     branch = Reference(branch_id, 'Branch.id')
+
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
+
+    cancel_responsible_id = IdCol()
+    #: The responsible for cancelling this inventory. At the moment, the
+    #: |loginuser| that cancelled the inventory
+    cancel_responsible = Reference(cancel_responsible_id, 'LoginUser.id')
 
     #: the |inventoryitems| of this inventory
     inventory_items = ReferenceSet('id', 'InventoryItem.inventory_id')
@@ -299,8 +321,8 @@ class Inventory(Domain):
     # Public API
     #
 
-    def add_storable(self, storable, quantity,
-                     batch_number=None, batch=None):
+    def add_product(self, product, quantity,
+                    batch_number=None, batch=None):
         """Add a storable to this inventory.
 
         The parameters product, storable and batch are passed here to avoid
@@ -315,13 +337,13 @@ class Inventory(Domain):
         :param batch: the corresponding batch to the batch_number
         """
         if batch_number is not None and not batch:
+            assert product.storable
             batch = StorableBatch.get_or_create(self.store,
-                                                storable=storable,
+                                                storable=product.storable,
                                                 batch_number=batch_number)
 
-        product = storable.product
         sellable = product.sellable
-        self.validate_batch(batch, sellable, storable=storable)
+        self.validate_batch(batch, sellable, storable=product.storable)
         return InventoryItem(store=self.store,
                              product=product,
                              batch=batch,
@@ -349,7 +371,7 @@ class Inventory(Domain):
 
         for item in self.inventory_items:
             if (item.actual_quantity is None or
-                item.recorded_quantity == item.actual_quantity):
+                    item.recorded_quantity == item.actual_quantity):
                 continue
 
             # FIXME: We are setting this here because, when generating a
@@ -449,8 +471,8 @@ class Inventory(Domain):
         store = self.store
         tables = [InventoryItem,
                   Join(Product, Product.id == InventoryItem.product_id),
-                  Join(Storable, Storable.id == Product.id),
                   Join(Sellable, Sellable.id == Product.id),
+                  LeftJoin(Storable, Storable.id == Product.id),
                   LeftJoin(StorableBatch, StorableBatch.id == InventoryItem.batch_id)]
         return store.using(*tables).find(
             (InventoryItem, Storable, Product, Sellable, StorableBatch),
@@ -490,16 +512,18 @@ class Inventory(Domain):
             query)
 
     @classmethod
-    def create_inventory(cls, store, branch, responsible, query=None):
+    def create_inventory(cls, store, branch: Branch, station: BranchStation, responsible,
+                         query=None):
         """Create a inventory with products that match the given query
 
         :param store: A store to open the inventory in
         :param query: A query to restrict the products that should be in the inventory.
         """
         inventory = cls(store=store,
-                        open_date=localnow(),
                         branch=branch,
-                        responsible=responsible)
+                        station=station,
+                        open_date=localnow(),
+                        responsible_id=responsible.id)
 
         for data in cls.get_sellables_for_inventory(store, branch, query):
             sellable, product, storable, batch, stock_item = data
@@ -513,9 +537,9 @@ class Inventory(Domain):
                 # tend to grow to very large proportions and we are duplicating
                 # everyone here
                 if batch and stock_item:
-                    inventory.add_storable(storable, quantity, batch=batch)
+                    inventory.add_product(product, quantity, batch=batch)
             else:
-                inventory.add_storable(storable, quantity)
+                inventory.add_product(product, quantity)
         return inventory
 
 

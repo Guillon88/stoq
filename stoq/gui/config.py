@@ -22,37 +22,34 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 ##
+
 """First time installation wizard for Stoq
 
 Stoq Configuration dialogs
 
 Current flow of the database steps:
 
-  * :obj:`WelcomeStep`
   * :obj:`DatabaseLocationStep`
 
-    * :obj:`DatabaseSettingsStep` (iff network database)
+    * :obj:`DatabaseSettingsStep` (if network database)
 
       * :obj:`PostgresAdminPasswordStep`
       * :obj:`FinishInstallationStep` (if an installed database was found)
 
   * :obj:`InstallationModeStep`
-  * :obj:`PluginStep`
-
-    * :obj:`TefStep` (if tef was activated)
-
-  * :obj:`StoqAdminPasswordStep`
   * :obj:`CreateDatabaseStep`
+  * :obj:`LinkStep`
   * :obj:`FinishInstallationStep`
 """
 
+import imp
 import logging
 import platform
+import subprocess
 import sys
 
-import glib
-import gtk
-from kiwi.component import provide_utility
+from gi.repository import Gtk, GLib, Gdk
+from kiwi.component import provide_utility, get_utility
 from kiwi.datatypes import ValidationError
 from kiwi.python import Settable
 from kiwi.ui.delegates import GladeSlaveDelegate
@@ -75,30 +72,31 @@ from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.base.wizards import (BaseWizard, WizardEditorStep,
                                       WizardStep)
 from stoqlib.gui.slaves.userslave import PasswordEditorSlave
-from stoqlib.gui.utils.logo import render_logo_pixbuf
+from stoqlib.gui.utils.openbrowser import open_browser
 from stoqlib.gui.widgets.processview import ProcessView
 from stoqlib.lib.configparser import StoqConfig
-from stoqlib.lib.formatters import raw_phone_number
+from stoqlib.lib.interfaces import ICookieFile
 from stoqlib.lib.kiwilibrary import library
 from stoqlib.lib.message import error, warning, yesno
-from stoqlib.lib.osutils import get_product_key, read_registry_key
+from stoqlib.lib.osutils import read_registry_key
 from stoqlib.lib.pgpass import write_pg_pass
-from stoqlib.lib.validators import validate_email
+from stoqlib.lib.threadutils import schedule_in_main_thread
+from stoqlib.lib.validators import validate_email, validate_phone_number
 from stoqlib.lib.webservice import WebService
 from stoqlib.lib.translation import stoqlib_gettext as _
 from stoqlib.net.socketutils import get_hostname
-from twisted.internet import reactor
 
 from stoq.gui.update import SchemaUpdateWizard
-from stoq.gui.shell.shell import PRIVACY_STRING
 from stoq.lib.options import get_option_parser
 from stoq.lib.startup import setup
 
 logger = logging.getLogger(__name__)
 
+is_windows = platform.system() == 'Windows'
 
-LOGO_WIDTH = 91
-LOGO_HEIGHT = 32
+WINDOWS_DEFAULT_DBNAME = 'stoq'
+WINDOWS_DEFAULT_USER = 'postgres'
+WINDOWS_DEFAULT_PASSWORD = 'postgres'
 
 #
 # Wizard Steps
@@ -120,21 +118,6 @@ class BaseWizardStep(WizardStep, GladeSlaveDelegate):
         GladeSlaveDelegate.__init__(self, gladefile=self.gladefile)
 
 
-class WelcomeStep(BaseWizardStep):
-    gladefile = "WelcomeStep"
-
-    def __init__(self, wizard):
-        BaseWizardStep.__init__(self, wizard)
-        self._update_widgets()
-
-    def _update_widgets(self):
-        self.image1.set_from_pixbuf(render_logo_pixbuf('config'))
-        self.title_label.set_bold(True)
-
-    def next_step(self):
-        return DatabaseLocationStep(self.wizard, self)
-
-
 class DatabaseLocationStep(BaseWizardStep):
     gladefile = 'DatabaseLocationStep'
 
@@ -149,12 +132,10 @@ class DatabaseLocationStep(BaseWizardStep):
             return DatabaseSettingsStep(self.wizard, self)
 
         settings = self.wizard.settings
-        # FIXME: Allow developers to specify another database
-        #        is_developer_mode() or STOQ_DATABASE_NAME
         settings.dbname = "stoq"
-        if platform.system() == 'Windows':
+        if is_windows:
             settings.address = "localhost"
-            settings.username = "postgres"
+            settings.username = WINDOWS_DEFAULT_USER
             settings.port = self.wizard.get_win32_postgres_port()
             return PostgresAdminPasswordStep(self.wizard, self)
         else:
@@ -283,7 +264,10 @@ class InstallationModeStep(BaseWizardStep):
 
     def next_step(self):
         self.wizard.create_examples = not self.empty_database_radio.get_active()
-        return PluginStep(self.wizard, self)
+        if self.wizard.db_is_local and not test_local_database():
+            return InstallPostgresStep(self.wizard, self)
+        else:
+            return CreateDatabaseStep(self.wizard, self)
 
     def on_empty_database_radio__activate(self, radio):
         self.wizard.go_to_next()
@@ -292,40 +276,15 @@ class InstallationModeStep(BaseWizardStep):
         self.wizard.go_to_next()
 
 
-class PluginStep(BaseWizardStep):
-    gladefile = 'PluginStep'
+class LinkStep(WizardEditorStep):
+    """Stoq link registration step"""
 
-    def post_init(self):
-        self.wizard.plugins = []
-        self.enable_ecf.grab_focus()
-        if platform.system() == 'Windows':
-            self.enable_ecf.set_active(False)
-            self.enable_ecf.set_sensitive(False)
-            self.enable_tef.set_active(False)
-            self.enable_tef.set_sensitive(False)
-
-    def next_step(self):
-        if self.enable_ecf.get_active():
-            self.wizard.plugins.append('ecf')
-        if self.enable_nfe.get_active():
-            self.wizard.plugins.append('nfe')
-
-        if self.enable_tef.get_active() and not self.wizard.tef_request_done:
-            return TefStep(self.wizard, self)
-        return StoqAdminPasswordStep(self.wizard, self)
-
-
-class TefStep(WizardEditorStep):
-    """Since we are going to sell the TEF funcionality, we cant enable the
-    plugin right away. Just ask for some user information and we will
-    contact.
-    """
-    gladefile = 'TefStep'
+    gladefile = 'LinkStep'
     model_type = Settable
-    proxy_widgets = ('name', 'email', 'phone')
+    proxy_widgets = ['name', 'email', 'phone', 'register_now']
 
     def __init__(self, wizard, previous):
-        model = Settable(name='', email='', phone='')
+        model = Settable(name='', email='', phone='', register_now=True)
         WizardEditorStep.__init__(self, None, wizard, model, previous)
         self._setup_widgets()
 
@@ -334,28 +293,45 @@ class TefStep(WizardEditorStep):
     #
 
     def _setup_widgets(self):
+        if is_windows:
+            # Make it mandatory to register on windows.
+            self.register_now.hide()
+        self.wizard.disable_cancel()
+        self.wizard.disable_back()
+        self.image.set_from_file(
+            library.get_resource_filename('stoq', 'pixmaps', 'link_step.png'))
+        self.image_eventbox.add_events(Gdk.EventMask.BUTTON_PRESS_MASK |
+                                       Gdk.EventMask.POINTER_MOTION_MASK)
         self.send_progress.hide()
         self.send_error_label.hide()
 
     def _pulse(self):
-        # FIXME: This is a hack, remove it when we can avoid
-        #        calling dialog.run()
-        reactor.doIteration(0.1)
-        reactor.runUntilCurrent()
-
         self.send_progress.pulse()
-        return not self.wizard.tef_request_done
+        if self.wizard.link_request_done:
+            self.send_progress.set_fraction(1.0)
+            self.send_progress.set_text(_("Done!"))
+            return False
+        return True
 
     def _cancel_request(self):
-        if not self.wizard.tef_request_done:
+        if not self.wizard.link_request_done:
             self._show_error()
         return False
 
     def _show_error(self):
-        self.wizard.tef_request_done = True
+        self.wizard.link_request_done = True
         self.send_progress.hide()
         self.send_error_label.show()
         self.wizard.next_button.set_sensitive(True)
+
+    def _update_widgets(self):
+        for widget in [self.email, self.name]:
+            widget.set_property('mandatory', self.model.register_now)
+        self.force_validation()
+
+    def _inside_button(self, event):
+        x, y = event.get_coords()
+        return x < 400 and y < 325
 
     #
     #   WizardStep
@@ -363,37 +339,33 @@ class TefStep(WizardEditorStep):
 
     def post_init(self):
         self.register_validate_function(self.wizard.refresh_next)
-        self.force_validation()
         self.name.grab_focus()
+        self._update_widgets()
 
     def setup_proxies(self):
-        self.add_proxy(self.model, TefStep.proxy_widgets)
+        self.add_proxy(self.model, self.proxy_widgets)
 
     def next_step(self):
         # We already sent the details, but may still be on the same step.
-        if self.wizard.tef_request_done:
-            return StoqAdminPasswordStep(self.wizard, self.previous)
+        # Also, if the user didn't choose to "register now", respect his
+        # decision
+        if not self.model.register_now or self.wizard.link_request_done:
+            return FinishInstallationStep(self.wizard)
 
         webapi = WebService()
-        response = webapi.tef_request(self.model.name, self.model.email,
-                                      self.model.phone)
-        response.addCallback(self._on_response_done)
-        response.addErrback(self._on_response_error)
-
-        # FIXME: This is a hack, remove it when we can avoid
-        #        calling dialog.run()
-        if not reactor.running:
-            reactor.run()
+        webapi.link_registration(
+            self.model.name, self.model.email, self.model.phone,
+            callback=lambda r: schedule_in_main_thread(self._on_response_done, r),
+            errback=lambda e: schedule_in_main_thread(self._on_response_error, e))
 
         self.send_progress.show()
         self.send_progress.set_text(_('Sending...'))
         self.send_progress.set_pulse_step(0.05)
-        self.details_table.set_sensitive(False)
         self.wizard.next_button.set_sensitive(False)
-        glib.timeout_add(50, self._pulse)
+        GLib.timeout_add(50, self._pulse)
 
         # Cancel the request after 30 seconds without a reply
-        glib.timeout_add(30000, self._cancel_request)
+        GLib.timeout_add(30000, self._cancel_request)
 
         # Stay on the same step while sending the details
         return self
@@ -402,26 +374,54 @@ class TefStep(WizardEditorStep):
     #   Callbacks
     #
 
+    def on_image_eventbox__motion_notify_event(self, widget, event):
+        w = widget.get_window()
+        if self._inside_button(event):
+            cursor = Gdk.Cursor.new(Gdk.CursorType.HAND2)
+        else:
+            cursor = w.get_parent().get_property('cursor')
+        w.set_cursor(cursor)
+
+    def on_image_eventbox__button_press_event(self, widget, event):
+        if self._inside_button(event):
+            url = 'https://www.stoq.com.br?source=stoqwizard'
+            open_browser(url, self.wizard)
+
+    def on_register_now__toggled(self, widget):
+        self.wizard.enable_online_services = widget.get_active()
+        self._update_widgets()
+
     def on_email__validate(self, widget, value):
+        if not value:
+            return
+
         if not validate_email(value):
             return ValidationError(_('%s is not a valid email') % value)
 
     def on_phone__validate(self, widget, value):
-        if len(raw_phone_number(value)) != 10:
+        if not value:
+            return
+
+        if not validate_phone_number(value):
             return ValidationError(_('%s is not a valid phone') % value)
 
     def on_phone__activate(self, widget):
         if self.wizard.next_button.get_sensitive():
             self.wizard.go_to_next()
 
-    def _on_response_done(self, details):
-        if details['response'] != 'success':
+    def _on_response_done(self, response):
+        if response.status_code != 200:
             self._show_error()
             return
 
-        if not self.wizard.tef_request_done:
-            self.wizard.tef_request_done = True
-            self.wizard.go_to_next()
+        details = response.json()
+        if details['message'] != 'client_instance_created':
+            self._show_error()
+            return
+
+        if not self.wizard.link_request_done:
+            self.wizard.link_request_done = True
+            self.wizard.next_button.set_sensitive(True)
 
     def _on_response_error(self, err):
         self._show_error()
@@ -482,40 +482,6 @@ class PostgresAdminPasswordStep(PasswordStep):
         return self.wizard.connect_for_settings(self)
 
 
-class StoqAdminPasswordStep(PasswordStep):
-    """ Ask a password for the new user being created. """
-    title_label = _("Administrator account")
-
-    def get_title_label(self):
-        return '<b>%s</b>' % _("Administrator account")
-
-    def get_description_label(self):
-        return _("I'm adding a user account called <b>%s</b> which will "
-                 "have administrator privilegies.\n\nTo be "
-                 "able to create other users you need to login "
-                 "with this user in the admin application and "
-                 "create them.") % USER_ADMIN_DEFAULT_NAME
-
-    #
-    # WizardStep hooks
-    #
-
-    def validate_step(self):
-        # FIXME: self.password_slave os not implementing any
-        #        validate_confirm, so, this check is useless.
-        good_pass = self.password_slave.validate_confirm()
-        if good_pass:
-            self.wizard.options.login_username = 'admin'
-            self.wizard.login_password = self.password_slave.model.new_password
-        return good_pass
-
-    def next_step(self):
-        if self.wizard.db_is_local and not test_local_database():
-            return InstallPostgresStep(self.wizard, self)
-        else:
-            return CreateDatabaseStep(self.wizard, self)
-
-
 class InstallPostgresStep(BaseWizardStep):
     """Since we are going to sell the TEF funcionality, we cant enable the
     plugin right away. Just ask for some user information and we will
@@ -526,9 +492,7 @@ class InstallPostgresStep(BaseWizardStep):
     def __init__(self, wizard, previous):
         self.done = False
         BaseWizardStep.__init__(self, wizard, previous)
-        self._setup_widgets()
 
-    def _setup_widgets(self):
         forward_label = '<b>%s</b>' % (_("Forward"), )
 
         if self._can_install():
@@ -548,25 +512,10 @@ class InstallPostgresStep(BaseWizardStep):
                 forward_label, )
         self.label.set_markup(label)
 
-    def _can_install(self):
-        from stoqlib.gui.utils.aptpackageinstaller import has_apt
-        return has_apt
-
-    def _install_postgres(self):
-        from stoqlib.gui.utils.aptpackageinstaller import AptPackageInstaller
-        self.wizard.disable_back()
-        self.wizard.disable_next()
-        apti = AptPackageInstaller(parent=self.wizard.get_toplevel())
-        apti.install('postgresql', 'postgresql-contrib', 'stoq-server')
-        apti.connect('done', self._on_apt_install__done)
-        apti.connect('auth-failed', self._on_apt_install__auth_failed)
-
-        self.label.set_markup(
-            _("Please wait while the package installation is completing."))
-
     #
     #   WizardStep
     #
+
     def next_step(self):
         if self.done or test_local_database():
             return CreateDatabaseStep(self.wizard, self)
@@ -579,31 +528,54 @@ class InstallPostgresStep(BaseWizardStep):
         return self
 
     #
-    #   Callbacks
+    #  Private
     #
 
-    def _on_apt_install__done(self, apt, err):
-        if error is not None:
+    def _can_install(self):
+        # We cannot import gtk3widgets here as gtk3 will raise an error if
+        # gtk2 is already imported on the system
+        try:
+            aptdaemon = imp.find_module('aptdaemon')
+            imp.find_module('gtk3widgets', [aptdaemon[1]])
+        except ImportError:
+            return False
+
+        return True
+
+    def _install_postgres(self):
+        self.wizard.disable_back()
+        self.wizard.disable_next()
+        self.label.set_markup(
+            _("Please wait while the package installation is completing."))
+
+        packageinstaller = library.get_resource_filename(
+            'stoq', 'scripts', 'packageinstaller.py')
+        p = subprocess.Popen(
+            [sys.executable, packageinstaller,
+             'postgresql', 'postgresql-contrib', 'stoq-server'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)
+        stdout, stderr = p.communicate()
+
+        self.wizard.enable_back()
+        if p.returncode == 0:
+            self.done = True
+            self.wizard.enable_next()
+            self.label.set_markup(
+                _("Postgresql installation succeeded. You may now proceed "
+                  "to the next step by clicking the <b>Forward</b> button"))
+        elif p.returncode == 11:
+            self.wizard.enable_next()
+            self.label.set_markup(
+                _("Authorization failed, try again or connect to "
+                  "another database"))
+        else:
             warning(_("Something went wrong while trying to install "
                       "the PostgreSQL server."))
             self.label.set_markup(
                 _("Sorry, something went wrong while installing PostgreSQL, "
                   "try again manually or go back and configure Stoq to connect "
                   "to another."))
-            self.wizard.enable_back()
-        else:
-            self.done = True
-            # FIXME: Update label and enable_back/next instead
-            #        of doing it automatically for the user,
-            #        to tell him that postgres installation succeeded.
-            self.wizard.go_to_next()
-
-    def _on_apt_install__auth_failed(self, apt):
-        self.wizard.enable_back()
-        self.wizard.enable_next()
-        self.label.set_markup(
-            _("Authorization failed, try again or connect to "
-              "another database"))
 
 
 class CreateDatabaseStep(BaseWizardStep):
@@ -620,7 +592,7 @@ class CreateDatabaseStep(BaseWizardStep):
         self._maybe_create_database()
 
     def next_step(self):
-        return FinishInstallationStep(self.wizard)
+        return LinkStep(self.wizard, self)
 
     def _maybe_create_database(self):
         logger.info('_maybe_create_database (db_is_local=%s, enable_production=%s)'
@@ -652,17 +624,8 @@ class CreateDatabaseStep(BaseWizardStep):
                     "please install postgresql-contrib on it"))
 
         store.close()
-
-        # Secondly, ask the user if he really wants to create the database,
-        dbname = settings.dbname
-        if yesno(_(u"The specified database '%s' does not exist.\n"
-                   u"Do you want to create it?") % dbname,
-                 gtk.RESPONSE_YES, _(u"Create database"), _(u"Don't create")):
-            self.process_view.feed("** Creating database\r\n")
-            self._launch_stoqdbadmin()
-        else:
-            self.process_view.feed("** Not creating database\r\n")
-            self.wizard.disable_next()
+        self.process_view.feed("** Creating database\r\n")
+        self._launch_stoqdbadmin()
 
     def _launch_stoqdbadmin(self):
         logger.info('_launch_stoqdbadmin')
@@ -675,7 +638,7 @@ class CreateDatabaseStep(BaseWizardStep):
             if library.uninstalled:
                 args = ['stoq.bat']
             else:
-                args = ['stoq.exe']
+                args = ['stoq-cmd.exe']
         else:
             args = ['stoq']
 
@@ -688,9 +651,6 @@ class CreateDatabaseStep(BaseWizardStep):
         elif self.wizard.enable_production:
             args.append('--force')
 
-        if self.wizard.plugins:
-            args.append('--enable-plugins')
-            args.append(','.join(self.wizard.plugins))
         if self.wizard.db_is_local:
             args.append('--create-dbuser')
 
@@ -753,7 +713,7 @@ class CreateDatabaseStep(BaseWizardStep):
                 # Allow him to try again
                 if yesno(_("Something went wrong while trying to create "
                            "the database. Try again?"),
-                         gtk.RESPONSE_NO, _("Change settings"), _("Try again")):
+                         Gtk.ResponseType.NO, _("Change settings"), _("Try again")):
                     return
                 self._launch_stoqdbadmin()
                 return
@@ -794,41 +754,17 @@ class FinishInstallationStep(BaseWizardStep):
 
     def post_init(self):
         # replaces the cancel button with a quit button
-        self.wizard.cancel_button.set_label(gtk.STOCK_QUIT)
+        self.wizard.cancel_button.set_label(Gtk.STOCK_QUIT)
         # self._cancel will be a callback for the quit button
         self.wizard.cancel = self._cancel
         self.wizard.next_button.set_label(_(u'Run Stoq'))
-        self.online_services.set_active(self.wizard.enable_online_services)
-
         self.wizard.next_button.grab_focus()
-
-        if self.wizard.has_installed_db:
-            self.online_services.hide()
-            self.online_info.hide()
-
-        # If you have a ProductKey you are required to enable online
-        # services
-        if get_product_key():
-            self.online_services.hide()
-            self.online_info.hide()
-            self.online_services.set_active(True)
 
     def _cancel(self):
         # This is the last step, so we will finish the installation
         # before we quit
         self.wizard.finish(run=False)
 
-    def on_online_services__toggled(self, check):
-        self.wizard.enable_online_services = check.get_active()
-
-    def on_online_info__clicked(self, button):
-        dialog = gtk.MessageDialog(parent=None, flags=0,
-                                   type=gtk.MESSAGE_INFO,
-                                   buttons=gtk.BUTTONS_OK,
-                                   message_format=_("Online services"))
-        dialog.format_secondary_markup(PRIVACY_STRING)
-        dialog.run()
-        dialog.destroy()
 
 #
 # Main wizard
@@ -837,20 +773,26 @@ class FinishInstallationStep(BaseWizardStep):
 
 class FirstTimeConfigWizard(BaseWizard):
     title = _("Stoq - Installation")
-    size = (580, 380)
-    tef_request_done = False
+    size = (711, 400)  # 16:9 proportion
 
     def __init__(self, options, config=None):
         if not config:
             config = StoqConfig()
-        self.settings = config.get_settings()
 
+        self.settings = config.get_settings()
+        if is_windows:
+            self.settings.username = WINDOWS_DEFAULT_USER
+            self.settings.password = WINDOWS_DEFAULT_PASSWORD
+            self.settings.dbname = WINDOWS_DEFAULT_DBNAME
+            self.settings.address = "localhost"
+            self.settings.port = 5432
+
+        self.link_request_done = False
         self.create_examples = False
         self.config = config
         self.enable_production = False
         self.has_installed_db = False
         self.options = options
-        self.plugins = []
         self.db_is_local = False
         self.enable_online_services = True
         self.auth_type = TRUST_AUTHENTICATION
@@ -859,9 +801,14 @@ class FirstTimeConfigWizard(BaseWizard):
             self.enable_production = True
 
         if self.enable_production:
-            first_step = PluginStep(self)
+            first_step = CreateDatabaseStep(self)
+        elif is_windows and self.try_connect(self.settings, warn=False):
+            self.auth_type = PASSWORD_AUTHENTICATION
+            self.write_pgpass()
+            first_step = self.connect_for_settings()
         else:
-            first_step = WelcomeStep(self)
+            first_step = DatabaseLocationStep(self)
+
         BaseWizard.__init__(self, None, first_step, title=self.title)
 
         self.get_toplevel().set_deletable(False)
@@ -898,7 +845,10 @@ class FirstTimeConfigWizard(BaseWizard):
             raise DatabaseInconsistency(
                 ("You should have a user with username: %s"
                  % USER_ADMIN_DEFAULT_NAME))
-        adminuser.set_password(self.login_password)
+        # Lets create a user without password and set a cookie so that it
+        # auto login
+        adminuser.set_password(u'')
+        get_utility(ICookieFile).store('admin', '')
 
     def _set_online_services(self, store):
         logger.info('_set_online_services (%s)' %
@@ -939,7 +889,7 @@ class FirstTimeConfigWizard(BaseWizard):
 
     def check_incomplete_database(self):
         logger.info('check_incomplete_database (db_is_local=%s)' %
-                   (self.db_is_local, ))
+                    (self.db_is_local, ))
         # If we don't have postgres installed we cannot have
         # an incomplete database
         if self.db_is_local and not test_local_database():
@@ -1012,7 +962,7 @@ class FirstTimeConfigWizard(BaseWizard):
             error(_('The database version differs from your installed '
                     'version.'), str(err))
 
-    def connect_for_settings(self, step):
+    def connect_for_settings(self, step=None):
         # Try to connect, we don't care if we can connect,
         # we just want to know if it's properly installed
         self.try_connect(self.settings, warn=False)
@@ -1060,9 +1010,3 @@ class FirstTimeConfigWizard(BaseWizard):
         self.config.flush()
 
         self.close()
-
-        # This wizard is shown with run_dialog, that creates a new main loop,
-        # but we may have created another main loop when calling reactor.run()
-        # above. Make sure to leave only one main loop running after the wizard.
-        if reactor.running:
-            reactor.prepare_restart()

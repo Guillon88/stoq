@@ -32,18 +32,20 @@ from storm.references import Reference, ReferenceSet
 from storm.expr import And, Join, Eq
 from zope.interface import implementer
 
-from stoqlib.database.properties import (UnicodeCol, DateTimeCol, IntCol,
+from stoqlib.database.properties import (UnicodeCol, DateTimeCol,
                                          PriceCol, QuantityCol, IdentifierCol,
                                          IdCol, EnumCol)
-from stoqlib.database.runtime import get_current_branch
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
+from stoqlib.domain.events import StockOperationConfirmedEvent
 from stoqlib.domain.fiscal import Invoice, FiscalBookEntry
-from stoqlib.domain.interfaces import IContainer, IInvoiceItem, IInvoice
+from stoqlib.domain.interfaces import IInvoiceItem, IInvoice
 from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.domain.payment.payment import Payment
+from stoqlib.domain.person import LoginUser, Branch
 from stoqlib.domain.product import StockTransactionHistory
 from stoqlib.domain.taxes import check_tax_info_presence
 from stoqlib.lib.dateutils import localnow
+from stoqlib.lib.defaults import quantize
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -120,9 +122,10 @@ class ReturnedSaleItem(Domain):
     parent_item_id = IdCol()
     parent_item = Reference(parent_item_id, 'ReturnedSaleItem.id')
 
-    children_items = ReferenceSet('id', 'ReturnedSaleItem.parent_item_id')
+    children_items = ReferenceSet('id', 'ReturnedSaleItem.parent_item_id',
+                                  order_by='ReturnedSaleItem.te_id')
 
-    def __init__(self, store=None, **kwargs):
+    def __init__(self, store, returned_sale: 'ReturnedSale', **kwargs):
         # TODO: Add batch logic here. (get if from sale_item or check if was
         # passed togheter with sellable)
         sale_item = kwargs.get('sale_item')
@@ -145,6 +148,7 @@ class ReturnedSaleItem(Domain):
         check_tax_info_presence(kwargs, store)
 
         super(ReturnedSaleItem, self).__init__(store=store, **kwargs)
+        self.returned_sale = returned_sale
 
         product = self.sellable.product
         if product:
@@ -159,7 +163,7 @@ class ReturnedSaleItem(Domain):
 
         This is the same as :obj:`.price` * :obj:`.quantity`
         """
-        return self.price * self.quantity
+        return quantize(self.price * self.quantity)
 
     #
     # IInvoiceItem implementation
@@ -174,19 +178,8 @@ class ReturnedSaleItem(Domain):
         return self.returned_sale
 
     @property
-    def nfe_cfop_code(self):
-        sale = self.returned_sale.sale
-        client_address = sale.client.person.get_main_address()
-        branch_address = sale.branch.person.get_main_address()
-
-        same_state = True
-        if branch_address.city_location.state != client_address.city_location.state:
-            same_state = False
-
-        if same_state:
-            return u'1202'
-        else:
-            return u'2202'
+    def cfop_code(self):
+        return u'1202'
 
     #
     #  Public API
@@ -195,7 +188,7 @@ class ReturnedSaleItem(Domain):
     def get_total(self):
         return self.total
 
-    def return_(self, branch):
+    def return_(self, user: LoginUser):
         """Do the real return of this item
 
         When calling this, the real return will happen, that is,
@@ -204,13 +197,13 @@ class ReturnedSaleItem(Domain):
         """
         storable = self.sellable.product_storable
         if storable:
-            storable.increase_stock(self.quantity, branch,
+            storable.increase_stock(self.quantity, self.returned_sale.branch,
                                     StockTransactionHistory.TYPE_RETURNED_SALE,
-                                    self.id, batch=self.batch)
+                                    self.id, user, batch=self.batch)
         if self.sale_item:
             self.sale_item.quantity_decreased -= self.quantity
 
-    def undo(self):
+    def undo(self, user: LoginUser):
         """Undo this item return.
 
         This is the oposite of the return, ie, the item will be removed back
@@ -219,11 +212,30 @@ class ReturnedSaleItem(Domain):
         storable = self.sellable.product_storable
         if storable:
             storable.decrease_stock(self.quantity, self.returned_sale.branch,
-                                    # FIXME: Create a new type
-                                    StockTransactionHistory.TYPE_RETURNED_SALE,
-                                    self.id, batch=self.batch)
+                                    StockTransactionHistory.TYPE_UNDO_RETURNED_SALE,
+                                    self.id, user, batch=self.batch)
         if self.sale_item:
             self.sale_item.quantity_decreased += self.quantity
+
+    def maybe_remove(self):
+        """Will eventualy remove the object from database"""
+        for child in self.children_items:
+            # Make sure to remove children before remove itself
+            if child.can_remove():
+                self.store.remove(child)
+        if self.can_remove():
+            self.store.remove(self)
+
+    def can_remove(self):
+        """Check if the ReturnedSaleItem can be removed from database
+
+        If the item is a package, check if all of its children are being
+        returned
+        """
+        product = self.sellable.product
+        if product and product.is_package and not bool(self.quantity):
+            return not any(bool(child.quantity) for child in self.children_items)
+        return not bool(self.quantity)
 
     def get_component_quantity(self, parent):
         for component in parent.sellable.product.get_components():
@@ -231,9 +243,8 @@ class ReturnedSaleItem(Domain):
                 return component.quantity
 
 
-@implementer(IContainer)
 @implementer(IInvoice)
-class ReturnedSale(Domain):
+class ReturnedSale(IdentifiableDomain):
     """Holds information about a returned |sale|.
 
     This can be:
@@ -285,10 +296,6 @@ class ReturnedSale(Domain):
     # When this returned sale was undone
     undo_date = DateTimeCol(default=None)
 
-    # FIXME: Duplicated from Invoice. Remove it
-    #: the invoice number for this returning
-    invoice_number = IntCol(default=None)
-
     #: the reason why this return was made
     reason = UnicodeCol(default=u'')
 
@@ -324,8 +331,13 @@ class ReturnedSale(Domain):
     #: the |branch| in which this return happened
     branch = Reference(branch_id, 'Branch.id')
 
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
+
     #: a list of all items returned in this return
-    returned_items = ReferenceSet('id', 'ReturnedSaleItem.returned_sale_id')
+    returned_items = ReferenceSet('id', 'ReturnedSaleItem.returned_sale_id',
+                                  order_by='ReturnedSaleItem.te_id')
 
     #: |payments| generated by this returned sale
     payments = None
@@ -338,9 +350,9 @@ class ReturnedSale(Domain):
     #: The |invoice| generated by the returned sale
     invoice = Reference(invoice_id, 'Invoice.id')
 
-    def __init__(self, store=None, **kwargs):
-        kwargs['invoice'] = Invoice(store=store, invoice_type=Invoice.TYPE_IN)
-        super(ReturnedSale, self).__init__(store=store, **kwargs)
+    def __init__(self, store, branch: Branch, **kwargs):
+        kwargs['invoice'] = Invoice(store=store, invoice_type=Invoice.TYPE_IN, branch=branch)
+        super(ReturnedSale, self).__init__(store=store, branch=branch, **kwargs)
 
     @property
     def group(self):
@@ -378,8 +390,9 @@ class ReturnedSale(Domain):
         if not self.sale:
             return currency(0)
 
-        # TODO: Filter by status
-        returned = self.store.find(ReturnedSale, sale=self.sale)
+        query = And(ReturnedSale.sale_id == self.sale.id,
+                    ReturnedSale.status == ReturnedSale.STATUS_CONFIRMED)
+        returned = self.store.find(ReturnedSale, query)
         # This will sum the total already returned for this sale,
         # excluiding *self* within the same store
         returned_total = sum([returned_sale.returned_total for returned_sale in
@@ -432,10 +445,6 @@ class ReturnedSale(Domain):
     #  IContainer implementation
     #
 
-    def add_item(self, returned_item):
-        assert not returned_item.returned_sale
-        returned_item.returned_sale = self
-
     def get_items(self):
         return self.returned_items
 
@@ -465,8 +474,10 @@ class ReturnedSale(Domain):
 
     @property
     def recipient(self):
-        if self.sale.client:
+        if self.sale and self.sale.client:
             return self.sale.client.person
+        elif self.new_sale and self.new_sale.client:
+            return self.new_sale.client.person
         return None
 
     @property
@@ -502,7 +513,7 @@ class ReturnedSale(Domain):
     def can_undo(self):
         return self.status == ReturnedSale.STATUS_CONFIRMED
 
-    def return_(self, method_name=u'money', login_user=None):
+    def return_(self, user: LoginUser, method_name=u'money'):
         """Do the return of this returned sale.
 
         :param unicode method_name: The name of the payment method that will be
@@ -521,30 +532,7 @@ class ReturnedSale(Domain):
         """
         assert self.sale and self.sale.can_return()
         self._clean_not_used_items()
-
-        payment = None
-        if self.total_amount == 0:
-            # The client does not owe anything to us
-            self.group.cancel()
-        elif self.total_amount < 0:
-            # The user has paid more than it's returning
-            for payment in self.group.get_pending_payments():
-                if payment.is_inpayment():
-                    # We are returning money to client, that means he doesn't owe
-                    # us anything, we do now. Cancel pending payments
-                    payment.cancel()
-
-            method = PaymentMethod.get_by_name(self.store, method_name)
-            description = _(u'%s returned for sale %s') % (method.description,
-                                                           self.sale.identifier)
-            payment = method.create_payment(Payment.TYPE_OUT,
-                                            payment_group=self.group,
-                                            branch=self.branch,
-                                            value=self.total_amount_abs,
-                                            description=description)
-            payment.set_pending()
-            if method_name == u'credit':
-                payment.pay()
+        self._create_return_payment(method_name, self.returned_total)
 
         # FIXME: For now, we are not reverting the comission as there is a
         # lot of things to consider. See bug 5215 for information about it.
@@ -552,15 +540,14 @@ class ReturnedSale(Domain):
 
         self.sale.return_(self)
 
-        # Save invoice number, operation_nature and branch in Invoice table.
-        self.invoice.invoice_number = self.invoice_number
+        # Save operation_nature and branch in Invoice table.
         self.invoice.operation_nature = self.operation_nature
         self.invoice.branch = self.branch
 
         if self.sale.branch == self.branch:
-            self.confirm(login_user)
+            self.confirm(user)
 
-    def trade(self):
+    def trade(self, responsible: LoginUser):
         """Do a trade for this return
 
         Almost the same as :meth:`.return_`, but unlike it, this won't
@@ -580,20 +567,24 @@ class ReturnedSale(Domain):
             self.new_sale.identifier, )
         value = self.returned_total
 
-        self._return_items()
-
         value_as_discount = sysparam.get_bool('USE_TRADE_AS_DISCOUNT')
         if value_as_discount:
             self.new_sale.discount_value = self.returned_total
         else:
-            payment = method.create_payment(Payment.TYPE_IN, group, self.branch, value,
-                                            description=description)
+            payment = method.create_payment(self.branch, self.station, Payment.TYPE_IN, group,
+                                            value, description=description)
             payment.set_pending()
             payment.pay()
             self._revert_fiscal_entry()
 
         if self.sale:
             self.sale.return_(self)
+            if self.sale.branch == self.branch:
+                self.confirm(responsible)
+        else:
+            # When trade items without a registered sale, confirm the
+            # new returned sale.
+            self.confirm(responsible)
 
     def remove(self):
         """Remove this return and it's items from the database"""
@@ -604,18 +595,20 @@ class ReturnedSale(Domain):
             self.remove_item(item)
         self.store.remove(self)
 
-    def confirm(self, login_user):
+    def confirm(self, responsible: LoginUser):
         """Receive the returned_sale_items from a pending |returned_sale|
 
-        :param user: the |login_user| that received the pending returned sale
+        :param responsible: the |login_user| that received the pending returned sale
         """
         assert self.status == self.STATUS_PENDING
-        self._return_items()
+        old_status = self.status
+        self._return_items(responsible)
         self.status = self.STATUS_CONFIRMED
-        self.confirm_responsible = login_user
+        self.confirm_responsible = responsible
         self.confirm_date = localnow()
+        StockOperationConfirmedEvent.emit(self, old_status)
 
-    def undo(self, reason):
+    def undo(self, user: LoginUser, reason):
         """Undo this returned sale.
 
         This includes removing the returned items from stock again (updating the
@@ -625,21 +618,28 @@ class ReturnedSale(Domain):
         """
         assert self.can_undo()
         for item in self.get_items():
-            item.undo()
+            item.undo(user)
 
-        # We now need to create a new in payment for the total amount of this
-        # returned sale.
-        method_name = self._guess_payment_method()
-        method = PaymentMethod.get_by_name(self.store, method_name)
-        description = _(u'%s return undone for sale %s') % (
-            method.description, self.sale.identifier)
-        payment = method.create_payment(Payment.TYPE_IN,
-                                        payment_group=self.group,
-                                        branch=self.branch,
-                                        value=self.returned_total,
-                                        description=description)
-        payment.set_pending()
-        payment.pay()
+        payment = self._get_cancel_candidate_payment(pending_only=True)
+        if payment:
+            # If there are pending out payments which match the returned value
+            # and those payments are all of the same method, we can just cancel any of
+            # these payments right away.
+            payment.cancel()
+        else:
+            # We now need to create a new in payment for the total amount of this
+            # returned sale.
+            payment = self._get_cancel_candidate_payment()
+            method = payment.method if payment else PaymentMethod.get_by_name(self.store, 'money')
+            description = _(u'%s return undone for sale %s') % (
+                method.description, self.sale.identifier)
+            payment = method.create_payment(self.branch, self.station, Payment.TYPE_IN,
+                                            payment_group=self.group,
+                                            value=self.returned_total,
+                                            description=description,
+                                            ignore_max_installments=True)
+            payment.set_pending()
+            payment.pay()
 
         self.status = self.STATUS_CANCELLED
         self.cancel_date = localnow()
@@ -648,60 +648,64 @@ class ReturnedSale(Domain):
         # if the sale status is returned, we must reset it to confirmed (only
         # confirmed sales can be returned)
         if self.sale.is_returned():
-            self.sale.set_not_returned()
+            self.sale.set_not_returned(self.responsible)
 
     #
     #  Private
     #
 
-    def _guess_payment_method(self):
-        """Guesses the payment method used in this returned sale.
+    def _create_return_payment(self, method_name, value):
+        method = PaymentMethod.get_by_name(self.store, method_name)
+        description = _(u'%s returned for sale %s') % (method.description,
+                                                       self.sale.identifier)
+        payment = method.create_payment(self.branch, self.station, Payment.TYPE_OUT,
+                                        payment_group=self.group,
+                                        value=value,
+                                        description=description)
+        payment.set_pending()
+        if method_name == u'credit':
+            payment.pay()
+
+    def _get_cancel_candidate_payment(self, pending_only=False):
+        """Try to find a payment to cancel for a canceled operation
+
+        If the user cancels or undoes an operation - e.g. undoing a returned sale -
+        we can either cancel the pending payment, or create a reversal payment for its
+        value.
+
+        :param pending_only: If True, this will consider only pending payments.
         """
-        value = self.returned_total
-        # Now look for the out payment, ie, the payment that we possibly created
-        # for the returned value.
-        payments = list(self.sale.payments.find(payment_type=Payment.TYPE_OUT,
-                                                value=value))
-        if len(payments) == 1:
-            # There is only one payment that matches our criteria, we can trust it
-            # is the one we are looking for.
-            method = payments[0].method.method_name
-        elif len(payments) == 0:
-            # This means that the returned sale didn't endup creating any return
-            # payment for the client. Let's just create a money payment then
-            method = u'money'
-        else:
-            # This means that we found more than one return payment for this
-            # value. This probably means that the user has returned multiple
-            # items in different returns.
-            methods = set(payment.method.method_name for payment in payments)
-            if len(methods) == 1:
-                # All returns were using the same method. Lets use that one them
-                method = methods.pop()
-            else:
-                # The previous returns used different methods, let's pick money
-                method = u'money'
+        queries = [Payment.payment_type == Payment.TYPE_OUT,
+                   Payment.value == self.returned_total]
+        if pending_only:
+            queries.append(Payment.status == Payment.STATUS_PENDING)
 
-        return method
+        # We search for the payments which are correspondent to our operation aiming to
+        # finding which payment methods are involved.
+        payments = list(self.sale.payments.find(And(*queries)))
+        methods = set(payment.method.method_name for payment in payments)
 
-    def _return_items(self):
+        # If and only if there is only one method from all the payments found, then any of the
+        # payments can be cancelled or reversed.
+        if len(methods) == 1:
+            return payments[0]
+
+        return
+
+    def _return_items(self, user: LoginUser):
         # We must have at least one item to return
         assert self.returned_items.count()
 
-        # FIXME
-        branch = get_current_branch(self.store)
         for item in self.returned_items:
-            item.return_(branch)
+            item.return_(user)
 
     def _get_returned_percentage(self):
         return Decimal(self.returned_total / self.sale.total_amount)
 
     def _clean_not_used_items(self):
-        store = self.store
-        for item in self.returned_items:
-            if not item.quantity:
-                # Removed items not marked for return
-                item.delete(item.id, store=store)
+        query = Eq(ReturnedSaleItem.parent_item_id, None)
+        for item in self.returned_items.find(query):
+            item.maybe_remove()
 
     def _revert_fiscal_entry(self):
         entry = self.store.find(FiscalBookEntry,
@@ -714,7 +718,7 @@ class ReturnedSale(Domain):
         # we should be reverting the exact tax for each returned item.
         returned_percentage = self._get_returned_percentage()
         entry.reverse_entry(
-            self.invoice_number,
+            self.invoice.invoice_number,
             icms_value=entry.icms_value * returned_percentage,
             iss_value=entry.iss_value * returned_percentage,
             ipi_value=entry.ipi_value * returned_percentage)

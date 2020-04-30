@@ -24,7 +24,7 @@
 ##
 
 
-import gtk
+from gi.repository import Gtk
 from kiwi.ui.objectlist import ObjectList, Column
 
 from stoqlib.gui.base.dialogs import BasicDialog
@@ -47,7 +47,7 @@ class FormFieldEditor(BasicDialog):
         self._create_ui()
 
     def _create_ui(self):
-        hbox = gtk.HBox()
+        hbox = Gtk.HBox()
         self.main.remove(self.main.get_child())
         self.main.add(hbox)
         hbox.show()
@@ -56,21 +56,21 @@ class FormFieldEditor(BasicDialog):
             [Column('description', title=_('Description'), sorted=True,
                     expand=True, format_func=stoqlib_gettext)],
             self.store.find(UIForm),
-            gtk.SELECTION_BROWSE)
+            Gtk.SelectionMode.BROWSE)
         self.forms.connect('selection-changed',
                            self._on_forms__selection_changed)
         self.forms.set_headers_visible(False)
         self.forms.set_size_request(200, -1)
-        hbox.pack_start(self.forms, False, False)
+        hbox.pack_start(self.forms, False, False, 0)
         self.forms.show()
 
-        box = gtk.VBox()
-        hbox.pack_start(box)
+        box = Gtk.VBox()
+        hbox.pack_start(box, True, True, 0)
         box.show()
 
         self.fields = ObjectList(self._get_columns(), [],
-                                 gtk.SELECTION_BROWSE)
-        box.pack_start(self.fields)
+                                 Gtk.SelectionMode.BROWSE)
+        box.pack_start(self.fields, True, True, 0)
         self.fields.show()
 
         box.show()
@@ -83,11 +83,11 @@ class FormFieldEditor(BasicDialog):
         self.fields.set_cell_data_func(self._uifield__cell_data_func)
 
     def _uifield__cell_data_func(self, column, renderer, obj, text):
-        if isinstance(renderer, gtk.CellRendererText):
+        if isinstance(renderer, Gtk.CellRendererText):
             return text
 
         manager = get_plugin_manager()
-        if manager.is_active('nfe'):
+        if manager.is_any_active(['nfe', 'nfce']):
             is_editable = obj.field_name not in [u'street', u'district',
                                                  u'city', u'state',
                                                  u'country', u'street_number']

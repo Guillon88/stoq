@@ -23,17 +23,20 @@
 ##
 ##
 
+import collections
 import datetime
 
-import gtk
+from gi.repository import Gtk, GdkPixbuf
 
 from storm.expr import In
+from kiwi.python import Settable
 from kiwi.ui.gadgets import render_pixbuf
+from kiwi.ui.forms import ChoiceField, TextField
 from kiwi.ui.objectlist import Column
 
 from stoqlib.api import api
 from stoqlib.domain.inventory import Inventory
-from stoqlib.domain.person import Branch
+from stoqlib.domain.person import Branch, Employee
 from stoqlib.domain.workorder import (WorkOrder, WorkOrderCategory,
                                       WorkOrderPackage,
                                       WorkOrderApprovedAndFinishedView)
@@ -47,19 +50,14 @@ from stoqlib.gui.slaves.workorderslave import (WorkOrderOpeningSlave,
                                                WorkOrderQuoteSlave,
                                                WorkOrderExecutionSlave,
                                                WorkOrderHistorySlave)
-from stoqlib.gui.utils.workorderutils import get_workorder_state_icon
+from stoqlib.gui.utils.iconutils import get_workorder_state_icon, render_icon
 from stoqlib.gui.widgets.queryentry import ClientEntryGadget
+from stoqlib.lib.decorators import cached_property
 from stoqlib.lib.message import warning
 from stoqlib.lib.permissions import PermissionManager
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
-
-
-def get_sellable_information(sellable):
-    if sellable.code:
-        return "%s - %s" % (sellable.code, sellable.description)
-    return sellable.description
 
 
 class WorkOrderEditor(BaseEditor):
@@ -112,6 +110,7 @@ class WorkOrderEditor(BaseEditor):
             sellable=None,
             description=u'',
             branch=branch,
+            station=api.get_current_station(store),
             category=self._default_category,
             defect_detected=defect_detected,
         )
@@ -162,8 +161,8 @@ class WorkOrderEditor(BaseEditor):
         :param tab_label: the label that will be display on the tab
         :param slave: the slave that will be attached to the new tab
         """
-        event_box = gtk.EventBox()
-        self.slaves_notebook.append_page(event_box, gtk.Label(tab_label))
+        event_box = Gtk.EventBox()
+        self.slaves_notebook.append_page(event_box, Gtk.Label(label=tab_label))
         self.attach_slave(tab_label, slave, event_box)
         event_box.show()
 
@@ -186,8 +185,20 @@ class WorkOrderEditor(BaseEditor):
             for widget in [self.client, self.category, self.category_create]:
                 widget.set_sensitive(False)
 
-        if self.model.sellable:
-            self.sellable_desc.set_text(get_sellable_information(self.model.sellable))
+        self._update_sellable_desc()
+
+    def _update_sellable_desc(self):
+        sellable = self.model.sellable
+        if sellable is None:
+            return
+
+        if sellable.code:
+            desc = "%s - %s" % (sellable.code, sellable.description)
+        else:
+            desc = sellable.description
+
+        self.sellable_desc.set_text(desc)
+        self.sellable_desc.set_tooltip_text(desc)
 
     def _update_view(self):
         self.proxy.update('status_str')
@@ -204,11 +215,12 @@ class WorkOrderEditor(BaseEditor):
             not has_open_inventory and not self.visual_mode)
 
         has_items = bool(self.model.order_items.count())
+        branch = api.get_current_branch(self.store)
         if self.model.can_approve():
             label = _("Approve")
-        elif self.model.can_work() and not has_items:
+        elif self.model.can_work(branch) and not has_items:
             label = _("Start")
-        elif self.model.can_work():
+        elif self.model.can_work(branch):
             label = _("Continue")
         elif self.model.can_pause():
             label = _("Pause")
@@ -221,7 +233,7 @@ class WorkOrderEditor(BaseEditor):
 
         stock_id, tooltip = get_workorder_state_icon(self.model)
         if stock_id is not None:
-            self.state_icon.set_from_stock(stock_id, gtk.ICON_SIZE_MENU)
+            self.state_icon.set_from_icon_name(stock_id, Gtk.IconSize.MENU)
             self.state_icon.set_visible(True)
             self.state_icon.set_tooltip_text(tooltip)
         else:
@@ -265,10 +277,12 @@ class WorkOrderEditor(BaseEditor):
             self.category.select(self.store.fetch(rv))
 
     def _maybe_toggle_status(self):
+        user = api.get_current_user(self.store)
+        branch = api.get_current_branch(self.store)
         if self.model.can_approve():
-            self.model.approve()
-        elif self.model.can_work():
-            self.model.work()
+            self.model.approve(user)
+        elif self.model.can_work(branch):
+            self.model.work(branch, user)
         elif self.model.can_pause():
             msg_text = _(u"This will pause the order. Are you sure?")
             rv = run_dialog(
@@ -276,7 +290,7 @@ class WorkOrderEditor(BaseEditor):
                 message_text=msg_text, label_text=_(u"Reason"), mandatory=True)
             if not rv:
                 return
-            self.model.pause(reason=rv.notes)
+            self.model.pause(user, reason=rv.notes)
 
         self._update_view()
         self.history_slave.update_items()
@@ -310,8 +324,8 @@ class WorkOrderEditor(BaseEditor):
             return
 
         sellable = ret.sellable
-        self.sellable_desc.set_text(get_sellable_information(sellable))
         self.model.sellable = sellable
+        self._update_sellable_desc()
         self.quantity.set_sensitive(True)
 
 
@@ -365,7 +379,8 @@ class WorkOrderPackageSendEditor(BaseEditor):
             # If note is false (that is, an empty string) pass None
             # to force the history's notes being set as null
             notes = order_view.notes if order_view.notes else None
-            self.model.add_order(order_view.work_order, notes=notes)
+            self.model.add_order(order_view.work_order, api.get_current_user(self.store),
+                                 notes=notes)
 
         self.model.send()
 
@@ -386,10 +401,10 @@ class WorkOrderPackageSendEditor(BaseEditor):
             Column('equipment', _(u"Equipment (Description)"), data_type=str,
                    expand=True, pack_end=True),
             Column('category_color', title=_(u'Equipment'),
-                   column='equipment', data_type=gtk.gdk.Pixbuf,
+                   column='equipment', data_type=GdkPixbuf.Pixbuf,
                    format_func=render_pixbuf),
             Column('flag_icon', title=_(u'Equipment'), column='equipment',
-                   data_type=gtk.gdk.Pixbuf, format_func_data=True,
+                   data_type=GdkPixbuf.Pixbuf, format_func_data=True,
                    format_func=self._format_state_icon),
             Column('branch_name', _(u"Branch"), data_type=str, visible=False),
             Column('client_name', _(u"Client"), data_type=str),
@@ -408,9 +423,7 @@ class WorkOrderPackageSendEditor(BaseEditor):
     def _format_state_icon(self, item, data):
         stock_id, tooltip = get_workorder_state_icon(item.work_order)
         if stock_id is not None:
-            # We are using self.identifier because render_icon is a
-            # gtk.Widget's # method. It has nothing to do with results tough.
-            return self.identifier.render_icon(stock_id, gtk.ICON_SIZE_MENU)
+            return render_icon(stock_id, Gtk.IconSize.MENU)
 
     def _find_workorders(self):
         current_branch = api.get_current_branch(self.store)
@@ -428,8 +441,8 @@ class WorkOrderPackageSendEditor(BaseEditor):
             yield workorder
 
     def _prefill_branches(self):
-        branches = Branch.get_active_remote_branches(self.store)
         current_branch = api.get_current_branch(self.store)
+        branches = Branch.get_active_remote_branches(self.store, current_branch)
 
         # Branches not allowed to execute foreign work orders can only send
         # orders for those who can
@@ -471,3 +484,22 @@ class WorkOrderPackageSendEditor(BaseEditor):
         model = self.workorders.get_selected().work_order
         run_dialog(WorkOrderEditor, self, self.store,
                    model=model, visual_mode=True)
+
+
+class WorkOrderCheckEditor(BaseEditor):
+    title = _('Check order')
+    model_type = Settable
+    confirm_widgets = ['responsible']
+
+    @cached_property()
+    def fields(self):
+        user = api.for_combo(self.store.find(Employee), empty='')
+        return collections.OrderedDict(
+            responsible=ChoiceField(_("Responsible"), mandatory=True,
+                                    use_entry=True, proxy=True,
+                                    values=user),
+            notes=TextField(_('Notes'), proxy=True),
+        )
+
+    def create_model(self, store):
+        return Settable(responsible=None, notes="")

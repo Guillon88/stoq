@@ -26,6 +26,7 @@ import unittest
 from decimal import Decimal
 
 import mock
+
 from stoqlib.domain.account import Account
 from stoqlib.domain.payment.category import PaymentCategory
 from stoqlib.domain.payment.payment import Payment
@@ -35,7 +36,8 @@ from stoqlib.gui.editors.paymenteditor import (_ONCE, InPaymentEditor,
                                                OutPaymentEditor,
                                                LonelyPaymentDetailsDialog)
 from stoqlib.gui.test.uitestutils import GUITest
-from stoqlib.lib.dateutils import INTERVALTYPE_WEEK, localdate, localtoday
+from stoqlib.lib.dateutils import (INTERVALTYPE_WEEK, INTERVALTYPE_MONTH,
+                                   localdate, localtoday)
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
@@ -49,13 +51,29 @@ class TestPaymentEditor(GUITest):
         self.assertTrue(isinstance(editor.model, Payment))
         # FIXME: In the long run this should be moved into the domain,
         #        Like Domain.create_empty() or so
-        self.assertEquals(editor.model.payment_type, Payment.TYPE_IN)
-        self.assertEquals(editor.model.method.method_name, u'money')
-        self.assertEquals(editor.model.description, u'')
-        self.assertEquals(editor.model.status, Payment.STATUS_PENDING)
-        self.assertEquals(editor.model.value, 0)
-        self.assertEquals(editor.model.category, None)
+        self.assertEqual(editor.model.payment_type, Payment.TYPE_IN)
+        self.assertEqual(editor.model.method.method_name, u'money')
+        self.assertEqual(editor.model.description, u'')
+        self.assertEqual(editor.model.status, Payment.STATUS_PENDING)
+        self.assertEqual(editor.model.value, 0)
+        self.assertEqual(editor.model.category, None)
         self.check_editor(editor, 'editor-in-payment-create')
+
+    @mock.patch('stoqlib.gui.editors.paymenteditor.get_current_branch')
+    def test_create_for_another_branch(self, current_branch):
+        branch = self.create_branch()
+
+        with self.sysparam(SYNCHRONIZED_MODE=True):
+            editor = OutPaymentEditor(self.store)
+            current_branch.return_value = branch
+            editor.description.update('Payment name')
+            editor.value.update(100)
+            editor.due_date.update(localdate(2015, 1, 1).date())
+            editor.repeat.update(INTERVALTYPE_MONTH)
+            editor.end_date.update(localdate(2016, 1, 10).date())
+            editor.main_dialog.confirm()
+
+        self.assertEquals(editor.model.identifier, -1)
 
     def test_edit_paid_out_payment(self):
         payment = self.create_payment()
@@ -130,11 +148,11 @@ class TestPaymentEditor(GUITest):
 
     def test_value_validation(self):
         editor = InPaymentEditor(self.store)
-        self.assertEquals(unicode(editor.value.emit('validate', None)),
-                          u"The value must be greater than zero.")
+        self.assertEqual(str(editor.value.emit('validate', None)),
+                         u"The value must be greater than zero.")
 
-        self.assertEquals(unicode(editor.value.emit('validate', -1)),
-                          u"The value must be greater than zero.")
+        self.assertEqual(str(editor.value.emit('validate', -1)),
+                         u"The value must be greater than zero.")
         self.assertFalse(editor.value.emit('validate', 10))
 
     def test_show_out(self):
@@ -208,9 +226,9 @@ class TestPaymentEditor(GUITest):
     def test_show_sale_dialog(self, run_dialog):
         sale = self.create_sale()
         self.add_product(sale)
-        sale.order()
+        sale.order(self.current_user)
         self.add_payments(sale, method_type=u'money')
-        sale.confirm()
+        sale.confirm(self.current_user)
 
         p = sale.payments[0]
 
@@ -223,7 +241,7 @@ class TestPaymentEditor(GUITest):
         # sale_view = SaleView.get(editor.model.group.sale.id, store=self.store)
         # run_dialog.assert_called_once_with(SaleDetailsDialog, editor,
         #                                   editor.store, sale_view)
-        self.assertEquals(run_dialog.call_count, 1)
+        self.assertEqual(run_dialog.call_count, 1)
 
     @mock.patch('stoqlib.gui.editors.paymenteditor.run_dialog')
     def test_show_stock_decrease_dialog(self, run_dialog):

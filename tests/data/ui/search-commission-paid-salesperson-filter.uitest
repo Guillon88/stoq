@@ -1,13 +1,13 @@
 search: CommissionSearch
 GtkDialog(toplevel): title='Search for Commissions', hidden
-  GtkVBox(_main_vbox):
-    GtkVBox(vbox, expand=True, fill=True):
+  GtkBox(_main_vbox, orientation=vertical):
+    GtkBox(vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(header): hidden
       GtkEventBox(main, expand=True, fill=True, padding=6): slave SearchSlave is attached
-        GtkVBox(vbox):
-          GtkHBox(fill=True, padding=6):
-            GtkVBox(filters_box, padding=6):
-              GtkHBox(hbox):
+        GtkBox(vbox, orientation=vertical):
+          GtkBox(orientation=horizontal, fill=True, padding=6):
+            GtkBox(filters_box, orientation=vertical, padding=6):
+              GtkBox(hbox, orientation=horizontal):
                 ComboSearchFilter(_salesperson_filter):
                   GtkLabel(): 'Sold by:'
                   ProxyComboBox(padding=6):
@@ -19,15 +19,12 @@ GtkDialog(toplevel): title='Search for Commissions', hidden
                     item: 'Osvaldo Denadai Marin'
                     item: 'SalesPerson'
                     item: 'SalesPerson (1)'
-                SearchFilter(_primary_filter):
+                StringSearchFilter(_primary_filter):
                   GtkLabel(): 'Search:'
                   ProxyComboBox(padding=6): hidden
                     item: 'Contains All Words', selected
-                    item: 'Contains Exactly'
-                    item: 'Identical to'
-                    item: 'Does Not Contain'
-                  HintedEntry(search_entry, padding=6): ''
-                GtkButton(search_button): 'gtk-find'
+                  GtkEntry(search_entry, padding=6): ''
+                stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(search_button): 'Find'
               DateSearchFilter(_date_filter):
                 GtkLabel(): 'Date:'
                 ProxyComboBox(padding=6):
@@ -42,7 +39,7 @@ GtkDialog(toplevel): title='Search for Commissions', hidden
                 ProxyDateEntry(padding=6): datetime.date(2010, 1, 1), invalid
                 GtkLabel(): 'To:'
                 ProxyDateEntry(padding=6): datetime.date(2012, 2, 15), invalid
-          SearchResultListView(result_view, expand=True, fill=True):
+          SearchResultListView(results, expand=True, fill=True):
             column: title='Sale #'
             column: title='Salesperson', expand
             column: title='Method'
@@ -51,23 +48,24 @@ GtkDialog(toplevel): title='Search for Commissions', hidden
             column: title='Date'
             column: title='Payment value'
             column: title='Sale total'
-            row: 85412, u'Maria Aparecida Ardana', u'Money', Decimal('0E-20'), <currency $ 0>, datetime.datetime(2012, 2, 15, 0, 0), Decimal('-10.00'), Decimal('0')
-      GtkHBox(fill=True):
+            row: 85412, 'Maria Aparecida Ardana', 'Money', Decimal('0E-20'), <currency $0>, datetime.datetime(2012, 2, 15, 0, 0), Decimal('-10.00'), Decimal('0')
+      GtkBox(orientation=horizontal, fill=True):
         GtkLabel(expand=True, fill=True):
-        GtkLabel(payments_label): 'Total payments: $ -10.00'
-        GtkLabel(sales_label): 'Total sales: $ 0.00'
-      GtkHBox(fill=True):
+        GtkLabel(payments_label): 'Total payments: $-10.00'
+        GtkLabel(sales_label): 'Total sales: $0.00'
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(extra_holder, expand=True, fill=True, padding=6):
         GtkEventBox(print_holder, expand=True, fill=True):
         GtkEventBox(notice, fill=True):
         GtkEventBox(details_holder, padding=6, pack-end): slave _SearchDialogDetailsSlave is attached
-          GtkVBox(toplevel):
-            GtkHBox(hbox1, fill=True):
+          GtkBox(vbox1, orientation=vertical):
+            GtkBox(hbox1, orientation=horizontal, fill=True):
               GtkLabel(label3, expand=True, fill=True):
-              GtkHButtonBox(hbuttonbox1, fill=True):
-                GtkButton(details_button): hidden
-                GtkButton(print_button): 'gtk-print'
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
-      GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden, insensitive
-      GtkButton(csv_button, padding=6): 'Export to spreadsheet...'
+              GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+                GtkButton(details_button, expand=True, fill=True): hidden
+                GtkButton(print_button, expand=True, fill=True): 'gtk-print'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
+        GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden, insensitive
+        GtkButton(csv_button, padding=6): 'Export to spreadsheet...'

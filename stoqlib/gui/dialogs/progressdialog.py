@@ -23,8 +23,7 @@
 ##
 ##
 
-import glib
-import gtk
+from gi.repository import Gtk, GLib
 from kiwi.ui.delegates import GladeDelegate
 from kiwi.utils import gsignal
 
@@ -57,7 +56,7 @@ class ProgressDialog(GladeDelegate):
         self._timeout_id = -1
         self._start_id = -1
         self.label.set_label(label)
-        self.toplevel.set_position(gtk.WIN_POS_CENTER)
+        self.toplevel.set_position(Gtk.WindowPosition.CENTER)
 
     def start(self, wait=50):
         """Start the task, it'll pulsate the progress bar until stop() is called
@@ -65,25 +64,33 @@ class ProgressDialog(GladeDelegate):
           to 50
         """
         if self._pulse:
-            self._timeout_id = glib.timeout_add(100, self._pulse_timeout)
-        self._start_id = glib.timeout_add(wait, self._real_start)
+            self._timeout_id = GLib.timeout_add(100, self._pulse_timeout)
+        self._start_id = GLib.timeout_add(wait, self._real_start)
 
     def stop(self):
         """Stops pulsating and hides the dialog
         """
         self.hide()
         if self._timeout_id != -1:
-            glib.source_remove(self._timeout_id)
+            GLib.source_remove(self._timeout_id)
             self._timeout_id = -1
         if self._start_id != -1:
-            glib.source_remove(self._start_id)
+            GLib.source_remove(self._start_id)
             self._start_id = -1
 
     def set_label(self, label):
         """Update the label of the dialog
+
         :param label: the new content of the label
         """
         self.label.set_label(label)
+
+    def set_text(self, text):
+        """Update the progress bar text
+
+        :param text: the text to set the progress bar to
+        """
+        self.progressbar.set_text(text)
 
     #
     # Private and callbacks

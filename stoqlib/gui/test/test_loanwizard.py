@@ -22,7 +22,7 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-import gtk
+from gi.repository import Gtk
 import mock
 
 from stoqlib.api import api
@@ -89,18 +89,18 @@ class TestNewLoanWizard(GUITest):
         with mock.patch(module) as emit:
             with mock.patch.object(self.store, 'commit'):
                 self.click(wizard.next_button)
-            self.assertEquals(emit.call_count, 1)
+            self.assertEqual(emit.call_count, 1)
             args, kwargs = emit.call_args
             self.assertTrue(isinstance(args[0], Loan))
         self.check_wizard(wizard, 'new-loan-wizard-item-step',
                           [wizard.retval, loan_item])
 
         yesno.assert_called_once_with('Would you like to print the receipt now?',
-                                      gtk.RESPONSE_YES, 'Print receipt', "Don't print")
-        self.assertEquals(print_report.call_count, 1)
+                                      Gtk.ResponseType.YES, 'Print receipt', "Don't print")
+        self.assertEqual(print_report.call_count, 1)
 
         # verifies if stock was decreased correctly
-        self.assertEquals(storable.get_balance_for_branch(branch), 0)
+        self.assertEqual(storable.get_balance_for_branch(branch), 0)
 
 
 class TestCloseLoanWizard(GUITest):
@@ -134,7 +134,7 @@ class TestCloseLoanWizard(GUITest):
         module = 'stoqlib.gui.events.CloseLoanWizardFinishEvent.emit'
         with mock.patch(module) as emit:
             self.click(wizard.next_button)
-            self.assertEquals(emit.call_count, 1)
+            self.assertEqual(emit.call_count, 1)
             args, kwargs = emit.call_args
             # The event emits a list of loans
             self.assertTrue(isinstance(args[0], list))
@@ -144,13 +144,13 @@ class TestCloseLoanWizard(GUITest):
                           wizard.retval + [loan_item])
 
         new_total_sales = self.store.find(Sale, status=Sale.STATUS_ORDERED).count()
-        self.assertEquals(total_sales + 1, new_total_sales)
+        self.assertEqual(total_sales + 1, new_total_sales)
 
         # Checks if stock is correct. 10 items were loaned, 2 were
         # returned and 2 were sold, so those 2 should be have been returned to
         # branch's stock
         branch = loan.branch
-        self.assertEquals(loan_item.storable.get_balance_for_branch(branch), 2)
+        self.assertEqual(loan_item.storable.get_balance_for_branch(branch), 2)
 
         info.assert_called_once_with('Close loan details...',
                                      "A sale was created from loan items. "

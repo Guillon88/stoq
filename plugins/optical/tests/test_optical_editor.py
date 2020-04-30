@@ -28,8 +28,9 @@ import mock
 from stoqlib.domain.person import Person
 from stoqlib.gui.test.uitestutils import GUITest
 
-from ..opticaldomain import OpticalMedic
-from ..opticaleditor import MedicEditor, OpticalWorkOrderEditor
+from ..opticaldomain import OpticalMedic, OpticalProduct
+from ..opticaleditor import (MedicEditor, OpticalWorkOrderEditor,
+                             OpticalSupplierEditor)
 from .test_optical_domain import OpticalDomainTest
 
 
@@ -76,3 +77,37 @@ class TestOpticalWorkOrderEditor(GUITest, OpticalDomainTest):
         add_entry.assert_called_once_with(
             self.store, optical_wo.work_order, what=u"Optical details",
             notes=u"Optical details updated...")
+
+
+class TestOpticalSupplierEditor(GUITest, OpticalDomainTest):
+
+    def test_show(self):
+        product = self.create_product()
+        opt_type = OpticalProduct.TYPE_GLASS_LENSES
+        optical_product = self.create_optical_product(optical_type=opt_type)
+        optical_product.product = product
+        wo = self.create_workorder()
+        wo.add_sellable(product.sellable)
+
+        editor = OpticalSupplierEditor(self.store, wo)
+        self.check_editor(editor, 'editor-supplier-create')
+
+    def test_validation(self):
+        supplier = self.create_supplier()
+        product = self.create_product()
+        opt_type = OpticalProduct.TYPE_GLASS_LENSES
+        optical_product = self.create_optical_product(optical_type=opt_type)
+        optical_product.product = product
+        wo = self.create_workorder()
+        wo.add_sellable(product.sellable)
+
+        editor = OpticalSupplierEditor(self.store, wo)
+
+        # The information of this editor are mandatory
+        self.assertFalse(editor.main_dialog.ok_button.get_sensitive())
+
+        editor.supplier_order.update('order')
+        self.assertFalse(editor.main_dialog.ok_button.get_sensitive())
+
+        editor.supplier.update(supplier)
+        self.assertTrue(editor.main_dialog.ok_button.get_sensitive())

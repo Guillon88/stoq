@@ -1,5 +1,5 @@
 dialog: LoanDetailsDialog
-GtkVBox(details_vbox):
+GtkBox(toplevel, orientation=vertical):
   GtkTable(table1, fill=True, padding=6):
     ProxyLabel(kiwilabel1): 'Open Date:'
     ProxyLabel(open_date): '<span >YYYY-MM-DD</span>'
@@ -13,12 +13,13 @@ GtkVBox(details_vbox):
     ProxyLabel(responsible_name): '<span >Administrator</span>'
     ProxyLabel(kiwilabel6): 'Client:'
     ProxyLabel(client_name): '<span ></span>'
-  GtkVBox(products_vbox, expand=True, fill=True, padding=3):
-    ObjectList(product_list, expand=True, fill=True):
-      column: title='Code'
-      column: title='Description', expand
-      column: title='Quantity'
-      column: title='Sold'
-      column: title='Returned'
-      column: title='Price'
-      row: u'', u'Description', Decimal('1.000'), Decimal('0.000'), Decimal('0.000'), <currency $10>
+  GtkNotebook(details_notebook, expand=True, fill=True):
+    GtkBox(products_vbox, orientation=vertical):
+      ObjectList(product_list, expand=True, fill=True):
+        column: title='Code'
+        column: title='Description', expand
+        column: title='Quantity'
+        column: title='Sold'
+        column: title='Returned'
+        column: title='Price'
+        row: '', 'Description', Decimal('1.000'), Decimal('0.000'), Decimal('0.000'), <currency $10>

@@ -25,11 +25,12 @@
 
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 import string
 from kiwi.ui.objectlist import Column
 from kiwi.datatypes import ValidationError
 
+from stoqlib.api import api
 from stoqlib.domain.person import Person
 from stoqlib.domain.workorder import WorkOrder, WorkOrderItem
 from stoqlib.gui.dialogs.batchselectiondialog import BatchDecreaseSelectionDialog
@@ -42,6 +43,7 @@ from stoqlib.gui.wizards.workorderquotewizard import (WorkOrderQuoteWizard,
                                                       WorkOrderQuoteWorkOrderStep,
                                                       WorkOrderQuoteItemStep)
 from stoqlib.lib.message import yesno
+from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext as _
 
 from .opticaldomain import OpticalWorkOrder, OpticalMedic, OpticalProduct
@@ -79,17 +81,22 @@ class OpticalWorkOrderStep(WorkOrderQuoteWorkOrderStep):
 
     def __init__(self, store, wizard, previous, model):
         self._current_work_order = 0
+        self._parent = wizard
         WorkOrderQuoteWorkOrderStep.__init__(self, store, wizard, previous, model)
 
     def next_step(self):
         return OpticalItemStep(self.wizard, self, self.store, self.model)
 
     def get_work_order_slave(self, work_order):
-        desc = unicode(string.ascii_uppercase[self._current_work_order])
-        self._current_work_order += 1
+        if not sysparam.get_bool('CUSTOM_WORK_ORDER_DESCRIPTION'):
+            desc = str(work_order.identifier)
+        else:
+            desc = str(string.ascii_uppercase[self._current_work_order])
+            self._current_work_order += 1
         return WorkOrderOpticalSlave(self.store, work_order,
                                      show_finish_date=True,
-                                     description=desc)
+                                     description=desc,
+                                     parent=self._parent)
 
 
 class OpticalItemStep(WorkOrderQuoteItemStep):
@@ -113,9 +120,11 @@ class OpticalItemStep(WorkOrderQuoteItemStep):
 
     def get_order_item(self, sellable, price, quantity, batch=None, parent=None):
         if parent:
-            component_quantity = self.get_component_quantity(parent, sellable)
+            component = self.get_component(parent, sellable)
+            price = component.price
+            quantity = parent.quantity * component.quantity
+        elif sellable.product.is_package:
             price = Decimal('0')
-            quantity = parent.quantity * component_quantity
         sale_item = super(OpticalItemStep, self).get_order_item(
             sellable, price, quantity, batch=batch, parent=parent)
         self._setup_patient(sale_item)
@@ -142,7 +151,7 @@ class OpticalItemStep(WorkOrderQuoteItemStep):
         if auto_reserve:
             quantity_to_reserve = min(balance, sale_item.quantity)
             if quantity_to_reserve:
-                sale_item.reserve(quantity_to_reserve)
+                sale_item.reserve(api.get_current_user(self.store), quantity_to_reserve)
 
         wo_item.quantity_decreased = sale_item.quantity_decreased
         return sale_item
@@ -191,7 +200,7 @@ class OpticalSaleQuoteWizard(WorkOrderQuoteWizard):
     def print_quote_details(self, model, payments_created=False):
         msg = _('Would you like to print the quote details now?')
         # We can only print the details if the quote was confirmed.
-        if yesno(msg, gtk.RESPONSE_YES,
+        if yesno(msg, Gtk.ResponseType.YES,
                  _("Print quote details"), _("Don't print")):
             orders = WorkOrder.find_by_sale(self.model.store, self.model)
             print_report(OpticalWorkOrderReceiptReport, list(orders))

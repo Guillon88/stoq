@@ -24,12 +24,13 @@
 """
 Base class for sharing code between accounts payable and receivable."""
 
-import urllib
+import urllib.request
+import urllib.parse
+import urllib.error
 
 from dateutil.relativedelta import relativedelta
 
-import gtk
-import pango
+from gi.repository import Gtk, Pango
 from stoqlib.enums import SearchFilterPosition
 from stoqlib.api import api
 from stoqlib.domain.payment.category import PaymentCategory
@@ -69,7 +70,7 @@ class BaseAccountWindow(ShellApp):
     def create_ui(self):
         if api.sysparam.get_bool('SMART_LIST_LOADING'):
             self.search.enable_lazy_search()
-        self.results.set_selection_mode(gtk.SELECTION_MULTIPLE)
+        self.results.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         self.search.set_summary_label(column='value',
                                       label='<b>%s</b>' % (_('Total'), ),
                                       format='<b>%s</b>',
@@ -99,12 +100,12 @@ class BaseAccountWindow(ShellApp):
                 else:
                     msg = _("No payments to pay found.")
             elif v.startswith('category:'):
-                category = v.split(':')[1].encode('utf-8')
+                category = v.split(':')[1]
 
                 not_found = _("No payments in the <b>%s</b> category were found.") % (
                     api.escape(category), )
                 payment_url = '<a href="new_payment?%s">%s</a>?' % (
-                    urllib.quote(category),
+                    urllib.parse.quote(category),
                     _("create a new payment"))
                 msg = "%s\n\n%s" % (
                     not_found,
@@ -271,7 +272,7 @@ class BaseAccountWindow(ShellApp):
         return False
 
     def _on_results__cell_data_func(self, column, renderer, pv, text):
-        if not isinstance(renderer, gtk.CellRendererText):
+        if not isinstance(renderer, Gtk.CellRendererText):
             return text
 
         state = self.main_filter.get_state()
@@ -293,14 +294,14 @@ class BaseAccountWindow(ShellApp):
         if show_strikethrough:
             renderer.set_property('strikethrough', True)
         if is_late:
-            renderer.set_property('weight', pango.WEIGHT_BOLD)
+            renderer.set_property('weight', Pango.Weight.BOLD)
 
         return text
 
     def on_results__activate_link(self, results, uri):
         if uri.startswith('new_payment'):
             if '?' in uri:
-                category = urllib.unquote(uri.split('?', 1)[1])
+                category = urllib.parse.unquote(uri.split('?', 1)[1])
             else:
                 category = None
             self.add_payment(category=category)

@@ -25,7 +25,7 @@
 import decimal
 import logging
 
-import gtk
+from gi.repository import Gtk, Gdk
 from kiwi.datatypes import ValidationError
 from kiwi.ui.objectlist import Column
 
@@ -38,7 +38,7 @@ from stoqlib.gui.base.wizards import BaseWizard, BaseWizardStep
 from stoqlib.gui.dialogs.batchselectiondialog import BatchSelectionDialog
 from stoqlib.gui.wizards.abstractwizard import SellableItemStep
 from stoqlib.lib.defaults import MAX_INT
-from stoqlib.lib.message import warning
+from stoqlib.lib.message import warning, yesno
 from stoqlib.lib.formatters import format_quantity
 from stoqlib.lib.translation import stoqlib_gettext as _
 
@@ -52,7 +52,7 @@ class _TemporaryInventoryItem(object):
         self.description = sellable.description
         self.category_description = sellable.get_category_description()
         self.storable = storable
-        self.is_batch = self.storable.is_batch
+        self.is_batch = storable and self.storable.is_batch
         self.batches = {}
         self.changed = False
         if batch_number is not None:
@@ -96,7 +96,7 @@ class _InventoryBatchSelectionDialog(BatchSelectionDialog):
         # counted. That makes sense though, but we should find a way to
         # validate the batch properly (since storable/batch_number should
         # be unique)
-        batch_number = unicode(entry.get_text())
+        batch_number = str(entry.get_text())
         if not batch_number:
             return
 
@@ -117,15 +117,34 @@ class InventoryCountTypeStep(BaseWizardStep):
 
     def _read_import_file(self):
         data = {}
+        not_found = set()
         with open(self.import_file.get_filename()) as fh:
             for line in fh:
-                try:
-                    barcode, quantity = line[:-1].split(',')
-                    data[barcode] = int(quantity)
-                except ValueError:
-                    warning(_('It was not possible to import inventory count.'
-                              ' Check file format'))
-                    return
+                # The line should have 1 or 2 parts
+                parts = line[:-1].split(',')
+                assert 1 <= len(parts) <= 2
+
+                if len(parts) == 2:
+                    barcode, quantity = parts
+                elif len(parts) == 1:
+                    barcode = parts[0]
+                    if not barcode:
+                        continue
+                    quantity = 1
+
+                sellable = self.store.find(Sellable, barcode=str(barcode)).one()
+                if not sellable:
+                    sellable = self.store.find(Sellable, code=str(barcode)).one()
+
+                if not sellable:
+                    not_found.add(barcode)
+                    continue
+
+                data.setdefault(sellable, 0)
+                data[sellable] += int(quantity)
+
+        if not_found:
+            warning(_('Some barcodes were not found'), ', '.join(not_found))
 
         self.wizard.imported_count = data
 
@@ -136,7 +155,12 @@ class InventoryCountTypeStep(BaseWizardStep):
     def next_step(self):
         self.wizard.temporary_items.clear()
         if self.import_count.get_active():
-            self._read_import_file()
+            try:
+                self._read_import_file()
+            except Exception:
+                warning(_('It was not possible to import inventory count.'
+                          ' Check file format'))
+                return
         return InventoryCountItemStep(self.wizard, self,
                                       self.store, self.wizard.model)
 
@@ -183,7 +207,6 @@ class InventoryCountItemStep(SellableItemStep):
     sellable_editable = False
     stock_labels_visible = False
     batch_selection_dialog = _InventoryBatchSelectionDialog
-    add_sellable_on_barcode_activate = True
 
     #
     #  SellableItemStep
@@ -205,23 +228,65 @@ class InventoryCountItemStep(SellableItemStep):
         if self.wizard.manual_count:
             self.hide_item_addition_toolbar()
 
-        self.slave.klist.set_selection_mode(gtk.SELECTION_SINGLE)
+        self.slave.klist.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.slave.klist.connect('cell-edited', self._on_klist__cell_edited)
         self.slave.klist.connect('row-activated', self._on_klist__row_activated)
         self.slave.klist.set_cell_data_func(self._on_klist__cell_data_func)
 
         self.force_validation()
 
-    def get_order_item(self, sellable, cost, quantity, batch=None, parent=None):
-        if sellable not in self._inventory_sellables:
+    def run_advanced_search(self, search_str=None):
+        # In assisted inventory counting the user will probably use a barcode
+        # reader, so if the product was not found, show a message saying so
+        # instead of running a advanced search
+        self._show_error_message()
+        self.barcode.grab_focus()
+
+    def sellable_selected(self, sellable, batch=None):
+        super(InventoryCountItemStep, self).sellable_selected(sellable, batch)
+        if not self.proxy.model.sellable:
             return
 
+        self._hide_error_message()
+        Gdk.beep()
+        self._add_sellable(reset_proxy=False)
+
+    def try_get_sellable(self, grab_focus=True):
+        sellable, batch = self._get_sellable_and_batch()
+        if not sellable:
+            search_str = self.barcode.get_text()
+            self.run_advanced_search(search_str)
+            return
+
+        if not self.wizard.can_count_twice and self.proxy.model.sellable == sellable:
+            retval = yesno(_('The same product was just counted, do you want to '
+                             'count another one?'), Gtk.ResponseType.NO,
+                           _('Yes'), _('No'))
+            if not retval:
+                # Restoring the sensitivity of the button
+                self.quantity.set_sensitive(False)
+                self.add_sellable_button.set_sensitive(False)
+                self.barcode.grab_focus()
+                return
+        self.sellable_selected(sellable)
+        self.quantity.set_sensitive(grab_focus)
+        self.add_sellable_button.set_sensitive(grab_focus)
+
+    def get_order_item(self, sellable, cost, quantity, batch=None, parent=None):
         item = self.wizard.temporary_items.get(sellable, None)
-        # We populated all items on get_saved_items, so this should not be None
-        assert item is not None
+        if item is None:
+            # The item selected is not in the inventory. Add it now
+            product = sellable.product
+            storable = product.storable
+            current_quantity = 0
+            if storable:
+                current_quantity = storable.get_balance_for_branch(self.model.branch)
+            self.model.add_product(product, current_quantity)
+            item = _TemporaryInventoryItem(sellable, storable, 0)
+            self.wizard.temporary_items[sellable] = item
 
         if batch is not None:
-            assert isinstance(batch, basestring)
+            assert isinstance(batch, str)
             item.add_or_update_batch(batch, quantity)
         else:
             item.quantity += quantity
@@ -243,7 +308,7 @@ class InventoryCountItemStep(SellableItemStep):
                 continue
             else:
                 quantity = (item.counted_quantity or
-                            self.wizard.imported_count.pop(sellable.barcode, 0))
+                            self.wizard.imported_count.pop(sellable, 0))
                 tmp_item = _TemporaryInventoryItem(sellable, storable, quantity)
                 tmp_item.changed = item.counted_quantity is not None or quantity
                 self.wizard.temporary_items[sellable] = tmp_item
@@ -253,14 +318,18 @@ class InventoryCountItemStep(SellableItemStep):
         # There are counted itens in the imported file that were not in the
         # original inventory items. This means that this item was never stored
         # in this branch.
-        for barcode, quantity in self.wizard.imported_count.items():
+        for sellable, quantity in self.wizard.imported_count.items():
             if not quantity:
                 continue
-            sellable = self.store.find(Sellable, barcode=unicode(barcode)).one()
-            storable = sellable.product.storable
-            item = self.model.add_storable(storable, 0)
+            product = sellable.product
+            storable = product.storable
+            current_quantity = 0
+            if storable:
+                current_quantity = storable.get_balance_for_branch(self.model.branch)
+            item = self.model.add_product(product, current_quantity)
             tmp_item = _TemporaryInventoryItem(sellable, storable, quantity)
             self.wizard.temporary_items[sellable] = tmp_item
+            tmp_item.changed = True
             yield tmp_item
 
     def get_batch_items(self):
@@ -285,8 +354,8 @@ class InventoryCountItemStep(SellableItemStep):
             sellable, value, quantity)
 
     def get_columns(self):
-        adjustment = gtk.Adjustment(lower=0, upper=MAX_INT,
-                                    step_incr=1, page_incr=10)
+        adjustment = Gtk.Adjustment(lower=0, upper=MAX_INT,
+                                    step_increment=1, page_increment=10)
         return [
             Column('code', title=_('Code'), data_type=str, sorted=True),
             Column('description', title=_('Description'),
@@ -324,9 +393,30 @@ class InventoryCountItemStep(SellableItemStep):
             return ''
         return format_quantity(item.quantity)
 
+    def _show_error_message(self):
+        self.overlay.set_overlay_pass_through(self.box, False)
+        self.list_holder.set_property('opacity', decimal.Decimal('0.2'))
+        self.warning_label.set_property('opacity', decimal.Decimal('1'))
+        self.dismiss_label.set_property('opacity', decimal.Decimal('1'))
+        self.warning_label.set_text(_("Product not found"))
+        self.dismiss_label.set_text(' <a href="#">%s</a>' % (_("Dismiss")))
+        self.dismiss_label.set_use_markup(True)
+
+    def _hide_error_message(self):
+        self.overlay.set_overlay_pass_through(self.box, True)
+        self.list_holder.set_property('opacity', decimal.Decimal('1'))
+        self.warning_label.set_property('opacity', decimal.Decimal('0'))
+        self.dismiss_label.set_property('opacity', decimal.Decimal('0'))
+        # Just a precaution
+        self.warning_label.set_text("")
+        self.dismiss_label.set_text("")
+
     #
     #  Callbacks
     #
+
+    def on_dismiss_link__activate_link(self, widget, url):
+        self._hide_error_message()
 
     def _on_klist__cell_data_func(self, column, renderer, item, text):
         if column.attribute == 'quantity':
@@ -345,8 +435,8 @@ class InventoryCountItemStep(SellableItemStep):
             self.slave.klist.update(item)
             self._update_view()
 
-    def _on_klist__cell_edited(self, klist, item, attr):
-        if attr == 'quantity':
+    def _on_klist__cell_edited(self, klist, item, column):
+        if column.attribute == 'quantity':
             item.changed = True
 
         self._update_view()
@@ -367,7 +457,11 @@ class InventoryCountItemStep(SellableItemStep):
     def on_barcode__activate(self, widget):
         barcode = widget.get_text()
         log.info('Inventory barcode activate: %s', barcode)
-        self._try_get_sellable()
+        self.try_get_sellable(grab_focus=False)
+
+    def on_dismiss_label__activate_link(self, label, link):
+        self._hide_error_message()
+        return True
 
 
 class InventoryCountWizard(BaseWizard):
@@ -376,11 +470,13 @@ class InventoryCountWizard(BaseWizard):
     size = (800, 450)
     title = _('Inventory product counting')
     help_section = 'inventory-count'
+    need_cancel_confirmation = True
 
     def __init__(self, store, model):
         self.temporary_items = {}
         self.imported_count = {}
         self.manual_count = True
+        self.can_count_twice = api.sysparam.get_bool('ALLOW_SAME_SELLABLE_IN_A_ROW')
 
         first_step = InventoryCountTypeStep(store, self, previous=None)
         BaseWizard.__init__(self, store, first_step, model)

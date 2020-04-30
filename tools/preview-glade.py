@@ -2,7 +2,7 @@
 
 import sys
 
-import gtk
+from gi.repository import Gtk
 from kiwi.ui.hyperlink import HyperLink
 from kiwi.ui.objectlist import ObjectList, ObjectTree
 from kiwi.ui.widgets.label import ProxyLabel
@@ -34,18 +34,18 @@ ProxyTextView
 
 def main(args):
     if len(args) < 2:
-        print 'ERROR: need a filename'
+        print('ERROR: need a filename')
         return
 
-    b = gtk.Builder()
+    b = Gtk.Builder()
     b.add_from_file(args[1])
 
     for o in b.get_objects():
-        if isinstance(o, gtk.Window):
-            o.connect('destroy', gtk.main_quit)
+        if isinstance(o, Gtk.Window):
+            o.connect('destroy', Gtk.main_quit)
             o.show()
 
-    gtk.main()
+    Gtk.main()
 
 if __name__ == '__main__':
     main(sys.argv)

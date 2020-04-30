@@ -26,7 +26,7 @@
 from decimal import Decimal
 import datetime
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import ColoredColumn, Column
 from storm.expr import And
@@ -86,22 +86,23 @@ class CommissionSearch(SearchDialog):
     #
 
     def setup_widgets(self):
-        hbox = gtk.HBox()
+        hbox = Gtk.HBox()
         hbox.set_spacing(6)
 
-        self.vbox.pack_start(hbox, False, True)
+        self.vbox.pack_start(hbox, False, True, 0)
         self.vbox.reorder_child(hbox, 2)
         self.vbox.set_spacing(6)
 
-        hbox.pack_start(gtk.Label(), True, True)
+        label = Gtk.Label()
+        hbox.pack_start(label, True, True, 0)
 
         # Create two labels to show a summary for the search (kiwi's
         # SummaryLabel supports only one column)
-        self.payments_label = gtk.Label()
-        hbox.pack_start(self.payments_label, False, False)
+        self.payments_label = Gtk.Label()
+        hbox.pack_start(self.payments_label, False, False, 0)
 
-        self.sales_label = gtk.Label()
-        hbox.pack_start(self.sales_label, False, False)
+        self.sales_label = Gtk.Label()
+        hbox.pack_start(self.sales_label, False, False, 0)
         hbox.show_all()
 
         set_bold(self.payments_label)

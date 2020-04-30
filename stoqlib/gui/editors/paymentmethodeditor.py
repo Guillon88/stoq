@@ -47,13 +47,13 @@ This module contains the following editors and slaves:
 import collections
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
 from kiwi import ValueUnset
 from kiwi.ui.objectlist import Column
-from kiwi.ui.forms import ChoiceField, IntegerField
+from kiwi.ui.forms import ChoiceField, TextField
 
 from stoqlib.api import api
 from stoqlib.domain.account import Account
@@ -65,9 +65,11 @@ from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.base.lists import ModelListSlave
 from stoqlib.gui.editors.baseeditor import BaseEditorSlave, BaseEditor
+from stoqlib.gui.widgets.queryentry import SupplierEntryGadget
 from stoqlib.lib.decorators import cached_property
 from stoqlib.lib.formatters import get_formatted_percentage
 from stoqlib.lib.message import yesno, info
+from stoqlib.lib.pluginmanager import get_plugin_manager
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
@@ -126,10 +128,31 @@ class CardDeviceEditor(BaseEditor):
     model_name = _('Card Device')
     gladefile = 'CardDeviceEditor'
     model_type = CardPaymentDevice
-    # TODO: Add monthly_cost, maybe use formfields
-    proxy_widgets = ['description']
+    # TODO: maybe use formfields
+    proxy_widgets = ['supplier', 'description', 'monthly_cost']
     confirm_widgets = ['description']
     size = (600, 300)
+
+    #
+    # Private API
+    #
+
+    def _setup_widgets(self):
+        plugin_manager = get_plugin_manager()
+        is_active = plugin_manager.is_active('nfce')
+        if is_active:
+            self.supplier.set_property('mandatory', True)
+
+    def _setup_supplier_gadget(self):
+        self.supplier_gadget = SupplierEntryGadget(
+            entry=self.supplier,
+            store=self.store,
+            initial_value=self.model.supplier,
+            parent=None)
+
+    #
+    # Public API
+    #
 
     def create_model(self, store):
         return CardPaymentDevice(store=store)
@@ -139,8 +162,21 @@ class CardDeviceEditor(BaseEditor):
                                            reuse_store=True)
         self.attach_slave('cost_holder', slave)
 
+    #
+    # BaseEditor
+    #
+
     def setup_proxies(self):
+        self._setup_widgets()
+        self._setup_supplier_gadget()
         self.add_proxy(self.model, self.proxy_widgets)
+
+    #
+    # Kiwi Callbacks
+    #
+    def on_monthly_cost__validate(self, widget, value):
+        if value < 0:
+            return ValidationError(_('Value cannot be zero or negative'))
 
 
 class _TemporaryOperationCost(object):
@@ -190,7 +226,8 @@ class CardOperationCostEditor(BaseEditor):
         BaseEditor.__init__(self, store, model)
 
     def create_model(self, store):
-        provider = CreditProvider.get_card_providers(store).any()
+        provider = CreditProvider.get_card_providers(
+            self.store).order_by(CreditProvider.short_name).first()
         real_model = CardOperationCost(provider=provider, device=self.device,
                                        store=self.store)
         return _TemporaryOperationCost(real_model)
@@ -198,7 +235,8 @@ class CardOperationCostEditor(BaseEditor):
     def _setup_widgets(self):
         # Set a default provider, otherwise, if the user does not change the
         # combo, the provider may not be set (bug in kiwi)
-        providers = CreditProvider.get_card_providers(self.store)
+        providers = CreditProvider.get_card_providers(
+            self.store).order_by(CreditProvider.short_name)
         self.provider.prefill(api.for_combo(providers))
 
         types = [(value, key) for key, value in CreditCardData.types.items()]
@@ -300,8 +338,10 @@ class CreditProviderEditor(BaseEditor):
                                     CreditProviderEditor.proxy_widgets)
 
     def _setup_widgets(self):
-        """ Populate device widgets
-        """
+        """Populate device widgets and set some properties"""
+        # Let the user edit provider_id when creating a new one
+        self.provider_id.set_property('sensitive', not self.edit_mode)
+        self.provider_id.set_property('editable', not self.edit_mode)
         devices = CardPaymentDevice.get_devices(self.store)
         self.default_device.prefill(api.for_combo(devices,
                                                   empty=_(u"No device")))
@@ -331,7 +371,7 @@ class CardPaymentDetailsEditor(BaseEditor):
                                values=device_values),
             provider=ChoiceField(_('Provider'), proxy=True, mandatory=True,
                                  values=provider_values),
-            auth=IntegerField(_('Authorization'), proxy=True, mandatory=True)
+            auth=TextField(_('Authorization'), proxy=True, mandatory=True)
         )
 
     def on_confirm(self):
@@ -417,7 +457,7 @@ class ProviderListSlave(ModelListSlave):
             return False
 
         msg = _('Do you want remove %s?' % provider.short_name)
-        remove = yesno(msg, gtk.RESPONSE_NO, _('Remove'), _("Cancel"))
+        remove = yesno(msg, Gtk.ResponseType.NO, _('Remove'), _("Cancel"))
         if remove:
             self.delete_model(provider, self.store)
             self.remove_list_item(provider)
@@ -433,6 +473,8 @@ class CardDeviceListSlave(ModelListSlave):
     columns = [
         Column('description', title=_('Description'),
                data_type=str, expand=True),
+        Column('monthly_cost', title=_('Monthly cost'),
+               data_type=currency, expand=True)
     ]
 
     def populate(self):
@@ -447,7 +489,7 @@ class CardDeviceListSlave(ModelListSlave):
                    % providers))
             return False
         msg = _('Removing this device will also remove all related costs.')
-        remove = yesno(msg, gtk.RESPONSE_NO, _('Remove'), _("Keep device"))
+        remove = yesno(msg, Gtk.ResponseType.NO, _('Remove'), _("Keep device"))
         if remove:
             device.delete(device.id, self.store)
             self.remove_list_item(device)

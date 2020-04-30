@@ -25,13 +25,14 @@
 """Main gui definition for services application"""
 
 import datetime
-import urllib
+import urllib.request
+import urllib.parse
+import urllib.error
 
-import gtk
+from gi.repository import Gtk, GdkPixbuf, Pango, GLib
 from kiwi.currency import currency
 from kiwi.ui.gadgets import render_pixbuf
 from kiwi.ui.objectlist import Column
-import pango
 from storm.expr import And, Or, Eq
 from zope.interface import implementer
 
@@ -40,10 +41,10 @@ from stoqlib.domain.workorder import (WorkOrder, WorkOrderCategory,
                                       WorkOrderView)
 from stoqlib.enums import SearchFilterPosition
 from stoqlib.exceptions import InvalidStatus, NeedReason
+from stoqlib.gui.actions.workorder import WorkOrderActions
+from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.dialogs.workordercategorydialog import WorkOrderCategoryDialog
 from stoqlib.gui.editors.noteeditor import NoteEditor, Note
-from stoqlib.gui.editors.workordereditor import (WorkOrderEditor,
-                                                 WorkOrderPackageSendEditor)
 from stoqlib.gui.interfaces import ISearchResultView
 from stoqlib.gui.search.personsearch import ClientSearch
 from stoqlib.gui.search.productsearch import ProductSearch
@@ -51,18 +52,13 @@ from stoqlib.gui.search.searchcolumns import IdentifierColumn, SearchColumn
 from stoqlib.gui.search.searchfilters import ComboSearchFilter, DateSearchFilter
 from stoqlib.gui.search.searchresultview import SearchResultListView
 from stoqlib.gui.search.servicesearch import ServiceSearch
-from stoqlib.gui.stockicons import STOQ_CLIENTS
+from stoqlib.gui.utils.iconutils import get_workorder_state_icon, render_icon
 from stoqlib.gui.utils.keybindings import get_accels
-from stoqlib.gui.utils.printing import print_report
-from stoqlib.gui.utils.workorderutils import get_workorder_state_icon
 from stoqlib.gui.widgets.kanbanview import KanbanView, KanbanViewColumn
-from stoqlib.gui.wizards.workorderpackagewizard import WorkOrderPackageReceiveWizard
-from stoqlib.lib.environment import is_developer_mode
-from stoqlib.lib.message import yesno, info
+from stoqlib.lib.message import info
 from stoqlib.lib.translation import stoqlib_gettext
-from stoqlib.reporting.workorder import (WorkOrdersReport,
-                                         WorkOrderReceiptReport,
-                                         WorkOrderQuoteReport)
+from stoqlib.reporting.workorder import WorkOrdersReport
+
 from stoq.gui.shell.shellapp import ShellApp
 
 _ = stoqlib_gettext
@@ -70,15 +66,65 @@ _ = stoqlib_gettext
 
 @implementer(ISearchResultView)
 class WorkOrderResultKanbanView(KanbanView):
+    status_question_map = {
+        WorkOrder.STATUS_WORK_IN_PROGRESS: WorkOrderActions.reopen_question,
+        WorkOrder.STATUS_CANCELLED: WorkOrderActions.cancel_question,
+        WorkOrder.STATUS_WORK_WAITING: WorkOrderActions.waiting_question,
+        WorkOrder.STATUS_WORK_FINISHED: WorkOrderActions.uninform_question,
+    }
+
+    need_reason = [
+        (WorkOrder.STATUS_WORK_FINISHED, WorkOrder.STATUS_WORK_WAITING),
+        (WorkOrder.STATUS_WORK_FINISHED, WorkOrder.STATUS_WORK_IN_PROGRESS),
+        # from client informed column to status finished column
+        (WorkOrder.STATUS_WORK_FINISHED, WorkOrder.STATUS_WORK_FINISHED),
+        (WorkOrder.STATUS_WORK_IN_PROGRESS, WorkOrder.STATUS_WORK_WAITING),
+    ]
+
+    status_columns = [
+        WorkOrder.STATUS_OPENED,
+        WorkOrder.STATUS_WORK_WAITING,
+        WorkOrder.STATUS_WORK_IN_PROGRESS,
+        WorkOrder.STATUS_WORK_FINISHED
+    ]
+
+    def _ask_reason(self, work_order, new_status):
+        if (work_order.status, new_status) not in self.need_reason:
+            return None
+
+        if work_order.status == new_status and not work_order.is_informed():
+            # This will prevent the NoteEditor popup when drag and drop in the
+            # same column
+            return None
+
+        msg_text = self.status_question_map[new_status]
+        rv = run_dialog(NoteEditor, None, work_order.store, model=Note(),
+                        message_text=msg_text, label_text=_(u"Reason"),
+                        mandatory=True)
+        if not rv:
+            # False means abort the status change
+            return False
+
+        return rv.notes
 
     def _change_status(self, work_order, new_status):
         with api.new_store() as store:
+            work_order = store.fetch(work_order)
+
+            reason = self._ask_reason(work_order, new_status)
+            if reason is False:
+                store.retval = False
+                return
+
+            # FIXME Redo this logic, it wont unset if the user go further back on
+            # status
             if work_order.status == new_status:
+                if work_order.client_informed_date:
+                    work_order.unset_client_informed(reason)
                 return True
 
-            work_order = store.fetch(work_order)
             try:
-                work_order.change_status(new_status)
+                work_order.change_status(new_status, reason)
             except InvalidStatus as e:
                 info(str(e))
                 store.retval = False
@@ -89,36 +135,74 @@ class WorkOrderResultKanbanView(KanbanView):
 
         return store.retval
 
+    def _set_client_informed(self, view):
+        # Drag and drop on the same Column
+        if view.work_order.client_informed_date:
+            return
+
+        rv = run_dialog(NoteEditor, None,
+                        view.work_order.store,
+                        model=Note(),
+                        label_text=WorkOrderActions.inform_question,
+                        mandatory=True)
+        if not rv:
+            return
+
+        with api.new_store() as store:
+            work_order = store.fetch(view.work_order)
+            # Make the work_order go through all the status
+            if not work_order.is_finished():
+                work_order.change_status(WorkOrder.STATUS_WORK_FINISHED)
+
+            work_order.inform_client(rv.notes)
+
     # ISearchResultView
 
     def attach(self, search, columns):
         self.connect('item-dragged', self._on__item_dragged)
-        statuses = list(WorkOrder.statuses.values())
-        statuses.remove(_(u'Cancelled'))
-        statuses.remove(_(u'Delivered'))
-        for status_name in statuses:
-            column = KanbanViewColumn(title=status_name)
+        for status in self.status_columns:
+            name = WorkOrder.statuses[status]
+            column = KanbanViewColumn(title=name, value=status)
             self.add_column(column)
+
+        # Adding a new column which is not one of |work_order| status
+        self.add_column(KanbanViewColumn(title=_('Client informed'),
+                                         value='client_informed_date'))
         self.enable_editing()
 
     def enable_lazy_search(self):
         pass
 
     def search_completed(self, results):
+        # We are only interested in the workorders whose status are in one of our
+        # columns
+        results = results.find(WorkOrder.status.is_in(self.status_columns))
         for work_order_view in results.order_by(WorkOrder.open_date):
             work_order = work_order_view.work_order
             status_name = WorkOrder.statuses.get(work_order.status)
             # Skip cancel/delivered etc
             if status_name is None:
                 continue
+
+            # Since this column isnt one of the |work_order| status
+            if work_order.client_informed_date:
+                status_name = _('Client informed')
+
             column = self.get_column_by_title(status_name)
             if column is None:
                 continue
+
+            if work_order_view.sellable:
+                description = '%s - %s' % (
+                    work_order_view.sellable,
+                    work_order_view.description)
+            else:
+                description = work_order_view.description
+
             # FIXME: Figure out a better way of rendering
-            work_order_view.markup = '<b>%s - %s</b>\n%s\n%s' % (
-                work_order_view.sellable,
-                work_order_view.description,
-                unicode(api.escape(work_order_view.client_name)),
+            work_order_view.markup = '<b>%s</b>\n%s\n%s' % (
+                description,
+                str(api.escape(work_order_view.client_name)),
                 work_order_view.open_date.strftime('%x'))
 
             column.append_item(work_order_view)
@@ -129,16 +213,18 @@ class WorkOrderResultKanbanView(KanbanView):
     def render_item(self, column, renderer, work_order_view):
         renderer.props.margin_color = work_order_view.category_color
 
-    # Callbacks
+    #
+    # Kiwi Callbacks
+    #
 
     def _on__item_dragged(self, kanban, column, work_order_view):
-        for status, status_name in WorkOrder.statuses.items():
-            if status_name == column.title:
-                new_status = status
-                break
-        else:
-            raise AssertionError
+        new_status = column.value
+        if new_status == 'client_informed_date':
+            self._set_client_informed(work_order_view)
+            return True
 
+        # Moving through the |work_order|.status will remove the
+        # client_informed_date information
         return self._change_status(work_order_view.work_order,
                                    new_status)
 
@@ -183,6 +269,7 @@ class ServicesApp(ShellApp):
 
     def __init__(self, *args, **kwargs):
         self._other_kinds = {}
+        self.actions = WorkOrderActions.get_instance()
         super(ServicesApp, self).__init__(*args, **kwargs)
 
     #
@@ -192,13 +279,6 @@ class ServicesApp(ShellApp):
     def create_actions(self):
         group = get_accels('app.services')
         actions = [
-            # File
-            ("OrderMenu", None, _(u"Order")),
-            ("NewOrder", None, _(u"Work order..."),
-             group.get("new_order")),
-            ("SendOrders", None, _(u"Send orders...")),
-            ("ReceiveOrders", None, _(u"Receive orders...")),
-
             # Search
             ("Products", None, _(u"Products..."),
              group.get("search_products")),
@@ -206,72 +286,65 @@ class ServicesApp(ShellApp):
              group.get("search_services")),
             ("Categories", None, _(u"Categories..."),
              group.get("search_categories")),
-            ("Clients", STOQ_CLIENTS, _(u"Clients..."),
+            ("Clients", None, _(u"Clients..."),
              group.get("search_clients")),
-
-            # Order
-            ("Edit", gtk.STOCK_EDIT, _(u"Edit..."),
-             group.get('order_edit'),
-             _(u"Edit the selected order")),
-            ("Finish", gtk.STOCK_APPLY, _(u"Finish..."),
-             group.get('order_finish'),
-             _(u"Finish the selected order")),
-            ("Cancel", gtk.STOCK_CANCEL, _(u"Cancel..."),
-             group.get('order_cancel'),
-             _(u"Cancel the selected order")),
-            ("DeliverOrder", None, _(u"Deliver...")),
-            ("Details", gtk.STOCK_INFO, _(u"Details..."),
-             group.get('order_details'),
-             _(u"Show details of the selected order")),
-            ("PrintQuote", None, _(u"Print quote..."),
-             group.get('order_print_quote'),
-             _(u"Print a quote report of the selected order")),
-            ("PrintReceipt", None, _(u"Print receipt..."),
-             group.get('order_print_receipt'),
-             _(u"Print a receipt of the selected order")),
-            ("Approve", None, _(u"Approve...")),
-            ("Pause", None, _(u"Pause the work...")),
-            ("Work", None, _(u"Start the work...")),
-            ("Reject", None, _(u"Reject order...")),
-            ("UndoRejection", None, _(u"Undo order rejection...")),
-            ("Reopen", None, _(u"Reopen order...")),
         ]
-        self.services_ui = self.add_ui_actions("", actions,
-                                               filename="services.xml")
-
+        self.services_ui = self.add_ui_actions(actions)
         radio_actions = [
             ('ViewKanban', '', _("View as Kanban"),
              '', _("Show in Kanban mode")),
             ('ViewList', '', _("View as List"),
              '', _("Show in list mode")),
         ]
-        self.add_ui_actions('', radio_actions, 'RadioActions',
-                            'radio')
-
-        if is_developer_mode():
-            self.ViewList.props.active = True
-        else:
-            self.ViewList.props.visible = False
-            self.ViewKanban.props.visible = False
-        self.Edit.set_short_label(_(u"Edit"))
-        self.Finish.set_short_label(_(u"Finish"))
-        self.Edit.props.is_important = True
-        self.Finish.props.is_important = True
-
+        self.add_ui_actions(radio_actions, 'RadioActions')
         self.set_help_section(_(u"Services help"), 'app-services')
-        self.popup = self.uimanager.get_widget('/ServicesSelection')
+
+    def get_domain_options(self):
+        options = [
+            ('fa-info-circle-symbolic', _('Details'), 'work_order.Details', True),
+            ('fa-edit-symbolic', _('Edit'), 'work_order.Edit', True),
+            ('fa-check-symbolic', _('Finish'), 'work_order.FinishOrClose', True),
+            ('fa-ban-symbolic', _('Cancel'), 'work_order.Cancel', True),
+
+            ('', _('Deliver'), 'work_order.Close', False),
+            # Separator
+            ('', _('Approve'), 'work_order.Approve', False),
+            ('', _('Pause the work'), 'work_order.Pause', False),
+            ('', _('Start the work'), 'work_order.Work', False),
+            ('', _('Reject order'), 'work_order.Reject', False),
+            ('', _('Check order'), 'work_order.CheckOrder', False),
+            ('', _('Inform client'), 'work_order.InformClient', False),
+            ('', _('Undo order rejection'), 'work_order.UndoRejection', False),
+            ('', _('Repoen order'), 'work_order.Reopen', False),
+            # Separator
+            ('', _('Print quote'), 'work_order.PrintQuote', False),
+            ('', _('Print receipt'), 'work_order.PrintReceipt', False),
+        ]
+        return options
 
     def create_ui(self):
         if api.sysparam.get_bool('SMART_LIST_LOADING'):
             self.search.enable_lazy_search()
 
-        self.window.add_new_items([
-            self.NewOrder,
+        self.window.add_print_items2([
+            (_("Print quote..."), 'work_order.PrintQuote'),
+            (_("Print receipt..."), 'work_order.PrintReceipt'),
         ])
+        self.window.add_export_items()
+        self.window.add_extra_items2([
+            (_("Send orders..."), 'work_order.SendOrders'),
+            (_("Receive orders..."), 'work_order.ReceiveOrders'),
+        ])
+        self.window.add_extra_items([self.ViewKanban, self.ViewList])
+        self.window.add_new_items2([
+            (_("Work order..."), 'work_order.NewOrder'),
+        ])
+
         self.window.add_search_items([
             self.Products,
             self.Services,
             self.Categories,
+            self.Clients,
         ])
 
         self.search.set_summary_label(
@@ -286,10 +359,10 @@ class ServicesApp(ShellApp):
     def activate(self, refresh=True):
         self.check_open_inventory()
 
-        self.window.NewToolItem.set_tooltip(
-            _(u"Create a new work order"))
-        self.window.SearchToolItem.set_tooltip(
-            _(u"Search for work order categories"))
+        is_kanban = self.window._current_app_settings.get('show-kanban', False)
+        if is_kanban:
+            self.ViewKanban.set_state(GLib.Variant.new_boolean(True))
+            self.search.set_result_view(WorkOrderResultKanbanView, refresh=refresh)
 
         if refresh:
             self._update_view()
@@ -297,14 +370,8 @@ class ServicesApp(ShellApp):
         self.search.focus_search_entry()
 
     def deactivate(self):
-        self.uimanager.remove_ui(self.services_ui)
-
-    def new_activate(self):
-        self.new_order()
-
-    def search_activate(self):
-        self.run_dialog(ProductSearch, self.store,
-                        hide_footer=True, hide_toolbar=True)
+        # Reset actions to clean up connections
+        self.actions = None
 
     def search_completed(self, results, states):
         if len(results):
@@ -338,7 +405,7 @@ class ServicesApp(ShellApp):
                              u"could be found.") % (
                     '<b>%s</b>' % (value, ), )
                 url = u"<a href='new_order?%s'>%s</a>" % (
-                    urllib.quote(value.encode('utf-8')),
+                    urllib.parse.quote(value),
                     api.escape(_(u"create a new work order")), )
                 url_msg = _(u"Would you like to %s ?") % (url, )
 
@@ -379,10 +446,10 @@ class ServicesApp(ShellApp):
             Column('equipment', title=_(u'Equipment (Description)'),
                    data_type=str, expand=True, pack_end=True),
             Column('category_color', title=_(u'Equipment (Description)'),
-                   column='equipment', data_type=gtk.gdk.Pixbuf,
+                   column='equipment', data_type=GdkPixbuf.Pixbuf,
                    format_func=render_pixbuf),
             Column('flag_icon', title=_(u'Equipment (Description)'),
-                   column='equipment', data_type=gtk.gdk.Pixbuf,
+                   column='equipment', data_type=GdkPixbuf.Pixbuf,
                    format_func=self._format_state_icon, format_func_data=True),
             SearchColumn('client_name', title=_(u'Client'),
                          data_type=str),
@@ -436,17 +503,6 @@ class ServicesApp(ShellApp):
             self.main_filter.combo.append_item(option.name, option)
         self._other_kinds[kind] = mapper
 
-    def new_order(self, category=None, available_categories=None):
-        with api.new_store() as store:
-            work_order = self.run_dialog(WorkOrderEditor, store,
-                                         category=store.fetch(category),
-                                         available_categories=available_categories)
-
-        if store.committed:
-            self._update_view(select_item=work_order)
-            # A category may have been created on the editor
-            self._update_filters()
-
     #
     # Private
     #
@@ -459,9 +515,7 @@ class ServicesApp(ShellApp):
 
         stock_id, tooltip = get_workorder_state_icon(item.work_order)
         if stock_id is not None:
-            # We are using self.results because render_icon is a gtk.Widget's
-            # method. It has nothing to do with results tough.
-            return self.results.render_icon(stock_id, gtk.ICON_SIZE_MENU)
+            return render_icon(stock_id, 16)
 
     def _get_main_query(self, state):
         item = state.value
@@ -495,46 +549,15 @@ class ServicesApp(ShellApp):
 
     def _update_list_aware_view(self):
         selection = self.search.get_selected_item()
-        has_selected = bool(selection)
-        wo = has_selected and selection.work_order
+        wo = selection and selection.work_order
+        self.actions.set_model(wo)
 
-        if wo and wo.sale is not None:
-            has_quote = wo.order_items.count() > 0
-        else:
-            has_quote = wo and bool(wo.defect_reported or wo.defect_detected)
-
-        self.set_sensitive([self.Edit], has_selected and wo.can_edit())
-        self.set_sensitive([self.Details], has_selected)
-        self.set_sensitive([self.Finish], has_selected and (wo.can_finish() or
-                                                            wo.can_close()))
-        self.set_sensitive([self.Cancel], has_selected and wo.can_cancel())
-        self.set_sensitive([self.PrintReceipt], has_selected and wo.is_finished())
-        self.set_sensitive([self.PrintQuote], has_quote)
-
-        self.Finish.set_short_label(_(u"Finish"))
+        finish_btn = self.window.domain_header.get_children()[2]
+        finish_btn.set_tooltip_text(_(u"Finish"))
         # If the selected work order is already finished, we change the finish
         # button's label.
-        if has_selected and wo.status == WorkOrder.STATUS_WORK_FINISHED:
-            self.Finish.set_short_label(_(u"Deliver"))
-
-        for widget, value in [
-                (self.Approve, has_selected and wo.can_approve()),
-                (self.Reject, has_selected and wo.can_reject()),
-                (self.UndoRejection, has_selected and wo.can_undo_rejection()),
-                (self.Pause, has_selected and wo.can_pause()),
-                (self.Work, has_selected and wo.can_work()),
-                (self.Reopen, has_selected and wo.can_reopen()),
-                # DeliverOrder is grouped here since it's a special case
-                # Only finished orders without items and without sale can be
-                # delivered here, so avoid showing the option if it's not
-                #sensitive to avoid confusions
-                (self.DeliverOrder, (has_selected and wo.can_close() and
-                                     not wo.order_items.count() and not wo.sale))]:
-            self.set_sensitive([widget], value)
-            # Some of those options are mutually exclusive (except Approve,
-            # but it can only be called once) so avoid confusions and
-            # hide not available options
-            widget.set_visible(value)
+        if wo and wo.status == WorkOrder.STATUS_WORK_FINISHED:
+            finish_btn.set_tooltip_text(_(u"Deliver"))
 
     def _update_filters(self):
         self._not_delivered_filter_item = _FilterItem(_(u'Not delivered'),
@@ -565,178 +588,11 @@ class ServicesApp(ShellApp):
         self.main_filter.update_values(
             [(item.name, item) for item in options])
 
-    def _edit_order(self, work_order=None):
-        if work_order is None:
-            work_order = self.search.get_selected_item().work_order
-        with api.new_store() as store:
-            self.run_dialog(WorkOrderEditor, store,
-                            model=store.fetch(work_order))
-
-        if store.committed:
-            self._update_view()
-            # A category may have been created on the editor
-            self._update_filters()
-
-    def _finish_or_deliver_order(self):
-        work_order = self.search.get_selected_item().work_order
-        if work_order.status == WorkOrder.STATUS_WORK_FINISHED:
-            self._close_order()
-        else:
-            self._finish_order()
-
-    def _finish_order(self):
-        work_order = self.search.get_selected_item().work_order
-
-        if work_order.is_items_totally_reserved():
-            msg = _(u"This will finish the selected order, marking the "
-                    u"work as done. Are you sure?")
-        else:
-            msg = _(u"Some items on this work order are not fully reserved. "
-                    u"Do you still want to mark it as finished?")
-
-        if not yesno(msg, gtk.RESPONSE_NO,
-                     _(u"Finish order"), _(u"Don't finish")):
-            return
-
-        with api.new_store() as store:
-            work_order = store.fetch(work_order)
-            work_order.finish()
-
-        self._update_view()
-
-    def _cancel_order(self):
-        msg_text = _(u"This will cancel the selected order. Any reserved items "
-                     u"will return to stock. Are you sure?")
-        rv = self._run_notes_editor(msg_text=msg_text, mandatory=True)
-        if not rv:
-            return
-
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            work_order = store.fetch(selection.work_order)
-            work_order.cancel(reason=rv.notes)
-        self._update_view()
-
-    def _close_order(self):
-        if not yesno(_(u"This will mark the order as delivered. Are you "
-                       "sure?"),
-                     gtk.RESPONSE_NO, _(u"Mark as delivered"),
-                     _(u"Don't mark")):
-            return
-
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            work_order = store.fetch(selection.work_order)
-            work_order.close()
-
-        self._update_view(select_item=selection)
-
-    def _approve_order(self):
-        if not yesno(_(u"This will inform the order that the client has "
-                       u"approved the work. Are you sure?"),
-                     gtk.RESPONSE_NO, _(u"Approve"), _(u"Don't approve")):
-            return
-
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            work_order = store.fetch(selection.work_order)
-            work_order.approve()
-
-        self._update_view(select_item=selection)
-
-    def _pause_order(self):
-        msg_text = _(u"This will inform the order that we are waiting. "
-                     u"Are you sure?")
-        rv = self._run_notes_editor(msg_text=msg_text, mandatory=True)
-        if not rv:
-            return
-
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            work_order = store.fetch(selection.work_order)
-            work_order.pause(reason=rv.notes)
-
-        self._update_view(select_item=selection)
-
-    def _work(self):
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            work_order = store.fetch(selection.work_order)
-            work_order.work()
-
-        self._update_view(select_item=selection)
-
-    def _reject(self):
-        msg_text = _(u"This will reject the order. Are you sure?")
-        rv = self._run_notes_editor(msg_text=msg_text, mandatory=True)
-        if not rv:
-            return
-
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            work_order = store.fetch(selection.work_order)
-            work_order.reject(reason=rv.notes)
-
-        self._update_view(select_item=selection)
-
-    def _undo_rejection(self):
-        msg_text = _(u"This will undo the rejection of the order. "
-                     u"Are you sure?")
-        rv = self._run_notes_editor(msg_text=msg_text, mandatory=False)
-        if not rv:
-            return
-
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            work_order = store.fetch(selection.work_order)
-            work_order.undo_rejection(reason=rv.notes)
-
-        self._update_view(select_item=selection)
-
-    def _reopen(self):
-        msg_text = _(u"This will reopen the order. Are you sure?")
-        rv = self._run_notes_editor(msg_text=msg_text, mandatory=True)
-        if not rv:
-            return
-
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            work_order = store.fetch(selection.work_order)
-            work_order.reopen(reason=rv.notes)
-
-        self._update_view(select_item=selection)
-
-    def _send_orders(self):
-        with api.new_store() as store:
-            self.run_dialog(WorkOrderPackageSendEditor, store)
-
-        if store.committed:
-            self._update_view()
-
-    def _receive_orders(self):
-        with api.new_store() as store:
-            self.run_dialog(WorkOrderPackageReceiveWizard, store)
-
-        if store.committed:
-            self._update_view()
-
-    def _run_order_details_dialog(self):
-        selection = self.search.get_selected_item()
-        with api.new_store() as store:
-            self.run_dialog(WorkOrderEditor, store,
-                            model=store.fetch(selection.work_order),
-                            visual_mode=True)
-
     def _run_order_category_dialog(self):
         with api.new_store() as store:
             self.run_dialog(WorkOrderCategoryDialog, store)
         self._update_view()
         self._update_filters()
-
-    def _run_notes_editor(self, msg_text, mandatory):
-        return self.run_dialog(NoteEditor, self.store, model=Note(),
-                               message_text=msg_text, label_text=_(u"Reason"),
-                               mandatory=mandatory)
 
     #
     # Kiwi Callbacks
@@ -749,7 +605,7 @@ class ServicesApp(ShellApp):
         return False
 
     def _on_results__cell_data_func(self, column, renderer, wov, text):
-        if not isinstance(renderer, gtk.CellRendererText):
+        if not isinstance(renderer, Gtk.CellRendererText):
             return text
 
         work_order = wov.work_order
@@ -760,24 +616,20 @@ class ServicesApp(ShellApp):
 
         for prop, is_set, value in [
                 ('strikethrough', is_delivered, True),
-                ('style', is_finished, pango.STYLE_ITALIC),
-                ('weight', is_late, pango.WEIGHT_BOLD)]:
+                ('style', is_finished, Pango.Style.ITALIC),
+                ('weight', is_late, Pango.Weight.BOLD)]:
             renderer.set_property(prop + '-set', is_set)
             if is_set:
                 renderer.set_property(prop, value)
 
         return text
 
-    def on_search__result_item_popup_menu(self, search, item, event):
-        self.popup.popup(None, None, None, event.button, event.time)
+    def on_search__result_item_popup_menu(self, search, objectlist, item, event):
+        self._popover.set_relative_to(objectlist)
+        self.show_popover(event)
 
     def on_search__result_item_activated(self, search, item):
-        if self.Edit.get_sensitive():
-            self._edit_order()
-        elif self.Details.get_sensitive():
-            self._run_order_details_dialog()
-        else:
-            assert False
+        self.actions.edit_or_details(item.work_order)
 
     def on_search__result_selection_changed(self, search):
         self._update_list_aware_view()
@@ -787,63 +639,23 @@ class ServicesApp(ShellApp):
             return
 
         if '?' in uri:
-            category_name = unicode(urllib.unquote(uri.split('?', 1)[1]))
+            category_name = str(urllib.parse.unquote(uri.split('?', 1)[1]))
             category = self.store.find(WorkOrderCategory,
                                        name=category_name).one()
         else:
             category = None
 
-        self.new_order(category=category)
+        self.actions.new_order(category=category)
 
-    def on_NewOrder__activate(self, action):
-        self.new_order()
+    def on_actions__model_created(self, actions, order):
+        self._update_view(select_item=order)
+        # A category may have been created on the editor
+        self._update_filters()
 
-    def on_SendOrders__activate(self, action):
-        self._send_orders()
-
-    def on_ReceiveOrders__activate(self, action):
-        self._receive_orders()
-
-    def on_Edit__activate(self, action):
-        self._edit_order()
-
-    def on_Finish__activate(self, action):
-        self._finish_or_deliver_order()
-
-    def on_Cancel__activate(self, action):
-        self._cancel_order()
-
-    def on_Details__activate(self, action):
-        self._run_order_details_dialog()
-
-    def on_Approve__activate(self, action):
-        self._approve_order()
-
-    def on_Pause__activate(self, action):
-        self._pause_order()
-
-    def on_Work__activate(self, action):
-        self._work()
-
-    def on_Reject__activate(self, action):
-        self._reject()
-
-    def on_UndoRejection__activate(self, action):
-        self._undo_rejection()
-
-    def on_Reopen__activate(self, action):
-        self._reopen()
-
-    def on_DeliverOrder__activate(self, action):
-        self._close_order()
-
-    def on_PrintQuote__activate(self, action):
-        workorderview = self.search.get_selected_item()
-        print_report(WorkOrderQuoteReport, workorderview.work_order)
-
-    def on_PrintReceipt__activate(self, action):
-        workorderview = self.search.get_selected_item()
-        print_report(WorkOrderReceiptReport, workorderview.work_order)
+    def on_actions__model_edited(self, actions, order):
+        self._update_view()
+        # A category may have been created on the editor
+        self._update_filters()
 
     def on_Products__activate(self, action):
         self.run_dialog(ProductSearch, self.store,
@@ -858,14 +670,19 @@ class ServicesApp(ShellApp):
     def on_Clients__activate(self, button):
         self.run_dialog(ClientSearch, self.store, hide_footer=True)
 
-    def on_ViewList__toggled(self, action):
-        if not action.get_active():
+    def on_ViewList__change_state(self, action, value):
+        action.set_state(value)
+        if not value.get_boolean():
             return
+        self.ViewKanban.set_state(GLib.Variant.new_boolean(not value.get_boolean()))
         self.search.set_result_view(SearchResultListView, refresh=True)
         self._update_list_aware_view()
 
-    def on_ViewKanban__toggled(self, action):
-        if not action.get_active():
+    def on_ViewKanban__change_state(self, action, value):
+        action.set_state(value)
+        self.ViewList.set_state(GLib.Variant.new_boolean(not value.get_boolean()))
+        self.window._current_app_settings['show-kanban'] = value.get_boolean()
+        if not value.get_boolean():
             return
         self.search.set_result_view(WorkOrderResultKanbanView, refresh=True)
         self._update_list_aware_view()

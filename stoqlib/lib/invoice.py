@@ -32,8 +32,9 @@ from kiwi.datatypes import ValidationError
 from stoqdrivers.enum import TaxType
 from stoqdrivers.escp import EscPPrinter
 
-from stoqlib.domain.sale import Sale
+from stoqlib.domain.fiscal import Invoice
 from stoqlib.lib.dateutils import localtoday
+from stoqlib.lib.defaults import quantize
 from stoqlib.lib.message import warning
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext as _
@@ -58,7 +59,7 @@ class InvoicePage(object):
 
         for lines in range(height):
             self._data.append(
-                array.array('c', (' ' * width) + '\n'))
+                array.array('u', (' ' * width) + '\n'))
         self.width = width
         self.height = height
 
@@ -66,9 +67,9 @@ class InvoicePage(object):
         return iter(self._data)
 
     def _put(self, x, y, width, data):
-        if type(data) != str:
+        if not isinstance(data, str):
             raise AssertionError(type(data))
-        output = array.array('c', data.upper())
+        output = array.array('u', data.upper())
         if y > len(self._data):
             raise ValueError(
                 "maximum invoice layout is %d, got %d" % (self.height, y))
@@ -98,7 +99,7 @@ class InvoicePage(object):
         self._put(x, y, width, data)
 
     def _add_string(self, x, y, width, data):
-        if type(data) == unicode:
+        if isinstance(data, str):
             data = str(data)
         if data is None:
             data = ''
@@ -130,7 +131,7 @@ class InvoicePage(object):
             self._add_decimal(x, y, width, data)
         elif data_type == int:
             self._add_integer(x, y, width, data)
-        elif type(data_type) == list:
+        elif isinstance(data_type, list):
             self._add_list(data_type, x, y, width, height, data)
         else:
             raise AssertionError(
@@ -310,7 +311,7 @@ class _Invoice(object):
             return
         for page in self.generate_pages():
             for line in page:
-                printer.send(line.tostring())
+                printer.send(line.tounicode())
             printer.form_feed()
         printer.done()
 
@@ -349,8 +350,7 @@ def validate_invoice_number(invoice_number, store):
         return ValidationError(
             _("Invoice number must be between 1 and 999999999"))
 
-    sale = store.find(Sale, invoice_number=invoice_number).one()
-    if sale is not None:
+    if not store.find(Invoice, invoice_number=invoice_number).is_empty():
         return ValidationError(_(u'Invoice number already used.'))
 
 
@@ -514,7 +514,7 @@ class SaleNumberField(InvoiceFieldDescription):
     length = 1
 
     def fetch(self, width, height):
-        return unicode(self.sale.identifier)
+        return str(self.sale.identifier)
 
 
 @_register_invoice_field
@@ -1118,7 +1118,7 @@ class InvoiceNumberField(InvoiceFieldDescription):
     length = 6
 
     def fetch(self, width, height):
-        return '%09d' % self.sale.invoice_number
+        return '%09d' % self.sale.invoice.invoice_number
 
 
 @_register_invoice_field
@@ -1257,7 +1257,7 @@ class ValorTotalServicosField(InvoiceFieldDescription):
     field_type = Decimal
 
     def fetch(self, width, height):
-        return sum([s.quantity * s.price for s in self.sale.services],
+        return sum([quantize(s.quantity * s.price) for s in self.sale.services],
                    Decimal(0))
 
 

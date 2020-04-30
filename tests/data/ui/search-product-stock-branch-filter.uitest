@@ -1,29 +1,26 @@
 search: ProductStockSearch
 GtkDialog(toplevel): title='Product Stock Search', hidden
-  GtkVBox(_main_vbox):
-    GtkVBox(vbox, expand=True, fill=True):
+  GtkBox(_main_vbox, orientation=vertical):
+    GtkBox(vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(header): hidden
       GtkEventBox(main, expand=True, fill=True, padding=6): slave SearchSlave is attached
-        GtkVBox(vbox):
-          GtkHBox(fill=True, padding=6):
-            GtkVBox(filters_box, padding=6):
-              GtkHBox(hbox):
-                SearchFilter(_primary_filter):
+        GtkBox(vbox, orientation=vertical):
+          GtkBox(orientation=horizontal, fill=True, padding=6):
+            GtkBox(filters_box, orientation=vertical, padding=6):
+              GtkBox(hbox, orientation=horizontal):
+                StringSearchFilter(_primary_filter):
                   GtkLabel(): 'Search:'
                   ProxyComboBox(padding=6): hidden
                     item: 'Contains All Words', selected
-                    item: 'Contains Exactly'
-                    item: 'Identical to'
-                    item: 'Does Not Contain'
-                  HintedEntry(search_entry, padding=6): ''
-                GtkButton(search_button): 'gtk-find'
+                  GtkEntry(search_entry, padding=6): ''
+                stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(search_button): 'Find'
               ComboSearchFilter(branch_filter):
                 GtkLabel(): 'In branch:'
                 ProxyComboBox(padding=6):
                   item: 'Any'
                   item: 'Moda Stoq', selected
                   item: 'Stoq Elite Fashion'
-          SearchResultListView(result_view, expand=True, fill=True):
+          SearchResultListView(results, expand=True, fill=True):
             column: title='Code'
             column: title='Category'
             column: title='Description', expand
@@ -35,26 +32,27 @@ GtkDialog(toplevel): title='Product Stock Search', hidden
             column: title='In Stock'
             column: title='To Receive'
             column: title='Difference'
-            row: u'2', None, u'Botas', None, u'', u'', Decimal('20.000'), Decimal('4.000'), Decimal('12.000'), Decimal('3.000'), Decimal('8.000')
-            row: u'1', None, u'Luvas', None, u'', u'', Decimal('20.000'), Decimal('3.000'), Decimal('8.000'), Decimal('2.000'), Decimal('5.000')
+            row: '2', None, 'Botas', None, '', '', Decimal('20.000'), Decimal('4.000'), Decimal('12.000'), Decimal('3.000'), Decimal('8.000')
+            row: '1', None, 'Luvas', None, '', '', Decimal('20.000'), Decimal('3.000'), Decimal('8.000'), Decimal('2.000'), Decimal('5.000')
           GtkLabel(padding=6, pack-end): '<small><b>The DIFFERENCE column is equal to IN STOCK minus MINIMUM columns</b></small>'
-      GtkHBox(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(extra_holder, expand=True, fill=True, padding=6): slave SearchEditorToolBar is attached
-          GtkHBox(toplevel):
-            GtkHButtonBox(hbuttonbox1, fill=True):
-              GtkButton(new_button): hidden
-              GtkButton(edit_button): insensitive
+          GtkBox(toplevel, orientation=horizontal):
+            GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+              GtkButton(new_button, expand=True, fill=True): hidden
+              GtkButton(edit_button, expand=True, fill=True): insensitive
             GtkEventBox(toolbar_holder, expand=True, fill=True):
         GtkEventBox(print_holder, expand=True, fill=True):
         GtkEventBox(notice, fill=True):
         GtkEventBox(details_holder, padding=6, pack-end): slave _SearchDialogDetailsSlave is attached
-          GtkVBox(toplevel):
-            GtkHBox(hbox1, fill=True):
+          GtkBox(vbox1, orientation=vertical):
+            GtkBox(hbox1, orientation=horizontal, fill=True):
               GtkLabel(label3, expand=True, fill=True):
-              GtkHButtonBox(hbuttonbox1, fill=True):
-                GtkButton(details_button): hidden
-                GtkButton(print_button): 'gtk-print'
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
-      GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden, insensitive
-      GtkButton(branch_stock_button, padding=6): 'Stock details', insensitive
+              GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+                GtkButton(details_button, expand=True, fill=True): hidden
+                GtkButton(print_button, expand=True, fill=True): 'gtk-print'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
+        GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden, insensitive
+        GtkButton(branch_stock_button, padding=6): 'Stock details', insensitive

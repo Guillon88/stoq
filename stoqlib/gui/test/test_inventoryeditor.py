@@ -31,19 +31,19 @@ from stoqlib.domain.inventory import Inventory
 class TestOpenInventoryEditor(GUITest):
     def test_create(self):
         dialog = InventoryOpenEditor(self.store)
-        d = localdatetime(2010, 01, 30, 12, 33)
+        d = localdatetime(2010, 1, 30, 12, 33)
         dialog.open_time.set_text(d.strftime("%X"))
 
         self.check_editor(dialog, 'editor-inventory-open')
 
     def test_open_iventory(self):
         # There are no inventories open right now
-        self.assertEquals(self.store.find(Inventory).count(), 0)
+        self.assertEqual(self.store.find(Inventory).count(), 0)
         dialog = InventoryOpenEditor(self.store)
         self.click(dialog.main_dialog.ok_button)
 
         # There should be one open inventory now
-        self.assertEquals(self.store.find(Inventory).count(), 1)
+        self.assertEqual(self.store.find(Inventory).count(), 1)
 
     def test_category_selection(self):
         dialog = InventoryOpenEditor(self.store)

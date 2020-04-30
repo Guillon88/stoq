@@ -24,7 +24,7 @@
 """ Slaves for sale management """
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 from kiwi.decorators import signal_block
 from kiwi.ui.delegates import GladeSlaveDelegate
@@ -183,12 +183,12 @@ class SaleDiscountSlave(BaseEditorSlave):
         return self._validate_percentage(percentage, _(u'Discount'))
 
     def on_discount_perc__icon_press(self, entry, icon_pos, event):
-        if icon_pos != gtk.ENTRY_ICON_PRIMARY:
+        if icon_pos != Gtk.EntryIconPosition.PRIMARY:
             return
         self._run_credentials_dialog()
 
     def on_discount_value__icon_press(self, entry, icon_pos, event):
-        if icon_pos != gtk.ENTRY_ICON_PRIMARY:
+        if icon_pos != Gtk.EntryIconPosition.PRIMARY:
             return
         self._run_credentials_dialog()
 
@@ -215,7 +215,7 @@ class SaleListToolbar(GladeSlaveDelegate):
 
     def __init__(self, store, sales, parent=None):
         self.store = store
-        if sales.get_selection_mode() != gtk.SELECTION_BROWSE:
+        if sales.get_selection_mode() != Gtk.SelectionMode.BROWSE:
             raise TypeError("Only SELECTION_BROWSE mode for the "
                             "list is supported on this slave")
         self.sales = sales
@@ -265,8 +265,15 @@ class SaleListToolbar(GladeSlaveDelegate):
     def show_details(self, sale_view=None):
         if sale_view is None:
             sale_view = self.sales.get_selected()
-        run_dialog(SaleDetailsDialog, self.parent,
-                   self.store, sale_view)
+        with api.new_store() as store:
+            model = store.fetch(sale_view)
+            run_dialog(SaleDetailsDialog, self.parent, store, model)
+            # XXX: We are setting this manually because the nfce plugin might change
+            # the model. The infrastructure must be changed to consider this situation
+            store.retval = store.get_pending_count() > 0
+        # Update the search after the dialog is closed
+        if store.committed:
+            self.parent.search.search()
 
     def print_sale(self):
         print_report(SalesReport, self.sales, list(self.sales),
@@ -322,10 +329,10 @@ class SaleListToolbar(GladeSlaveDelegate):
         self.print_sale()
 
 
-def cancel_sale(sale):
+def cancel_sale(sale, reason):
     msg = _('Do you really want to cancel this sale ?')
-    if yesno(msg, gtk.RESPONSE_NO, _("Cancel sale"), _("Don't cancel sale")):
-        sale.cancel()
+    if yesno(msg, Gtk.ResponseType.NO, _("Cancel sale"), _("Don't cancel sale")):
+        sale.cancel(reason)
         return True
     return False
 
@@ -333,10 +340,9 @@ def cancel_sale(sale):
 def return_sale(parent, sale, store):
     from stoqlib.gui.wizards.salereturnwizard import SaleReturnWizard
 
-    cancel_last_coupon = sysparam.get_bool('ALLOW_CANCEL_LAST_COUPON')
     # A plugin (e.g. ECF) can avoid the cancelation of a sale
     # because it wants it to be cancelled using another way
-    if cancel_last_coupon and SaleAvoidCancelEvent.emit(sale):
+    if SaleAvoidCancelEvent.emit(sale, Sale.STATUS_RETURNED):
         return
 
     if sale.can_return():
@@ -347,10 +353,13 @@ def return_sale(parent, sale, store):
                       'the sale client'))
             return
 
-        returned_sale = sale.create_sale_return_adapter()
+        returned_sale = sale.create_sale_return_adapter(api.get_current_branch(store),
+                                                        api.get_current_user(store),
+                                                        api.get_current_station(store))
         retval = run_dialog(SaleReturnWizard, parent, store, returned_sale)
     elif sale.can_cancel():
-        retval = cancel_sale(sale)
+        reason = _(u'Sale cancelled due to client return.')
+        retval = cancel_sale(sale, reason)
     else:
         retval = False
 

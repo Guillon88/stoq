@@ -25,7 +25,7 @@
 import collections
 import datetime
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.python import Settable
 from kiwi.ui.objectlist import Column, SummaryLabel
@@ -87,7 +87,7 @@ class TillDailyMovementDialog(BaseEditor):
         for option in [Today, Yesterday, LastWeek, LastMonth]:
             self.date_filter.add_option(option)
         self.date_filter.select(position=0)
-        self.daterange_hbox.pack_start(self.date_filter, False, False)
+        self.daterange_hbox.pack_start(self.date_filter, False, False, 0)
         self.date_filter.show_all()
 
         # Setting report lists' columns
@@ -112,7 +112,7 @@ class TillDailyMovementDialog(BaseEditor):
                 Column('client', title=_('Client'), data_type=str, expand=True),
                 Column('branch', title=_('Branch'), data_type=str, visible=False),
                 Column('value', title=_('Value'), data_type=str,
-                       justify=gtk.JUSTIFY_RIGHT)]
+                       justify=Gtk.Justification.RIGHT)]
 
     def _get_lonely_payments_columns(self):
         return [IdentifierColumn('identifier', title=_('Payment #'), sorted=True),
@@ -195,8 +195,9 @@ class TillDailyMovementDialog(BaseEditor):
                                 'out_subtotal', 'out_credit', 'out_total'))
 
     def _generate_dailymovement_data(self, store):
-        query = And(Payment.status == Payment.STATUS_PAID,
-                    self._get_query(Payment.paid_date, Payment.branch))
+        query = And(Payment.status.is_in([Payment.STATUS_PENDING,
+                                          Payment.STATUS_PAID]),
+                    self._get_query(Payment.open_date, Payment.branch))
 
         # Keys are the sale objects, and values are lists with all payments
         self.sales = collections.OrderedDict()
@@ -226,15 +227,16 @@ class TillDailyMovementDialog(BaseEditor):
                                          client=client,
                                          branch=p.branch_name,
                                          value=get_formatted_price(total))
-                sale_payments = self.sales.setdefault(sale, {})
+                sale_payments = self.sales.setdefault(sale,
+                                                      collections.OrderedDict())
                 details = ''
                 method_desc = p.method.get_description()
                 if p.check_data:
                     account = p.check_data.bank_account
-                    numbers = [payment.payment_number for payment in p.sale.payments
-                               if bool(payment.payment_number)]
+                    numbers = sorted(
+                        payment.payment_number for payment
+                        in p.sale.payments if bool(payment.payment_number))
                     # Ensure that the check numbers are ordered
-                    numbers.sort()
                     parts = []
                     if account.bank_number:
                         parts.append(_(u'Bank: %s') % account.bank_number)
@@ -400,7 +402,7 @@ class TillDailyMovementDialog(BaseEditor):
 
         # Summary's per card provider data
         self.percard_list.clear()
-        keys = self.card_summary.keys()
+        keys = list(self.card_summary.keys())
         for key in sorted(keys):
             card_summary_data = Settable(provider=key[0] + ' ' + key[1],
                                          income=self.card_summary[key])

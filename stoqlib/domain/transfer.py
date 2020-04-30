@@ -25,28 +25,31 @@
 
 # pylint: enable=E1101
 
+import collections
 from decimal import Decimal
 
 from kiwi.currency import currency
-from storm.expr import Join, LeftJoin, Sum, Cast, Coalesce, And
+from storm.expr import Join, LeftJoin, Sum, Cast, Coalesce, And, Or
 from storm.info import ClassAlias
 from storm.references import Reference
 from zope.interface import implementer
 
 from stoqlib.database.expr import NullIf
 from stoqlib.database.properties import (DateTimeCol, IdCol, IdentifierCol,
-                                         IntCol, PriceCol, QuantityCol,
+                                         PriceCol, QuantityCol,
                                          UnicodeCol, EnumCol)
-from stoqlib.database.runtime import get_current_branch
 from stoqlib.database.viewable import Viewable
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
+from stoqlib.domain.events import StockOperationConfirmedEvent
 from stoqlib.domain.fiscal import Invoice
 from stoqlib.domain.product import ProductHistory, StockTransactionHistory
-from stoqlib.domain.person import Person, Branch, Company
+from stoqlib.domain.person import Person, Branch, Company, LoginUser, Employee
 from stoqlib.domain.interfaces import IContainer, IInvoice, IInvoiceItem
 from stoqlib.domain.sellable import Sellable
+from stoqlib.domain.product import StorableBatch
 from stoqlib.domain.taxes import check_tax_info_presence
 from stoqlib.lib.dateutils import localnow
+from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
@@ -136,21 +139,12 @@ class TransferOrderItem(Domain):
         return self.stock_cost
 
     @property
-    def nfe_cfop_code(self):
-        source_branch = self.transfer_order.source_branch
-        source_address = source_branch.person.get_main_address()
-
-        destination_branch = self.transfer_order.destination_branch
-        destination_address = destination_branch.person.get_main_address()
-
-        same_state = True
-        if (source_address.city_location.state != destination_address.city_location.state):
-            same_state = False
-
-        if same_state:
-            return u'5152'
-        else:
-            return u'6152'
+    def cfop_code(self):
+        # Transfers between distinct companies are fiscally considered a sale
+        if not self.transfer_order.is_between_same_company:
+            sale_cfop_data = sysparam.get_object(self.store, 'DEFAULT_SALES_CFOP')
+            return sale_cfop_data.code.replace(u'.', u'')
+        return u'5152'
 
     #
     # Public API
@@ -160,7 +154,7 @@ class TransferOrderItem(Domain):
         """Returns the total cost of a transfer item eg quantity * cost"""
         return self.quantity * self.sellable.cost
 
-    def send(self):
+    def send(self, user: LoginUser):
         """Sends this item to it's destination |branch|.
         This method should never be used directly, and to send a transfer you
         should use TransferOrder.send().
@@ -171,12 +165,12 @@ class TransferOrderItem(Domain):
             storable.decrease_stock(self.quantity,
                                     self.transfer_order.source_branch,
                                     StockTransactionHistory.TYPE_TRANSFER_TO,
-                                    self.id, batch=self.batch)
+                                    self.id, user, batch=self.batch)
         ProductHistory.add_transfered_item(self.store,
                                            self.transfer_order.source_branch,
                                            self)
 
-    def receive(self):
+    def receive(self, user: LoginUser):
         """Receives this item, increasing the quantity in the stock.
         This method should never be used directly, and to receive a transfer
         you should use TransferOrder.receive().
@@ -187,10 +181,10 @@ class TransferOrderItem(Domain):
             storable.increase_stock(self.quantity,
                                     self.transfer_order.destination_branch,
                                     StockTransactionHistory.TYPE_TRANSFER_FROM,
-                                    self.id, unit_cost=self.stock_cost,
+                                    self.id, user, unit_cost=self.stock_cost,
                                     batch=self.batch)
 
-    def cancel(self):
+    def cancel(self, user: LoginUser):
         """Cancel the receiving of this transfer item.
 
         This method will return the product to the stock from source branch.
@@ -200,14 +194,14 @@ class TransferOrderItem(Domain):
         storable = self.sellable.product_storable
         storable.increase_stock(self.quantity,
                                 self.transfer_order.source_branch,
-                                StockTransactionHistory.TYPE_TRANSFER_FROM,
-                                self.id, unit_cost=self.stock_cost,
+                                StockTransactionHistory.TYPE_CANCELLED_TRANSFER,
+                                self.id, user, unit_cost=self.stock_cost,
                                 batch=self.batch)
 
 
 @implementer(IContainer)
 @implementer(IInvoice)
-class TransferOrder(Domain):
+class TransferOrder(IdentifiableDomain):
     """ Transfer Order class
     """
     __storm_table__ = 'transfer_order'
@@ -217,10 +211,12 @@ class TransferOrder(Domain):
     STATUS_RECEIVED = u'received'
     STATUS_CANCELLED = u'cancelled'
 
-    statuses = {STATUS_PENDING: _(u'Pending'),
-                STATUS_SENT: _(u'Sent'),
-                STATUS_RECEIVED: _(u'Received'),
-                STATUS_CANCELLED: _(u'Cancelled')}
+    statuses = collections.OrderedDict([
+        (STATUS_PENDING, _(u'Pending')),
+        (STATUS_SENT, _(u'Sent')),
+        (STATUS_RECEIVED, _(u'Received')),
+        (STATUS_CANCELLED, _(u'Cancelled')),
+    ])
 
     status = EnumCol(default=STATUS_PENDING)
 
@@ -243,11 +239,12 @@ class TransferOrder(Domain):
     #: The |employee| responsible for cancel the transfer
     cancel_responsible = Reference(cancel_responsible_id, 'Employee.id')
 
-    #: The invoice number of the transfer
-    invoice_number = IntCol()
-
     #: Comments of a transfer
     comments = UnicodeCol()
+
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
 
     source_branch_id = IdCol()
 
@@ -281,9 +278,12 @@ class TransferOrder(Domain):
     #: The |invoice| generated by the transfer
     invoice = Reference(invoice_id, 'Invoice.id')
 
-    def __init__(self, store=None, **kwargs):
-        kwargs['invoice'] = Invoice(store=store, invoice_type=Invoice.TYPE_OUT)
-        super(TransferOrder, self).__init__(store=store, **kwargs)
+    #: the reason the transfer was cancelled
+    cancel_reason = UnicodeCol()
+
+    def __init__(self, store, branch: Branch, **kwargs):
+        kwargs['invoice'] = Invoice(store=store, invoice_type=Invoice.TYPE_OUT, branch=branch)
+        super(TransferOrder, self).__init__(store=store, branch=branch, **kwargs)
 
     #
     # IContainer implementation
@@ -328,6 +328,9 @@ class TransferOrder(Domain):
     @property
     def operation_nature(self):
         # TODO: Save the operation nature in new transfer_order table field
+        # Transfers between distinct companies are fiscally considered a sale
+        if not self.is_between_same_company:
+            return _(u"Sale")
         return _(u"Transfer")
 
     #
@@ -338,9 +341,17 @@ class TransferOrder(Domain):
     def branch(self):
         return self.source_branch
 
+    @branch.setter
+    def branch(self, value):
+        self.source_branch = value
+
     @property
     def status_str(self):
         return(self.statuses[self.status])
+
+    @property
+    def is_between_same_company(self):
+        return self.source_branch.is_from_same_company(self.destination_branch)
 
     def add_sellable(self, sellable, batch, quantity=1, cost=None):
         """Add the given |sellable| to this |transfer|.
@@ -376,46 +387,48 @@ class TransferOrder(Domain):
     def can_receive(self):
         return self.status == self.STATUS_SENT
 
-    def can_cancel(self):
-        return And(self.status == self.STATUS_SENT,
-                   self.source_branch == get_current_branch(self.store))
+    def can_cancel(self, current_branch: Branch):
+        return self.status == self.STATUS_SENT and self.source_branch == current_branch
 
-    def send(self):
+    def send(self, user: LoginUser):
         """Sends a transfer order to the destination branch.
         """
         assert self.can_send()
 
         for item in self.get_items():
-            item.send()
+            item.send(user)
 
-        # Save invoice number, operation_nature and branch in Invoice table.
-        self.invoice.invoice_number = self.invoice_number
+        # Save the operation nature and branch in Invoice table.
         self.invoice.operation_nature = self.operation_nature
         self.invoice.branch = self.branch
 
+        old_status = self.status
         self.status = self.STATUS_SENT
+        StockOperationConfirmedEvent.emit(self, old_status)
 
-    def receive(self, responsible, receival_date=None):
+    def receive(self, user: LoginUser, responsible: Employee, receival_date=None):
         """Confirms the receiving of the transfer order.
         """
         assert self.can_receive()
 
         for item in self.get_items():
-            item.receive()
+            item.receive(user)
 
         self.receival_date = receival_date or localnow()
         self.destination_responsible = responsible
         self.status = self.STATUS_RECEIVED
 
-    def cancel(self, responsible, cancel_date=None):
+    def cancel(self, user: LoginUser, responsible: Employee, cancel_reason, current_branch: Branch,
+               cancel_date=None):
         """Cancel a transfer order"""
-        assert self.can_cancel()
+        assert self.can_cancel(current_branch)
 
         for item in self.get_items():
-            item.cancel()
+            item.cancel(user)
 
         self.cancel_date = cancel_date or localnow()
         self.cancel_responsible_id = responsible.id
+        self.cancel_reason = cancel_reason
         self.status = self.STATUS_CANCELLED
 
     @classmethod
@@ -510,8 +523,22 @@ class TransferItemView(BaseTransferView):
     item_quantity = TransferOrderItem.quantity
     item_description = Sellable.description
 
+    sellable_id = Sellable.id
+    batch_number = Coalesce(StorableBatch.batch_number, u'')
+    batch_date = StorableBatch.create_date
+
     group_by = BaseTransferView.group_by[:]
-    group_by.extend([TransferOrderItem, Sellable])
+    group_by.extend([TransferOrderItem, Sellable, batch_number, batch_date])
 
     tables = BaseTransferView.tables[:]
-    tables.append(Join(Sellable, Sellable.id == TransferOrderItem.sellable_id))
+    tables.extend([
+        Join(Sellable, Sellable.id == TransferOrderItem.sellable_id),
+        LeftJoin(StorableBatch, StorableBatch.id == TransferOrderItem.batch_id)
+    ])
+
+    @classmethod
+    def find_by_branch(cls, store, sellable, branch):
+        query = (cls.sellable_id == sellable.id,
+                 Or(cls.source_branch_id == branch.id,
+                    cls.destination_branch_id == branch.id))
+        return store.find(cls, query)

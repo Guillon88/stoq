@@ -41,7 +41,7 @@ class TestProductionMaterialAllocateEditor(GUITest):
         material = self.create_production_material()
         storable = material.product.storable
         storable.increase_stock(5, branch, StockTransactionHistory.TYPE_INITIAL,
-                                None)
+                                None, self.current_user)
         editor = ProductionMaterialAllocateEditor(self.store, material)
 
         allocated = material.allocated
@@ -49,4 +49,4 @@ class TestProductionMaterialAllocateEditor(GUITest):
         editor.quantity.update(3)
         self.click(editor.main_dialog.ok_button)
 
-        self.assertEquals(material.allocated, allocated + 3)
+        self.assertEqual(material.allocated, allocated + 3)

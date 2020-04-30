@@ -27,11 +27,12 @@
 import collections
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
-from kiwi.ui.forms import TextField, NumericField, MultiLineField
+from kiwi.ui.forms import MultiLineField, NumericField, TextField
 from kiwi.ui.objectlist import Column
 
+from stoqlib.api import api
 from stoqlib.domain.inventory import Inventory, InventoryItem
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.editors.baseeditor import BaseEditor
@@ -65,7 +66,7 @@ class InventoryAdjustmentEditor(BaseEditor):
 
     def _setup_widgets(self):
         self.main_dialog.ok_button.set_label(_(u'_Finish Inventory'))
-        self.main_dialog.cancel_button.set_label(gtk.STOCK_CLOSE)
+        self.main_dialog.cancel_button.set_label(Gtk.STOCK_CLOSE)
 
         company = self.model.branch.person.company
         if company is not None:
@@ -149,7 +150,7 @@ class InventoryAdjustmentEditor(BaseEditor):
         return yesno(_("Some products were not adjusted. By proceeding, you "
                        "will be discarding those products' count and their "
                        "old quantities will still be in the stock. Are you sure?"),
-                     gtk.RESPONSE_NO,
+                     Gtk.ResponseType.NO,
                      _("Ignore adjustments"), _("Continue adjusting"))
 
     def on_confirm(self):
@@ -158,7 +159,7 @@ class InventoryAdjustmentEditor(BaseEditor):
     def on_cancel(self):
         if yesno(_("Some products were already adjusted. Do you want to "
                    "save that information or discard them?"),
-                 gtk.RESPONSE_NO, _("Save adjustments"), _("Discard adjustments")):
+                 Gtk.ResponseType.NO, _("Save adjustments"), _("Discard adjustments")):
             # change retval to True so the store gets commited
             self.retval = self.model
 
@@ -176,7 +177,7 @@ class InventoryAdjustmentEditor(BaseEditor):
                 continue
             item.actual_quantity = item.counted_quantity
             item.reason = _(u'Automatic adjustment')
-            item.adjust(self.model.invoice_number)
+            item.adjust(api.get_current_user(self.store), self.model.invoice_number)
             self.inventory_items.update(item)
 
     def on_inventory_items__row_activated(self, objectlist, item):
@@ -204,6 +205,13 @@ class InventoryItemAdjustmentEditor(BaseEditor):
 
     @cached_property()
     def fields(self):
+        # Check if sellable's unit allow fraction to use decimal places
+        unit = self.model.product.sellable.unit
+        if unit and unit.allow_fraction:
+            quantity_digits = 3
+        else:
+            quantity_digits = 0
+
         return collections.OrderedDict(
             description=TextField(_("Product"), proxy=True, editable=False),
             recorded_quantity=TextField(_("Previous quantity"), proxy=True,
@@ -212,7 +220,7 @@ class InventoryItemAdjustmentEditor(BaseEditor):
                                        editable=False),
             difference=TextField(_("Difference"), proxy=True, editable=False),
             actual_quantity=NumericField(_("Actual quantity"), proxy=True,
-                                         mandatory=True),
+                                         mandatory=True, digits=quantity_digits),
             cfop_data=CfopField(_("C.F.O.P"), proxy=True),
             reason=MultiLineField(_("Reason"), proxy=True, mandatory=True),
         )
@@ -229,4 +237,4 @@ class InventoryItemAdjustmentEditor(BaseEditor):
         self.actual_quantity.update(self.model.counted_quantity)
 
     def on_confirm(self):
-        self.model.adjust(self._invoice_number)
+        self.model.adjust(api.get_current_user(self.store), self._invoice_number)

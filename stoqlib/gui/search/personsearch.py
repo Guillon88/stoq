@@ -28,7 +28,7 @@ from decimal import Decimal
 
 from kiwi.ui.objectlist import Column
 from kiwi.currency import currency
-import pango
+from gi.repository import Pango
 from storm.expr import Eq
 
 from stoqlib.api import api
@@ -168,7 +168,8 @@ class ClientSearch(BasePersonSearch):
     search_spec = ClientView
     search_label = _('matching:')
     text_field_columns = [ClientView.name, ClientView.cpf, ClientView.rg_number,
-                          ClientView.phone_number, ClientView.mobile_number]
+                          ClientView.phone_number, ClientView.mobile_number,
+                          ClientView.fancy_name, ClientView.email]
 
     def __init__(self, store, birth_date=None, **kwargs):
         self._birth_date = birth_date
@@ -218,7 +219,11 @@ class ClientSearch(BasePersonSearch):
                 SearchColumn('rg_number', _('RG'), str, width=120),
                 SearchColumn('birth_date', _('Birth Date'), datetime.date,
                              visible=False, search_func=self.birthday_search,
-                             search_label=_('Birthday'))]
+                             search_label=_('Birthday')),
+                SearchColumn('fancy_name', _('Fancy Name'), data_type=str,
+                             width=150, visible=False),
+                SearchColumn('email', _('Email'), data_type=str,
+                             width=150, visible=False)]
 
     def get_editor_model(self, client_view):
         return client_view.client
@@ -284,8 +289,8 @@ class BranchSearch(BasePersonSearch):
     editor_class = BranchEditor
     search_spec = BranchView
     search_label = _('matching')
-    text_field_columns = [BranchView.name, BranchView.acronym,
-                          BranchView.phone_number]
+    text_field_columns = [BranchView.branch_name, BranchView.person_name,
+                          BranchView.acronym, BranchView.phone_number]
 
     #
     # SearchEditor Hooks
@@ -304,16 +309,23 @@ class BranchSearch(BasePersonSearch):
         self.search.add_filter(status_filter, SearchFilterPosition.TOP)
 
     def get_columns(self):
-        return [SearchColumn('name', _('Name'), str, expand=True, sorted=True),
-                SearchColumn('fancy_name', _('Fancy name'), str, expand=True,
+        return [SearchColumn('person_name', _('Name'), str, expand=True, sorted=True),
+                SearchColumn('fancy_name', _('Fancy name'), str, visible=False,
+                             width=140),
+                SearchColumn('branch_name', _('Branch Name'), str, width=100, visible=True),
+                SearchColumn('acronym', _('Acronym'), str, visible=True,
+                             width=100),
+                SearchColumn('phone_number', _('Phone Number'), str, width=170,
                              visible=False),
-                SearchColumn('acronym', _('Acronym'), data_type=str,
-                             visible=False),
-                SearchColumn('phone_number', _('Phone Number'), str,
-                             width=150),
-                SearchColumn('manager_name', _('Manager'), str,
+                SearchColumn('manager_name', _('Manager'), str, visible=False,
                              width=250),
-                Column('status_str', _('Status'), data_type=str)]
+                Column('status_str', _('Status'), data_type=str, visible=False),
+                SearchColumn('cnpj', _('CNPJ'), str, visible=True, width=140),
+                SearchColumn('state_registry', _('State Registry'), str,
+                             visible=False, width=120),
+                SearchColumn('crt', _('Tax Policy'), int, visible=False),
+                SearchColumn('city', _('City'), str, visible=False, width=140),
+                SearchColumn('state', _('State'), str, visible=False, width=100)]
 
     def get_editor_model(self, branch_view):
         return branch_view.branch
@@ -347,7 +359,7 @@ class UserSearch(BasePersonSearch):
                              data_type=str, width=150, searchable=True),
                 SearchColumn('profile_name', title=_('Profile'),
                              data_type=str, width=120,
-                             ellipsize=pango.ELLIPSIZE_END),
+                             ellipsize=Pango.EllipsizeMode.END),
                 SearchColumn('name', title=_('Name'), data_type=str,
                              expand=True),
                 Column('status_str', title=_('Status'), data_type=str,

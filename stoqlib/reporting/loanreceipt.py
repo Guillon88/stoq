@@ -67,7 +67,7 @@ class LoanReceipt(HTMLReport):
 
     def get_namespace(self):
         store = self.loan.store
-        order_identifier = unicode(self.loan.identifier)
+        order_identifier = str(self.loan.identifier)
         print_promissory_note = api.sysparam.get_bool('PRINT_PROMISSORY_NOTE_ON_LOAN')
         branch = api.get_current_branch(store)
         drawer_person = self.loan.branch.person
@@ -95,6 +95,7 @@ class LoanReceipt(HTMLReport):
             loan=self.loan,
             print_promissory_note=print_promissory_note,
             promissory_data=promissory_data,
+            notice=api.sysparam.get_string('LOAN_NOTICE')
         )
 
     def adjust_for_test(self):

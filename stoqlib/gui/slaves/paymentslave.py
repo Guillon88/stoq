@@ -32,7 +32,7 @@ import datetime
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
-import gtk
+from gi.repository import Gtk
 from kiwi import ValueUnset
 from kiwi.component import get_utility
 from kiwi.currency import format_price, currency
@@ -51,6 +51,7 @@ from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.domain.payment.payment import Payment, PaymentChangeHistory
 from stoqlib.domain.payment.renegotiation import PaymentRenegotiation
 from stoqlib.domain.purchase import PurchaseOrder
+from stoqlib.domain.receiving import ReceivingInvoice
 from stoqlib.domain.returnedsale import ReturnedSale
 from stoqlib.domain.sale import Sale
 from stoqlib.domain.stockdecrease import StockDecrease
@@ -257,13 +258,13 @@ class PaymentListSlave(GladeSlaveDelegate):
         if self._has_bank_account():
             columns.extend([Column('bank_account.bank_number',
                                    title=_('Bank ID'),
-                                   data_type=str, justify=gtk.JUSTIFY_RIGHT),
+                                   data_type=str, justify=Gtk.Justification.RIGHT),
                             Column('bank_account.bank_branch',
                                    title=_('Bank branch'),
-                                   data_type=str, justify=gtk.JUSTIFY_RIGHT),
+                                   data_type=str, justify=Gtk.Justification.RIGHT),
                             Column('bank_account.bank_account',
                                    title=_('Bank account'),
-                                   data_type=str, justify=gtk.JUSTIFY_RIGHT)])
+                                   data_type=str, justify=Gtk.Justification.RIGHT)])
 
         # Money methods doesn't have a payment_number related with it.
         if self.method.method_name != u'money':
@@ -274,12 +275,12 @@ class PaymentListSlave(GladeSlaveDelegate):
                 title += ' (*)'
             columns.append(Column('payment_number',
                                   title=title,
-                                  data_type=str, justify=gtk.JUSTIFY_RIGHT))
+                                  data_type=str, justify=Gtk.Justification.RIGHT))
 
         columns.extend([Column('due_date', title=_('Due date'),
                                data_type=datetime.date),
                         Column('value', title=_('Value'), data_type=currency,
-                               justify=gtk.JUSTIFY_RIGHT)])
+                               justify=Gtk.Justification.RIGHT)])
 
         return columns
 
@@ -332,7 +333,7 @@ class PaymentListSlave(GladeSlaveDelegate):
         # the payment it is converted to unicode. Shouldn't it be int
         # on domain?
         if payment_number is not None:
-            payment_number = unicode(payment_number)
+            payment_number = str(payment_number)
 
         payment = _TemporaryPaymentData(description,
                                         value,
@@ -398,9 +399,9 @@ class PaymentListSlave(GladeSlaveDelegate):
                     tmp_identifier = None
 
                 payment = self.method.create_payment(
-                    payment_type=self.payment_type, payment_group=self.group,
-                    branch=self.branch, value=p.value, due_date=due_date,
-                    description=p.description, payment_number=p.payment_number)
+                    payment_type=self.payment_type, payment_group=self.group, branch=self.branch,
+                    station=api.get_current_station(self.branch.store), value=p.value,
+                    due_date=due_date, description=p.description, payment_number=p.payment_number)
                 if tmp_identifier:
                     payment.identifier = tmp_identifier
             except PaymentMethodError as err:
@@ -595,6 +596,8 @@ class BasePaymentMethodSlave(BaseEditorSlave):
             return self.order.purchase_total
         elif isinstance(self.order, PaymentRenegotiation):
             return self.order.total
+        elif isinstance(self.order, ReceivingInvoice):
+            return self.order.total_for_payment
         else:
             raise TypeError
 
@@ -602,7 +605,7 @@ class BasePaymentMethodSlave(BaseEditorSlave):
         # FIXME: Is it right to consider only PurchaseOrder as TYPE_OUT?
         # Maybe we should add an interface on order objects for them to
         # decide which type of payment would be created here
-        if isinstance(self.order, PurchaseOrder):
+        if isinstance(self.order, (PurchaseOrder, ReceivingInvoice)):
             return Payment.TYPE_OUT
         else:
             return Payment.TYPE_IN
@@ -863,10 +866,10 @@ class CardMethodSlave(BaseEditorSlave):
             self._add_card_type(name, ptype)
 
     def _add_card_type(self, name, payment_type):
-        radio = gtk.RadioButton(self._radio_group, name)
-        radio.set_data('type', payment_type)
+        radio = Gtk.RadioButton(group=self._radio_group, label=name)
+        radio._type = payment_type
         radio.connect('toggled', self._on_card_type_radio_toggled)
-        self.types_box.pack_start(radio)
+        self.types_box.pack_start(radio, True, True, 0)
         radio.show()
 
         if self._radio_group is None:
@@ -876,7 +879,7 @@ class CardMethodSlave(BaseEditorSlave):
         if not radio.get_active():
             return
 
-        self._selected_type = radio.get_data('type')
+        self._selected_type = radio._type
         self._setup_max_installments()
 
     def _validate_auth_number(self):
@@ -976,10 +979,9 @@ class CardMethodSlave(BaseEditorSlave):
                                                    self.total_value, due_dates)
             return
 
-        payments = self.method.create_payments(Payment.TYPE_IN,
-                                               self._payment_group,
-                                               self.order.branch,
-                                               self.total_value, due_dates)
+        payments = self.method.create_payments(self.order.branch,
+                                               api.get_current_station(self.store), Payment.TYPE_IN,
+                                               self._payment_group, self.total_value, due_dates)
 
         operation = self.method.operation
         for payment in payments:
@@ -1271,8 +1273,8 @@ class MultipleMethodSlave(BaseEditorSlave):
     def _update_missing_or_change_value(self):
         # The total value may be less than total received.
 
-        value = self._get_missing_change_value(with_new_payment=True)
-        missing_value = self._get_missing_change_value(with_new_payment=False)
+        value = self.get_missing_change_value(with_new_payment=True)
+        missing_value = self.get_missing_change_value(with_new_payment=False)
 
         self.missing_value.update(abs(missing_value))
 
@@ -1288,7 +1290,7 @@ class MultipleMethodSlave(BaseEditorSlave):
         else:
             self.missing.set_text(_('Difference:'))
 
-    def _get_missing_change_value(self, with_new_payment=False):
+    def get_missing_change_value(self, with_new_payment=False):
         received = self.received_value.read()
 
         if received == ValueUnset:
@@ -1353,10 +1355,10 @@ class MultipleMethodSlave(BaseEditorSlave):
         else:
             description = payment_method.get_description()
 
-        radio = gtk.RadioButton(group, description)
-        self.methods_box.pack_start(radio)
+        radio = Gtk.RadioButton(group=group, label=description)
+        self.methods_box.pack_start(radio, True, True, 0)
         radio.connect('toggled', self._on_method__toggled)
-        radio.set_data('method', payment_method)
+        radio._method = payment_method
         radio.show()
 
         if api.sysparam.compare_object("DEFAULT_PAYMENT_METHOD",
@@ -1463,8 +1465,9 @@ class MultipleMethodSlave(BaseEditorSlave):
         assert isinstance(self.model, Sale)
 
         try:
-            payment = self._method.create_payment(
-                Payment.TYPE_IN, self.model.group, self.model.branch, payment_value)
+            payment = self._method.create_payment(self.model.branch,
+                                                  api.get_current_station(self.model.store),
+                                                  Payment.TYPE_IN, self.model.group, payment_value)
         except PaymentMethodError as err:
             warning(str(err))
 
@@ -1485,8 +1488,9 @@ class MultipleMethodSlave(BaseEditorSlave):
             p_type = Payment.TYPE_IN
 
         try:
-            payment = self._method.create_payment(
-                p_type, self.model.group, self.model.branch, payment_value)
+            payment = self._method.create_payment(self.model.branch,
+                                                  api.get_current_station(self.store), p_type,
+                                                  self.model.group, payment_value)
         except PaymentMethodError as err:
             warning(str(err))
 
@@ -1542,11 +1546,9 @@ class MultipleMethodSlave(BaseEditorSlave):
         if not self.is_valid:
             return False
 
-        missing_value = self._get_missing_change_value()
+        missing_value = self.get_missing_change_value()
         if self._require_total_value and missing_value != 0:
             return False
-
-        assert missing_value >= 0, missing_value
 
         return True
 
@@ -1558,7 +1560,7 @@ class MultipleMethodSlave(BaseEditorSlave):
         if not radio.get_active():
             return
 
-        self._method = radio.get_data('method')
+        self._method = radio._method
         self._update_values()
         self.value.validate(force=True)
         self.value.grab_focus()

@@ -41,7 +41,7 @@ from stoqlib.gui.search.searchdialog import SearchDialog
 from stoqlib.lib.translation import stoqlib_gettext
 
 from optical.opticaldomain import OpticalMedicView, MedicSoldItemsView
-from optical.opticalslave import MedicEditor
+from optical.opticaleditor import MedicEditor
 
 _ = stoqlib_gettext
 
@@ -80,6 +80,7 @@ class MedicSalesSearch(SearchDialog):
     size = (800, 450)
     search_spec = MedicSoldItemsView
     fast_iter = True
+    unlimited_results = True
 
     #
     # SearchDialog Hooks

@@ -31,6 +31,7 @@ import re
 from decimal import Decimal
 
 from dateutil import relativedelta
+from kiwi.python import cmp
 
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -119,7 +120,8 @@ def payment_value_colorize(column_data):
     """A helper method for payment value columns used to set different
     colors for negative values
     """
-    return column_data < 0
+    # As column_data could be None:
+    return (column_data or 0) < 0
 
 
 #
@@ -140,13 +142,20 @@ def _split_parts(a):
     for i in range(len(parts)):
         try:
             parts[i] = int(parts[i])
-        except:
+        except Exception:
             pass
     return parts
 
 
 def sort_sellable_code(a, b):
-    return cmp(_split_parts(a), _split_parts(b))
+    a_parts = _split_parts(a)
+    b_parts = _split_parts(b)
+    a_types = [type(i) for i in a_parts]
+    b_types = [type(i) for i in b_parts]
+    if a_types == b_types:
+        return cmp(a_parts, b_parts)
+    else:
+        return cmp(a, b)
 
 
 #
@@ -155,10 +164,9 @@ def sort_sellable_code(a, b):
 
 DECIMAL_PRECISION = 2
 QUANTITY_PRECISION = 3
-_format = Decimal('10e-%d' % DECIMAL_PRECISION)
 
 
-def quantize(dec):
+def quantize(dec, precision=DECIMAL_PRECISION):
     """Quantities a decimal according to the current settings.
     if DECIMAL_PRECISION is set to two then everything but
     the last two decimals will be removed
@@ -169,4 +177,5 @@ def quantize(dec):
     >>> quantize(Decimal("10.678"))
     Decimal('10.68')
     """
+    _format = Decimal('10e-%d' % precision)
     return dec.quantize(_format)

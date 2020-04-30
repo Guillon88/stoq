@@ -26,31 +26,28 @@
 
 import decimal
 
-import gtk
-from kiwi.currency import currency
-from kiwi.datatypes import ValidationError, converter
+from gi.repository import Gtk
+from kiwi.currency import currency, format_price
 from kiwi.ui.objectlist import Column
+from storm.expr import Ne
 
 from stoqlib.api import api
-from stoqlib.database.runtime import get_current_user, get_current_branch
-from stoqlib.domain.fiscal import Invoice
 from stoqlib.domain.product import StorableBatch
 from stoqlib.domain.returnedsale import ReturnedSale, ReturnedSaleItem
 from stoqlib.domain.sale import Sale
 from stoqlib.enums import ReturnPolicy
 from stoqlib.lib.defaults import MAX_INT
 from stoqlib.lib.formatters import format_quantity, format_sellable_description
-from stoqlib.lib.message import info, yesno
+from stoqlib.lib.message import yesno
 from stoqlib.lib.parameters import sysparam
-from stoqlib.lib.pluginmanager import get_plugin_manager
 from stoqlib.lib.translation import stoqlib_gettext
 from stoqlib.gui.base.wizards import WizardEditorStep, BaseWizard
 from stoqlib.gui.dialogs.batchselectiondialog import BatchIncreaseSelectionDialog
 from stoqlib.gui.events import (SaleReturnWizardFinishEvent,
-                                SaleTradeWizardFinishEvent)
+                                SaleTradeWizardFinishEvent,
+                                InvoiceSetupEvent,
+                                WizardAddSellableEvent)
 from stoqlib.gui.search.salesearch import SaleSearch
-from stoqlib.gui.slaves.paymentslave import (register_payment_slaves,
-                                             MultipleMethodSlave)
 from stoqlib.gui.utils.printing import print_report
 from stoqlib.gui.wizards.abstractwizard import SellableItemStep
 from stoqlib.reporting.clientcredit import ClientCreditReport
@@ -136,15 +133,18 @@ class SaleReturnSelectionStep(WizardEditorStep):
         # again. This should be as simple as 'if sale_view'.
         if sale_view and not self.unknown_sale_check.get_active():
             sale = self.store.fetch(sale_view.sale)
-            model = sale.create_sale_return_adapter()
+            model = sale.create_sale_return_adapter(api.get_current_branch(self.store),
+                                                    api.get_current_user(self.store),
+                                                    api.get_current_station(self.store))
             for item in model.returned_items:
                 _adjust_returned_sale_item(item)
         else:
             assert self._allow_unknown_sales()
             model = ReturnedSale(
                 store=self.store,
-                responsible=get_current_user(self.store),
-                branch=get_current_branch(self.store),
+                responsible=api.get_current_user(self.store),
+                branch=api.get_current_branch(self.store),
+                station=api.get_current_station(self.store),
             )
 
         self.wizard.model = model
@@ -178,6 +178,7 @@ class SaleReturnItemsStep(SellableItemStep):
     # This will only be used when wizard.unkown_sale is True
     batch_selection_dialog = BatchIncreaseSelectionDialog
     stock_labels_visible = False
+    check_item_taxes = True
 
     #
     #  SellableItemStep
@@ -197,7 +198,6 @@ class SaleReturnItemsStep(SellableItemStep):
         self.slave.klist.connect('cell-edited', self._on_klist__cell_edited)
         self.slave.klist.connect('cell-editing-started',
                                  self._on_klist__cell_editing_started)
-        self.slave.klist.set_cell_data_func(self._on_receiving_order__cell_data_func)
         self.force_validation()
 
     def next_step(self):
@@ -205,8 +205,8 @@ class SaleReturnItemsStep(SellableItemStep):
                                      model=self.model, previous=self)
 
     def get_columns(self, editable=True):
-        adjustment = gtk.Adjustment(lower=0, upper=MAX_INT,
-                                    step_incr=1)
+        adjustment = Gtk.Adjustment(lower=0, upper=MAX_INT,
+                                    step_increment=1)
         columns = [
             Column('will_return', title=_('Return'),
                    data_type=bool, editable=editable),
@@ -241,14 +241,14 @@ class SaleReturnItemsStep(SellableItemStep):
         return columns
 
     def get_saved_items(self):
-        return self.model.returned_items
+        return self.model.returned_items.find(Ne(ReturnedSaleItem.quantity, 0))
 
     def get_order_item(self, sellable, price, quantity, batch=None, parent=None):
         if parent:
             if parent.sellable.product.is_package:
-                component_quantity = self.get_component_quantity(parent, sellable)
-                quantity = parent.quantity * component_quantity
-                price = decimal.Decimal('0')
+                component = self.get_component(parent, sellable)
+                quantity = parent.quantity * component.quantity
+                price = component.price
             else:
                 # Do not add the components if its not a package product
                 return
@@ -269,6 +269,7 @@ class SaleReturnItemsStep(SellableItemStep):
             parent_item=parent
         )
         _adjust_returned_sale_item(item)
+        WizardAddSellableEvent.emit(self.wizard, item)
         return item
 
     def sellable_selected(self, sellable, batch=None):
@@ -307,26 +308,29 @@ class SaleReturnItemsStep(SellableItemStep):
     #  Callbacks
     #
 
-    def _on_klist__cell_edited(self, klist, obj, attr):
-        if attr == 'quantity':
-            # Changing quantity from anything to 0 will uncheck will_return
-            # Changing quantity from 0 to anything will check will_return
+    def _on_klist__cell_edited(self, klist, obj, column):
+        if column.attribute == 'quantity':
             obj.will_return = bool(obj.quantity)
-            for child in obj.children_items:
-                child.quantity = obj.quantity * child.get_component_quantity(obj)
-                child.will_return = bool(child.quantity)
-        elif attr == 'will_return':
-            # Unchecking will_return will make quantity goes to 0
-            if not obj.will_return:
-                obj.quantity = 0
-                for child in obj.children_items:
-                    child.quantity = 0
-                    child.will_return = bool(child.quantity)
-            else:
-                obj.quantity = obj.max_quantity
-                for child in obj.children_items:
-                    child.quantity = obj.max_quantity * child.get_component_quantity(obj)
-                    child.will_return = bool(child.quantity)
+        elif column.attribute == 'will_return':
+            obj.quantity = obj.max_quantity * int(obj.will_return)
+
+        parent = obj.parent_item
+        if parent:
+            quantity = parent.max_quantity
+            for sibling in parent.children_items:
+                component = self.get_component(parent, sibling.sellable)
+                # The quantity for the parent is the minimum quantity possible
+                # between all siblings
+                quantity = min(quantity,
+                               int(sibling.quantity / component.quantity))
+            parent.quantity = decimal.Decimal(quantity)
+            parent.will_return = bool(parent.quantity)
+
+        for child in obj.children_items:
+            component = self.get_component(obj, child.sellable)
+            child.quantity = min(obj.quantity * component.quantity,
+                                 child.max_quantity)
+            child.will_return = bool(child.quantity)
 
         self.summary.update_total()
         self.force_validation()
@@ -339,29 +343,16 @@ class SaleReturnItemsStep(SellableItemStep):
             # Don't let the user return more than was bought
             adjustment.set_upper(obj.max_quantity)
 
-    def _on_receiving_order__cell_data_func(self, column, renderer, obj, text):
-        renderer.set_property('sensitive', not obj.parent_item)
-        if column.attribute == 'will_return':
-            renderer.set_property('activatable', not obj.parent_item)
-
-        if column.attribute == 'quantity':
-            renderer.set_property('editable', not obj.parent_item)
-            renderer.set_property('editable-set', not obj.parent_item)
-
-        return text
-
 
 class SaleReturnInvoiceStep(WizardEditorStep):
     gladefile = 'SaleReturnInvoiceStep'
     model_type = ReturnedSale
     proxy_widgets = [
         'responsible',
-        'invoice_number',
         'reason',
         'sale_total',
-        'paid_total',
         'returned_total',
-        'total_amount_abs',
+        'message',
     ]
 
     #
@@ -371,33 +362,12 @@ class SaleReturnInvoiceStep(WizardEditorStep):
     def post_init(self):
         self.register_validate_function(self.wizard.refresh_next)
         self.force_validation()
-
-        if isinstance(self.wizard, SaleTradeWizard):
-            for widget in [self.total_amount_lbl, self.total_amount_abs,
-                           self.total_separator]:
-                widget.hide()
-
         self._update_widgets()
 
-    def next_step(self):
-        return SaleReturnPaymentStep(self.store, self.wizard,
-                                     model=self.model, previous=self)
-
     def has_next_step(self):
-        if isinstance(self.wizard, SaleTradeWizard):
-            return False
-        return self.model.total_amount > 0
+        return False
 
     def setup_proxies(self):
-        manager = get_plugin_manager()
-        nfe_is_active = manager.is_active('nfe')
-        self.invoice_number.set_property('mandatory', nfe_is_active)
-
-        # Set an initial invoice number.
-        if not self.model.invoice_number:
-            new_invoice_number = Invoice.get_next_invoice_number(self.store)
-            self.model.invoice_number = new_invoice_number
-
         self.proxy = self.add_proxy(self.model, self.proxy_widgets)
 
     #
@@ -405,24 +375,24 @@ class SaleReturnInvoiceStep(WizardEditorStep):
     #
 
     def _update_widgets(self):
-        self.proxy.update('total_amount_abs')
-
-        if self.model.total_amount < 0:
-            self.total_amount_lbl.set_text(_("Overpaid:"))
-        elif self.model.total_amount > 0:
-            self.total_amount_lbl.set_text(_("Missing:"))
-        else:
-            self.total_amount_lbl.set_text(_("Difference:"))
-
         if (isinstance(self.wizard, SaleTradeWizard) or
                 not self.wizard.model.sale.client):
-            self.credit_checkbutton.hide()
+            self.box1.hide()
+            # Just a precaution
+            self.message.hide()
 
+        msg = _("A reversal payment to the client will be created. "
+                "You can see it on the Payable Application.")
+        self.message.set_text(msg)
         policy = sysparam.get_int('RETURN_POLICY_ON_SALES')
-        self.credit_checkbutton.set_sensitive(policy == ReturnPolicy.CLIENT_CHOICE)
-        self.credit_checkbutton.set_active(policy == ReturnPolicy.RETURN_CREDIT)
+        if policy == ReturnPolicy.RETURN_MONEY:
+            self.refund.set_active(True)
+        elif policy == ReturnPolicy.RETURN_CREDIT:
+            self.credit.set_active(True)
+        for widget in self.credit.get_group():
+            widget.set_sensitive(policy == ReturnPolicy.CLIENT_CHOICE)
 
-        self.wizard.credit = self.credit_checkbutton.read()
+        self.wizard.credit = self.credit.get_active()
 
         self.wizard.update_view()
         self.force_validation()
@@ -431,67 +401,19 @@ class SaleReturnInvoiceStep(WizardEditorStep):
     #  Callbacks
     #
 
-    def on_invoice_number__validate(self, widget, value):
-        if not 0 < value <= 999999999:
-            return ValidationError(_("Invoice number must be between "
-                                     "1 and 999999999"))
-        invoice = self.model.invoice
-        branch = self.model.branch
-        if invoice.check_unique_invoice_number_by_branch(value, branch):
-            return ValidationError(_("Invoice number already exists."))
+    def on_refund__toggled(self, widget):
+        if self.refund.get_active():
+            msg = _("A reversal payment to the client will be created. "
+                    "You can see it on the Payable Application.")
+            self.message.set_text(msg)
+            self.wizard.credit = False
 
-    def on_credit_checkbutton__toggled(self, widget):
-        self.wizard.credit = self.credit_checkbutton.read()
-
-
-class SaleReturnPaymentStep(WizardEditorStep):
-    gladefile = 'HolderTemplate'
-    model_type = ReturnedSale
-
-    #
-    #  WizardEditorStep
-    #
-
-    def post_init(self):
-        self.register_validate_function(self._validation_func)
-        self.force_validation()
-
-        before_debt = currency(self.model.sale_total - self.model.paid_total)
-        now_debt = currency(before_debt - self.model.returned_total)
-        short = _("The client's debt has changed. "
-                  "Use this step to adjust the payments.")
-        longdesc = _("The debt before was %s and now is %s. Cancel some unpaid "
-                     "installments and create new ones.")
-        info(short,
-             longdesc % (converter.as_string(currency, before_debt),
-                         converter.as_string(currency, now_debt)))
-
-    def setup_slaves(self):
-        register_payment_slaves()
-        outstanding_value = (self.model.total_amount_abs +
-                             self.model.paid_total)
-        self.slave = MultipleMethodSlave(self.wizard, self, self.store,
-                                         self.model, None,
-                                         outstanding_value=outstanding_value,
-                                         finish_on_total=False,
-                                         allow_remove_paid=False)
-        self.slave.enable_remove()
-        self.attach_slave('place_holder', self.slave)
-
-    def validate_step(self):
-        return True
-
-    def has_next_step(self):
-        return False
-
-    #
-    #  Callbacks
-    #
-
-    def _validation_func(self, value):
-        can_finish = value and self.slave.can_confirm()
-        self.wizard.refresh_next(can_finish)
-
+    def on_credit__toggled(self, widget):
+        if self.credit.get_active():
+            msg = (_("The client will receive %s in credit for future purchases")
+                   % format_price(self.returned_total.read()))
+            self.message.set_text(msg)
+            self.wizard.credit = True
 
 #
 #  Wizards
@@ -526,25 +448,14 @@ class SaleReturnWizard(_BaseSaleReturnWizard):
     #
 
     def finish(self):
-        for payment in self.model.group.payments:
-            if payment.is_preview():
-                # Set payments created on SaleReturnPaymentStep as pending
-                payment.set_pending()
-
-        total_amount = self.model.total_amount
-        # If the user chose to create credit for the client instead of returning
-        # money, there is no need to display this messages.
-        if not self.credit:
-            if total_amount == 0:
-                info(_("The client does not have a debt to this sale anymore. "
-                       "Any existing unpaid installment will be cancelled."))
-            elif total_amount < 0:
-                info(_("A reversal payment to the client will be created. "
-                       "You can see it on the Payable Application."))
+        invoice_ok = InvoiceSetupEvent.emit()
+        if invoice_ok is False:
+            # If there is any problem with the invoice, the event will display an error
+            # message and the dialog is kept open so the user can fix whatever is wrong.
+            return
 
         login_user = api.get_current_user(self.store)
-        self.model.return_(method_name=u'credit' if self.credit else u'money',
-                           login_user=login_user)
+        self.model.return_(login_user, method_name=u'credit' if self.credit else u'money')
         SaleReturnWizardFinishEvent.emit(self.model)
         self.retval = self.model
         self.close()
@@ -553,7 +464,7 @@ class SaleReturnWizard(_BaseSaleReturnWizard):
         self.store.confirm(self.retval)
         if self.credit:
             if yesno(_(u'Would you like to print the credit letter?'),
-                     gtk.RESPONSE_YES, _(u"Print Letter"), _(u"Don't print")):
+                     Gtk.ResponseType.YES, _(u"Print Letter"), _(u"Don't print")):
                 print_report(ClientCreditReport, self.model.client)
 
 

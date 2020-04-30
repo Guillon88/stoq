@@ -22,7 +22,7 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-import gtk
+from gi.repository import Gtk
 import mock
 
 from stoqlib.database.runtime import get_current_branch
@@ -64,11 +64,11 @@ class TestStockTransferWizard(GUITest):
         with mock.patch(module) as emit:
             with mock.patch.object(self.store, 'commit'):
                 self.click(wizard.next_button)
-            self.assertEquals(emit.call_count, 1)
+            self.assertEqual(emit.call_count, 1)
             args, kwargs = emit.call_args
             self.assertTrue(isinstance(args[0], TransferOrder))
 
         yesno.assert_called_once_with(
             _('Would you like to print a receipt for this transfer?'),
-            gtk.RESPONSE_YES, 'Print receipt', "Don't print")
-        self.assertEquals(print_report.call_count, 1)
+            Gtk.ResponseType.YES, 'Print receipt', "Don't print")
+        self.assertEqual(print_report.call_count, 1)

@@ -27,7 +27,7 @@
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
 from kiwi.python import Settable
@@ -41,25 +41,27 @@ from stoqlib.domain.fiscal import CfopData
 from stoqlib.domain.payment.group import PaymentGroup
 from stoqlib.domain.person import ClientCategory, Client, SalesPerson
 from stoqlib.domain.product import ProductStockItem
-from stoqlib.domain.sale import Sale, SaleItem, SaleComment
+from stoqlib.domain.sale import Delivery, Sale, SaleItem, SaleComment
 from stoqlib.domain.sellable import Sellable
 from stoqlib.domain.views import SellableFullStockView
 from stoqlib.enums import ChangeSalespersonPolicy
-from stoqlib.exceptions import TaxError
 from stoqlib.lib.dateutils import localtoday
 from stoqlib.lib.decorators import public
 from stoqlib.lib.formatters import (format_quantity, format_sellable_description,
                                     get_formatted_percentage)
-from stoqlib.lib.message import yesno, warning
+from stoqlib.lib.message import info, yesno
 from stoqlib.lib.translation import stoqlib_gettext
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.pluginmanager import get_plugin_manager
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.base.wizards import WizardEditorStep, BaseWizard
+from stoqlib.gui.editors.deliveryeditor import (CreateDeliveryEditor,
+                                                CreateDeliveryModel)
 from stoqlib.gui.editors.discounteditor import DiscountEditor
 from stoqlib.gui.editors.fiscaleditor import CfopEditor
 from stoqlib.gui.editors.noteeditor import NoteEditor
-from stoqlib.gui.events import SaleQuoteWizardFinishEvent, SaleQuoteFinishPrintEvent
+from stoqlib.gui.events import (SaleQuoteWizardFinishEvent, SaleQuoteFinishPrintEvent,
+                                WizardAddSellableEvent, StockOperationPersonValidationEvent)
 from stoqlib.gui.editors.saleeditor import SaleQuoteItemEditor
 from stoqlib.gui.slaves.paymentslave import (register_payment_slaves,
                                              MultipleMethodSlave)
@@ -80,13 +82,16 @@ _ = stoqlib_gettext
 class StartSaleQuoteStep(WizardEditorStep):
     gladefile = 'SalesPersonQuoteWizardStep'
     model_type = Sale
-    proxy_widgets = ['client', 'salesperson', 'expire_date',
-                     'operation_nature', 'client_category']
-    cfop_widgets = ('cfop', )
+    sale_widgets = ['client', 'salesperson', 'expire_date',
+                    'client_category']
+    invoice_widgets = ['operation_nature']
+    cfop_widgets = ['cfop']
+    proxy_widgets = sale_widgets + invoice_widgets + cfop_widgets
 
     def _setup_widgets(self):
         # Salesperson combo
-        salespersons = SalesPerson.get_active_salespersons(self.store)
+        salespersons = SalesPerson.get_active_salespersons(self.store,
+                                                           api.get_current_branch(self.store))
         self.salesperson.prefill(salespersons)
 
         change_salesperson = sysparam.get_int('ACCEPT_CHANGE_SALESPERSON')
@@ -150,8 +155,10 @@ class StartSaleQuoteStep(WizardEditorStep):
 
     def setup_proxies(self):
         self._setup_widgets()
-        self.proxy = self.add_proxy(self.model,
-                                    StartSaleQuoteStep.proxy_widgets)
+        self.sale_proxy = self.add_proxy(self.model,
+                                         StartSaleQuoteStep.sale_widgets)
+        self.invoice_proxy = self.add_proxy(self.model.invoice,
+                                            StartSaleQuoteStep.invoice_widgets)
         if sysparam.get_bool('ASK_SALES_CFOP'):
             self.add_proxy(self.model, StartSaleQuoteStep.cfop_widgets)
 
@@ -166,7 +173,7 @@ class StartSaleQuoteStep(WizardEditorStep):
 
         if client and client.status != Client.STATUS_SOLVENT:
             self.client_gadget.update_edit_button(
-                gtk.STOCK_DIALOG_WARNING, _("The client is not solvent"))
+                Gtk.STOCK_DIALOG_WARNING, _("The client is not solvent"))
 
     #
     #   Callbacks
@@ -214,9 +221,13 @@ class StartSaleQuoteStep(WizardEditorStep):
         else:
             self.store.rollback_to_savepoint('before_run_editor_cfop')
 
+    def on_client__validate(self, widget, client):
+        return StockOperationPersonValidationEvent.emit(client.person, type(client))
+
 
 class SaleQuoteItemStep(SellableItemStep):
     """ Wizard step for purchase order's items selection """
+    change_remove_btn_sensitive = True
     model_type = Sale
     item_table = SaleItem
     summary_label_text = "<b>%s</b>" % api.escape(_('Total Ordered:'))
@@ -226,6 +237,7 @@ class SaleQuoteItemStep(SellableItemStep):
     validate_price = True
     value_column = 'price'
     calculator_mode = CalculatorPopup.MODE_SUB
+    check_item_taxes = True
 
     #
     # SellableItemStep
@@ -244,6 +256,20 @@ class SaleQuoteItemStep(SellableItemStep):
         self.hide_add_button()
         self.cost_label.set_label(_('Price:'))
         self.cost.set_editable(True)
+
+        delivery = self._find_delivery()
+        if delivery is not None:
+            self._delivery_item = delivery.service_item
+            self._delivery = CreateDeliveryModel.from_delivery(delivery)
+        else:
+            self._delivery = None
+            self._delivery_item = None
+
+        if isinstance(self.model, Sale):
+            self.delivery_btn = self.slave.add_extra_button(label=_("Add delivery"))
+            self.delivery_btn.set_sensitive(bool(len(self.slave.klist)))
+        else:
+            self.delivery_btn = None
 
         self.discount_btn = self.slave.add_extra_button(label=_("Apply discount"))
         self.discount_btn.set_sensitive(bool(len(self.slave.klist)))
@@ -287,7 +313,7 @@ class SaleQuoteItemStep(SellableItemStep):
         else:
             self.slave.clear_message()
 
-    def add_sellable(self, sellable, parent=None):
+    def add_sellable(self, sellable, parent=None, reset_proxy=True):
         price = sellable.get_price_for_category(self.model.client_category)
         new_price = self.cost.read()
 
@@ -304,7 +330,9 @@ class SaleQuoteItemStep(SellableItemStep):
                 original_price=price,
                 new_price=new_price)
 
-        SellableItemStep.add_sellable(self, sellable, parent=parent)
+        SellableItemStep.add_sellable(self, sellable, parent=parent,
+                                      reset_proxy=reset_proxy)
+        self.update_total()
 
     def get_order_item(self, sellable, price, quantity, batch=None, parent=None):
         """
@@ -315,12 +343,17 @@ class SaleQuoteItemStep(SellableItemStep):
         :param parent: |sale_item|'s parent_item if exists
         """
         if parent:
-            component_quantity = self.get_component_quantity(parent, sellable)
-            quantity = parent.quantity * component_quantity
-            price = Decimal('0')
+            component = self.get_component(parent, sellable)
+            quantity = parent.quantity * component.quantity
+            price = component.price
+        else:
+            if sellable.product and sellable.product.is_package:
+                # XXX Sending package products with price 0 (zero)
+                price = Decimal(0)
 
-        item = self.model.add_sellable(sellable, quantity, price, batch=batch,
-                                       parent=parent)
+        item = self.model.add_sellable(sellable, quantity=quantity,
+                                       price=price,
+                                       batch=batch, parent=parent)
         # Save temporarily the stock quantity and lead_time so we can show a
         # warning if there is not enough quantity for the sale.
         if not parent:
@@ -342,13 +375,22 @@ class SaleQuoteItemStep(SellableItemStep):
             stock = storable.get_balance_for_branch(self.model.branch)
             item._stock_quantity = stock
 
+        # FIXME: deliver is used by the DeliveryEditor. Idealy we shouldn't
+        # have to add this here since it could lead to unpredicted errors
+        # in the future (e.g. someone could add a 'deliver' column on item)
+        item.deliver = False
         item.update_tax_values()
 
+        WizardAddSellableEvent.emit(self.wizard, item)
         return item
 
     def get_saved_items(self):
         items = self.model.get_items()
         for i in items:
+            # FIXME: deliver is used by the DeliveryEditor. Idealy we shouldn't
+            # have to add this here since it could lead to unpredicted errors
+            # in the future (e.g. someone could add a 'deliver' column on item)
+            i.deliver = bool(i.delivery)
             product = i.sellable.product
             if not product:
                 yield i
@@ -386,9 +428,10 @@ class SaleQuoteItemStep(SellableItemStep):
                                   width=80))
 
         manager = get_plugin_manager()
-        show_invoice_columns = manager.is_active('nfe') and not manager.is_active('ecf')
+        show_invoice_columns = (manager.is_any_active(['nfe', 'nfce'])
+                                and not manager.is_active('ecf'))
         columns.extend([
-            Column('nfe_cfop_code', title=_('CFOP'), data_type=str,
+            Column('cfop_code', title=_('CFOP'), data_type=str,
                    visible=show_invoice_columns),
             Column('icms_info.v_bc', title=_('ICMS BC'), data_type=currency,
                    visible=show_invoice_columns),
@@ -414,16 +457,6 @@ class SaleQuoteItemStep(SellableItemStep):
                 self.model.client_category)
             self.cost.update(price)
 
-    def can_add_sellable(self, sellable):
-        try:
-            sellable.check_taxes_validity()
-        except TaxError as strerr:
-            # If the sellable icms taxes are not valid, we cannot sell it.
-            warning(str(strerr))
-            return False
-
-        return True
-
     def get_extra_discount(self, sellable):
         if not api.sysparam.get_bool('REUTILIZE_DISCOUNT'):
             return None
@@ -433,12 +466,58 @@ class SaleQuoteItemStep(SellableItemStep):
     # WizardStep hooks
     #
 
+    def validate_step(self):
+        delivery = self._find_delivery()
+        if self._delivery is not None and delivery is None:
+            self.model.transporter_id = self._delivery.transporter_id
+            delivery = Delivery(
+                store=self.store,
+                transporter=self.model.transporter,
+                invoice=self.model.invoice,
+                address=self._delivery.address,
+                freight_type=self._delivery.freight_type,
+                volumes_kind=self._delivery.volumes_kind,
+                volumes_quantity=self._delivery.volumes_quantity,
+                volumes_gross_weight=self._delivery.volumes_gross_weight,
+                volumes_net_weight=self._delivery.volumes_net_weight,
+                vehicle_license_plate=self._delivery.vehicle_license_plate,
+                vehicle_state=self._delivery.vehicle_state,
+                vehicle_registration=self._delivery.vehicle_registration,
+            )
+        elif self._delivery is None and delivery is not None:
+            # No need to remove the service_item. It was already removed
+            # by the AdditionListSlave
+            self.store.remove(delivery)
+            delivery = None
+
+        for item in self.slave.klist:
+            item.delivery = delivery if getattr(item, 'deliver', False) else None
+
+        return super(SaleQuoteItemStep, self).validate_step()
+
+    def next_step(self):
+        if api.sysparam.get_bool('ALLOW_CREATE_PAYMENT_ON_SALE_QUOTE'):
+            return SaleQuotePaymentStep(self.store, self.wizard,
+                                        model=self.model, previous=self)
+        else:
+            return False
+
     def has_next_step(self):
-        return False
+        return api.sysparam.get_bool('ALLOW_CREATE_PAYMENT_ON_SALE_QUOTE')
 
     #
     # Private API
     #
+
+    def _find_delivery(self):
+        if not isinstance(self.model, Sale):
+            return None
+
+        for item in self.model.get_items():
+            if item.delivery is not None:
+                return item.delivery
+
+        return None
 
     def _format_description(self, item, data):
         return format_sellable_description(item.sellable, item.batch)
@@ -461,9 +540,46 @@ class SaleQuoteItemStep(SellableItemStep):
         run_dialog(MyList, self.get_toplevel().get_toplevel(), columns,
                    list(self.missing.values()), title=_("Missing products"))
 
+    def _create_or_update_delivery(self):
+        delivery_service = sysparam.get_object(self.store, 'DELIVERY_SERVICE')
+        delivery_sellable = delivery_service.sellable
+
+        items = [item for item in self.slave.klist
+                 if item.sellable.product is not None]
+        if self._delivery is not None:
+            model = self._delivery
+        else:
+            model = CreateDeliveryModel(
+                price=delivery_sellable.price,
+                recipient=self.model.client and self.model.client.person)
+
+        rv = run_dialog(
+            CreateDeliveryEditor, self.get_toplevel().get_toplevel(),
+            self.store, model, items=items)
+        if not rv:
+            return
+
+        self._delivery = rv
+        if self._delivery_item:
+            self._delivery_item.price = self._delivery.price
+            self._delivery_item.notes = self._delivery.notes
+            self._delivery_item.estimated_fix_date = self._delivery.estimated_fix_date
+            self.slave.klist.update(self._delivery_item)
+        else:
+            self._delivery_item = self.get_order_item(
+                delivery_sellable, self._delivery.price, 1)
+            self.slave.klist.append(None, self._delivery_item)
+
     #
     # Callbacks
     #
+
+    def on_slave__before_edit_item(self, slave, item):
+        if item != self._delivery_item:
+            return
+
+        self._create_or_update_delivery()
+        return self._delivery_item
 
     def on_slave__on_edit_item(self, slave, item):
         product = item.sellable.product
@@ -475,12 +591,21 @@ class SaleQuoteItemStep(SellableItemStep):
         stock = product.storable.get_balance_for_branch(self.model.branch)
         item._stock_quantity = stock
 
+    def on_slave__before_delete_items(self, klist, items):
+        for item in items:
+            if item == self._delivery_item:
+                self._delivery_item = None
+                self._delivery = None
+
     def _on_klist__has_rows(self, klist, has_rows):
         self.discount_btn.set_sensitive(has_rows)
+        if self.delivery_btn is not None:
+            self.delivery_btn.set_sensitive(has_rows)
 
     def _on_klist__selection_changed(self, klist, selected):
-        can_remove = all(item.parent_item is None for item in selected)
-        self.slave.delete_button.set_sensitive(can_remove)
+        if self.change_remove_btn_sensitive:
+            can_remove = all(item.parent_item is None for item in selected)
+            self.slave.delete_button.set_sensitive(can_remove)
 
     def on_discount_btn__clicked(self, button):
         rv = run_dialog(DiscountEditor, self.parent, self.store, self.model,
@@ -492,6 +617,9 @@ class SaleQuoteItemStep(SellableItemStep):
             self.slave.klist.update(item)
 
         self.update_total()
+
+    def on_delivery_btn__clicked(self, btn):
+        self._create_or_update_delivery()
 
 
 class SaleQuotePaymentStep(WizardEditorStep):
@@ -512,6 +640,10 @@ class SaleQuotePaymentStep(WizardEditorStep):
     def post_init(self):
         self.register_validate_function(self._validation_func)
         self.force_validation()
+        missing_value = self.slave.get_missing_change_value()
+        if missing_value < 0:
+            info(_(u"Your payments total is greater than the sale total. Maybe"
+                   " you want to correct them."))
 
     def setup_slaves(self):
         register_payment_slaves()
@@ -579,14 +711,16 @@ class SaleQuoteWizard(BaseWizard):
         user = api.get_current_user(store)
         salesperson = user.person.sales_person
 
-        return Sale(coupon_id=None,
+        sale = Sale(coupon_id=None,
                     status=Sale.STATUS_QUOTE,
                     salesperson=salesperson,
                     branch=api.get_current_branch(store),
+                    station=api.get_current_station(store),
                     group=PaymentGroup(store=store),
                     cfop_id=sysparam.get_object_id('DEFAULT_SALES_CFOP'),
-                    operation_nature=sysparam.get_string('DEFAULT_OPERATION_NATURE'),
                     store=store)
+        sale.invoice.operation_nature = sysparam.get_string('DEFAULT_OPERATION_NATURE')
+        return sale
 
     @public(since='1.8.0')
     def print_quote_details(self, quote, payments_created=False):
@@ -602,7 +736,7 @@ class SaleQuoteWizard(BaseWizard):
         msg_list.append(_('Would you like to print the quote details now?'))
 
         # We can only print the details if the quote was confirmed.
-        if yesno('\n\n'.join(msg_list), gtk.RESPONSE_YES,
+        if yesno('\n\n'.join(msg_list), Gtk.ResponseType.YES,
                  _("Print quote details"), _("Don't print")):
             print_report(SaleOrderReport, self.model)
 

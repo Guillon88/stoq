@@ -32,7 +32,7 @@ from storm.expr import (And, Count, Join, LeftJoin, Or, Sum, Alias,
                         Select, Cast)
 from storm.info import ClassAlias
 
-from stoqlib.database.expr import Date, Field
+from stoqlib.database.expr import Date, Field, ArrayAgg, ArrayToString
 from stoqlib.database.viewable import Viewable
 from stoqlib.domain.account import BankAccount
 from stoqlib.domain.payment.card import (CreditProvider,
@@ -44,8 +44,9 @@ from stoqlib.domain.payment.method import CheckData, PaymentMethod
 from stoqlib.domain.payment.operation import get_payment_operation
 from stoqlib.domain.payment.payment import Payment, PaymentChangeHistory
 from stoqlib.domain.payment.renegotiation import PaymentRenegotiation
-from stoqlib.domain.person import Person, Branch
+from stoqlib.domain.person import Person, Branch, Company
 from stoqlib.domain.purchase import PurchaseOrder
+from stoqlib.domain.receiving import (PurchaseReceivingMap, ReceivingInvoice, ReceivingOrder)
 from stoqlib.domain.sale import Sale
 from stoqlib.lib.dateutils import localtoday
 from stoqlib.lib.parameters import sysparam
@@ -74,6 +75,7 @@ class BasePaymentView(Viewable):
     branch = Branch
 
     card_data = CreditCardData
+    card_type = CreditCardData.card_type
     check_data = CheckData
 
     # Payment
@@ -84,6 +86,7 @@ class BasePaymentView(Viewable):
     due_date = Payment.due_date
     status = Payment.status
     paid_date = Payment.paid_date
+    open_date = Payment.open_date
     value = Payment.value
     paid_value = Payment.paid_value
     payment_number = Payment.payment_number
@@ -107,6 +110,7 @@ class BasePaymentView(Viewable):
 
     # Sale
     sale_id = Sale.id
+    sale_open_date = Sale.open_date
 
     # Purchase
     purchase_id = PurchaseOrder.id
@@ -202,7 +206,10 @@ class BasePaymentView(Viewable):
 
 
 class InPaymentView(BasePaymentView):
+    DraweeCompany = ClassAlias(Company, 'drawee_company')
+
     drawee = Person.name
+    drawee_fancy_name = DraweeCompany.fancy_name
     person_id = Person.id
     renegotiated_id = PaymentGroup.renegotiation_id
     renegotiation_id = PaymentRenegotiation.id
@@ -215,6 +222,7 @@ class InPaymentView(BasePaymentView):
     tables = BasePaymentView.tables[:]
     tables.extend([
         LeftJoin(Person, PaymentGroup.payer_id == Person.id),
+        LeftJoin(DraweeCompany, DraweeCompany.person_id == Person.id),
         LeftJoin(PaymentRenegotiation,
                  PaymentRenegotiation.group_id == PaymentGroup.id),
     ])
@@ -260,8 +268,23 @@ class InPaymentView(BasePaymentView):
         return False
 
 
+_InvoiceNumberSummary = Alias(Select(
+    columns=[Alias(PurchaseOrder.group_id, 'group_id'),
+             Alias(ArrayToString(ArrayAgg(ReceivingInvoice.invoice_number), ', '),
+                   'invoice_numbers')],
+    tables=[
+        PurchaseOrder,
+        Join(PurchaseReceivingMap, PurchaseOrder.id == PurchaseReceivingMap.purchase_id),
+        Join(ReceivingOrder, ReceivingOrder.id == PurchaseReceivingMap.receiving_id),
+        Join(ReceivingInvoice, ReceivingOrder.receiving_invoice_id == ReceivingInvoice.id),
+    ],
+    group_by=[PurchaseOrder.group_id]), '_invoice_number_summary')
+
+
 class OutPaymentView(BasePaymentView):
     supplier_name = Person.name
+
+    invoice_numbers = Field('_invoice_number_summary', 'invoice_numbers')
 
     _count_tables = BasePaymentView._count_tables[:]
     _count_tables.append(
@@ -272,6 +295,8 @@ class OutPaymentView(BasePaymentView):
     tables.extend([
         LeftJoin(Person,
                  Person.id == BasePaymentView.PaymentGroup_Sale.recipient_id),
+        LeftJoin(_InvoiceNumberSummary, Field('_invoice_number_summary', 'group_id') ==
+                 PaymentGroup.id),
     ])
 
     clause = (Payment.payment_type == Payment.TYPE_OUT)
@@ -294,6 +319,7 @@ class CardPaymentView(Viewable):
     description = Payment.description
     due_date = Payment.due_date
     paid_date = Payment.paid_date
+    open_date = Payment.open_date
     status = Payment.status
     value = Payment.value
 
@@ -348,6 +374,7 @@ class _BillandCheckPaymentView(Viewable):
     identifier = Payment.identifier
     due_date = Payment.due_date
     paid_date = Payment.paid_date
+    open_date = Payment.open_date
     status = Payment.status
     value = Payment.value
     payment_number = Payment.payment_number

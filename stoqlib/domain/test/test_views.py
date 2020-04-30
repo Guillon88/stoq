@@ -22,16 +22,12 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-
-__tests__ = 'stoqlib/domain/views.py'
-
 import datetime
 from decimal import Decimal
 
 from kiwi.datatypes import converter
 
 from stoqlib.database.expr import Date
-from stoqlib.database.runtime import get_current_branch
 from stoqlib.database.viewable import Viewable
 from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.domain.payment.payment import Payment, PaymentChangeHistory
@@ -44,6 +40,7 @@ from stoqlib.domain.product import (ProductSupplierInfo, ProductStockItem,
 from stoqlib.domain.purchase import PurchaseOrder, QuoteGroup
 from stoqlib.domain.sellable import Sellable
 from stoqlib.domain.test.domaintest import DomainTest
+from stoqlib.domain.views import ReturnedSalesView
 from stoqlib.domain.views import AccountView
 from stoqlib.domain.views import ClientWithSalesView
 from stoqlib.domain.views import ProductBrandByBranchView
@@ -57,6 +54,8 @@ from stoqlib.domain.views import SellableFullStockView
 from stoqlib.domain.views import SoldItemView
 from stoqlib.lib.dateutils import localtoday
 from stoqlib.lib.introspection import get_all_classes
+
+__tests__ = 'stoqlib/domain/views.py'
 
 
 def _get_all_views():
@@ -117,7 +116,7 @@ class TestBasePaymentView(DomainTest):
         self.create_payment()
         sresults = BasePaymentView.find_pending(self.store)
         results = BasePaymentView.post_search_callback(sresults=sresults)
-        self.assertEquals(results[0], ('count', 'sum'))
+        self.assertEqual(results[0], ('count', 'sum'))
         self.assertIsNotNone(results[1])
 
     def test_can_cancel_payment(self):
@@ -157,7 +156,7 @@ class TestBasePaymentView(DomainTest):
 
         payment.due_date = localtoday() + datetime.timedelta(-4)
         view = self.store.find(InPaymentView, id=payment.id).one()
-        self.assertEquals(view.get_days_late(), 4)
+        self.assertEqual(view.get_days_late(), 4)
 
         payment.due_date = localtoday() + datetime.timedelta(+4)
         view = self.store.find(InPaymentView, id=payment.id).one()
@@ -174,26 +173,25 @@ class TestBasePaymentView(DomainTest):
         self.assertTrue(view.is_paid())
 
     def test_find_pending(self):
-        due_date = localtoday() + datetime.timedelta(-4), localtoday()
         for i in range(5):
+            payment = self.create_payment(payment_type=Payment.TYPE_IN)
+            payment.status = Payment.STATUS_PENDING
             if i % 2 == 0:
-                payment = self.create_payment(payment_type=Payment.TYPE_IN)
-                payment.status = Payment.STATUS_PENDING
                 payment.due_date = localtoday() + datetime.timedelta(-2)
             else:
-                payment = self.create_payment(payment_type=Payment.TYPE_IN)
-                payment.status = Payment.STATUS_PENDING
                 payment.due_date = Date(localtoday())
 
+        # Between 4 days ago and today
+        due_date = (localtoday() + datetime.timedelta(-4), localtoday())
         result = InPaymentView.find_pending(store=self.store, due_date=due_date)
-        self.assertEquals(result.count(), 5)
+        self.assertEqual(result.count(), 5)
 
         result = InPaymentView.find_pending(store=self.store,
                                             due_date=Date(localtoday()))
-        self.assertEquals(result.count(), 2)
+        self.assertEqual(result.count(), 2)
         result = InPaymentView.find_pending(store=self.store,
                                             due_date=None)
-        self.assertEquals(result.count(), 7)
+        self.assertEqual(result.count(), 7)
 
 
 class TestInPaymentView(DomainTest):
@@ -201,7 +199,7 @@ class TestInPaymentView(DomainTest):
         payment = self.create_payment(payment_type=Payment.TYPE_IN)
         self.create_payment_renegotiation(group=payment.group)
         result = self.store.find(InPaymentView, id=payment.id).one()
-        self.assertEquals(result.renegotiation.client.person.name, u'Client')
+        self.assertEqual(result.renegotiation.client.person.name, u'Client')
 
     def test_renegotiated(self):
         payment = self.create_payment(payment_type=Payment.TYPE_IN)
@@ -210,7 +208,7 @@ class TestInPaymentView(DomainTest):
             group=payment.group)
         payment.group.renegotiation.set_renegotiated()
         result = self.store.find(InPaymentView, id=payment.id).one()
-        self.assertEquals(result.renegotiated.client.person.name, u'Client')
+        self.assertEqual(result.renegotiated.client.person.name, u'Client')
 
     def test_get_parent(self):
         sale = self.create_sale()
@@ -221,15 +219,17 @@ class TestInPaymentView(DomainTest):
 
 class TestCardPaymentView(DomainTest):
     def test_status_str(self):
-        payment = self.create_card_payment(payment_type=Payment.TYPE_IN)
+        payment = self.create_card_payment(provider_id=u'AMEX',
+                                           payment_type=Payment.TYPE_IN)
         result = self.store.find(CardPaymentView, id=payment.id).one()
-        self.assertEquals(result.status_str, u'Preview')
+        self.assertEqual(result.status_str, u'Preview')
 
     def test_renegotiation(self):
-        payment = self.create_card_payment(payment_type=Payment.TYPE_IN)
+        payment = self.create_card_payment(provider_id=u'AMEX',
+                                           payment_type=Payment.TYPE_IN)
         self.create_payment_renegotiation(group=payment.group)
         result = self.store.find(CardPaymentView, id=payment.id).one()
-        self.assertEquals(result.renegotiation.client.person.name, u'Client')
+        self.assertEqual(result.renegotiation.client.person.name, u'Client')
 
 
 class Test_BillandCheckPaymentView(DomainTest):
@@ -238,14 +238,14 @@ class Test_BillandCheckPaymentView(DomainTest):
         p = self.create_payment(payment_type=Payment.TYPE_IN,
                                 method=method)
         view = self.store.find(InCheckPaymentView, id=p.id).one()
-        self.assertEquals(view.status_str, u'Preview')
+        self.assertEqual(view.status_str, u'Preview')
 
     def test_method_description(self):
         method = self.store.find(PaymentMethod, method_name=u'check').one()
         p = self.create_payment(payment_type=Payment.TYPE_IN,
                                 method=method)
         view = self.store.find(InCheckPaymentView, id=p.id).one()
-        self.assertEquals(view.method_description, u'Check')
+        self.assertEqual(view.method_description, u'Check')
 
 
 class TestPaymentChangeHistoryView(DomainTest):
@@ -259,11 +259,11 @@ class TestPaymentChangeHistoryView(DomainTest):
         history.last_due_date = Date(localtoday())
         history.last_status = Payment.STATUS_PENDING
         view = self.store.find(PaymentChangeHistoryView, id=history.id).one()
-        self.assertEquals(view.changed_field, u'Due Date')
+        self.assertEqual(view.changed_field, u'Due Date')
 
         history.last_due_date = None
         view = self.store.find(PaymentChangeHistoryView, id=history.id).one()
-        self.assertEquals(view.changed_field, u'Status')
+        self.assertEqual(view.changed_field, u'Status')
 
     def test_from_value(self):
         payment = self.create_payment()
@@ -276,12 +276,12 @@ class TestPaymentChangeHistoryView(DomainTest):
         due_date = converter.as_string(datetime.date, history.last_due_date)
         history.last_status = Payment.STATUS_PENDING
         view = self.store.find(PaymentChangeHistoryView, id=history.id).one()
-        self.assertEquals(view.from_value, due_date)
+        self.assertEqual(view.from_value, due_date)
 
         history.last_due_date = None
         status = Payment.statuses[history.last_status]
         view = self.store.find(PaymentChangeHistoryView, id=history.id).one()
-        self.assertEquals(view.from_value, status)
+        self.assertEqual(view.from_value, status)
 
     def test_to_value(self):
         payment = self.create_payment()
@@ -294,12 +294,12 @@ class TestPaymentChangeHistoryView(DomainTest):
         due_date = converter.as_string(datetime.date, history.new_due_date)
         history.new_status = Payment.STATUS_CONFIRMED
         view = self.store.find(PaymentChangeHistoryView, id=history.id).one()
-        self.assertEquals(view.to_value, due_date)
+        self.assertEqual(view.to_value, due_date)
 
         history.new_due_date = None
         status = Payment.statuses[history.new_status]
         view = self.store.find(PaymentChangeHistoryView, id=history.id).one()
-        self.assertEquals(view.to_value, status)
+        self.assertEqual(view.to_value, status)
 
 
 class TestProductFullStockView(DomainTest):
@@ -308,17 +308,17 @@ class TestProductFullStockView(DomainTest):
         p1 = self.create_product(branch=branch, stock=1)
 
         results = ProductFullStockView.find_by_branch(self.store, branch)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         # FIXME: Storm does not support count() with group_by
-        # self.assertEquals(results.count(), 1)
+        # self.assertEqual(results.count(), 1)
         # The results should have 11 items. 10 for the products that already
         # exists, and 1 more for the one we created
-        self.assertEquals(len(list(results)), 11)
+        self.assertEqual(len(list(results)), 11)
 
         results = ProductFullStockView.find_by_branch(self.store, branch)
         results = results.find(ProductFullStockView.product_id == p1.id)
-        self.failUnless(list(results))
-        self.assertEquals(len(list(results)), 1)
+        self.assertTrue(list(results))
+        self.assertEqual(len(list(results)), 1)
 
     def test_post_search_callback(self):
         self.clean_domain([StockTransactionHistory, ProductSupplierInfo, ProductStockItem,
@@ -339,7 +339,7 @@ class TestProductFullStockView(DomainTest):
             # Total stock = (10 * 10) + (20 * 5) = 200
             self.store.execute(postresults[1]).get_one(), (30, 200))
 
-        sresults = sresults.find(ProductFullStockView.stock > 5)
+        sresults.having(ProductFullStockView.stock > 5)
         postresults = ProductFullStockView.post_search_callback(sresults)
         self.assertEqual(postresults[0], ('count', 'sum'))
         self.assertEqual(
@@ -355,15 +355,15 @@ class TestProductFullStockView(DomainTest):
 
         results = ProductFullStockView.find_by_branch(self.store, None)
         results = results.find(ProductFullStockView.product_id == p1.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         product_view = results[0]
-        self.assertEquals(product_view.unit_description, u"kg")
+        self.assertEqual(product_view.unit_description, u"kg")
 
         results = ProductFullStockView.find_by_branch(self.store, None).find(
             ProductFullStockView.product_id == p2.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         product_view = results[0]
-        self.assertEquals(product_view.unit_description, u"un")
+        self.assertEqual(product_view.unit_description, u"un")
 
     def test_get_product_and_category_description(self):
         p1 = self.create_product()
@@ -374,17 +374,17 @@ class TestProductFullStockView(DomainTest):
 
         results = ProductFullStockView.find_by_branch(self.store, None).find(
             ProductFullStockView.product_id == p1.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         pv = results[0]
         desc = pv.get_product_and_category_description()
-        self.assertEquals(desc, u"[category] Description")
+        self.assertEqual(desc, u"[category] Description")
 
         results = ProductFullStockView.find_by_branch(self.store, None).find(
             ProductFullStockView.product_id == p2.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         pv = results[0]
         desc = pv.get_product_and_category_description()
-        self.assertEquals(desc, u"Description")
+        self.assertEqual(desc, u"Description")
 
     def test_stock_cost(self):
         branch = self.create_branch()
@@ -394,24 +394,23 @@ class TestProductFullStockView(DomainTest):
 
         results = ProductFullStockView.find_by_branch(self.store, None).find(
             ProductFullStockView.product_id == p1.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         pv = results[0]
-        self.assertEquals(pv.stock_cost, 10)
+        self.assertEqual(pv.stock_cost, 10)
 
-        branch = get_current_branch(self.store)
         results = ProductFullStockView.find_by_branch(self.store, None).find(
             ProductFullStockView.product_id == p2.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         pv = results[0]
-        self.assertEquals(pv.stock_cost, 0)
+        self.assertEqual(pv.stock_cost, 0)
 
     def test_price(self):
         p1 = self.create_product()
         results = ProductFullStockView.find_by_branch(self.store, None).find(
             ProductFullStockView.product_id == p1.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         pv = results[0]
-        self.assertEquals(pv.price, 10)
+        self.assertEqual(pv.price, 10)
 
         # Set a sale price
         sellable = p1.sellable
@@ -425,7 +424,7 @@ class TestProductFullStockView(DomainTest):
 
         results = ProductFullStockView.find_by_branch(self.store, None).find(
             ProductFullStockView.product_id == p1.id)
-        self.assertEquals(results[0].price, Decimal('5.55'))
+        self.assertEqual(results[0].price, Decimal('5.55'))
 
         # Testing with a sale price set, but in the past
         date1 = localtoday() - datetime.timedelta(days=10)
@@ -435,12 +434,9 @@ class TestProductFullStockView(DomainTest):
 
         results = ProductFullStockView.find_by_branch(self.store, None).find(
             ProductFullStockView.product_id == p1.id)
-        self.assertEquals(results[0].price, 10)
+        self.assertEqual(results[0].price, 10)
 
     def test_with_unblocked_sellables_query(self):
-        # This is used in the purchase wizard and breaks storm
-        from stoqlib.domain.sellable import Sellable
-
         p1 = self.create_product()
         supplier = self.create_supplier()
 
@@ -483,17 +479,18 @@ class TestProductFullStockView(DomainTest):
         branch = self.create_branch()
         self.create_product(branch=branch, stock=1)
 
-        res = self.store.find(ProductFullStockView)
-        res_by_branch = ProductFullStockView.find_by_branch(self.store, branch)
+        res = self.store.find(ProductFullStockView).one()
+        res_by_branch = ProductFullStockView.find_by_branch(
+            self.store, branch).one()
 
-        self.assertEqual(res[0], res_by_branch[0])
-        self.assertEqual(res_by_branch[0], res[0])
+        self.assertEqual(res, res_by_branch)
+        self.assertEqual(res_by_branch, res)
 
         product = self.create_product()
         other_viewable = self.store.find(
             ProductFullStockView, Sellable.id == product.sellable.id).one()
-        self.assertNotEqual(res[0], other_viewable)
-        self.assertNotEqual(res[0], object())
+        self.assertNotEqual(res, other_viewable)
+        self.assertNotEqual(res, object())
 
     def test_get_parent(self):
         parent = self.create_product()
@@ -513,9 +510,9 @@ class TestProductComponentView(DomainTest):
         pc1 = self.create_product_component()
         pc1.product.is_composed = True
         results = self.store.find(ProductComponentView)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         pcv = results[0]
-        self.assertEquals(pcv.sellable, pc1.product.sellable)
+        self.assertEqual(pcv.sellable, pc1.product.sellable)
 
 
 class TestSellableFullStockView(DomainTest):
@@ -526,14 +523,14 @@ class TestSellableFullStockView(DomainTest):
 
         results = SellableFullStockView.find_by_branch(self.store, branch).find(
             SellableFullStockView.product_id == p1.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
 
         results = SellableFullStockView.find_by_branch(self.store, branch).find(
             SellableFullStockView.product_id == p2.id,)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
         # FIXME: Storm does not support count() with group_by
-        # self.assertEquals(results.count(), 1)
-        self.assertEquals(len(list(results)), 1)
+        # self.assertEqual(results.count(), 1)
+        self.assertEqual(len(list(results)), 1)
 
     def test_sellable(self):
         branch = self.create_branch()
@@ -541,18 +538,18 @@ class TestSellableFullStockView(DomainTest):
 
         results = SellableFullStockView.find_by_branch(self.store, branch).find(
             SellableFullStockView.product_id == p1.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
 
-        self.assertEquals(results[0].sellable, p1.sellable)
+        self.assertEqual(results[0].sellable, p1.sellable)
 
     def test_price(self):
         branch = self.create_branch()
         p1 = self.create_product(branch=branch, stock=1, price=Decimal('10.15'))
         results = SellableFullStockView.find_by_branch(self.store, branch).find(
             SellableFullStockView.product_id == p1.id)
-        self.failUnless(list(results))
+        self.assertTrue(list(results))
 
-        self.assertEquals(results[0].price, Decimal('10.15'))
+        self.assertEqual(results[0].price, Decimal('10.15'))
 
         # Set a sale price
         sellable = p1.sellable
@@ -566,7 +563,7 @@ class TestSellableFullStockView(DomainTest):
 
         results = SellableFullStockView.find_by_branch(self.store, branch).find(
             SellableFullStockView.product_id == p1.id)
-        self.assertEquals(results[0].price, Decimal('5.55'))
+        self.assertEqual(results[0].price, Decimal('5.55'))
 
         # Testing with a sale price set, but in the past
         date1 = localtoday() - datetime.timedelta(days=10)
@@ -576,47 +573,47 @@ class TestSellableFullStockView(DomainTest):
 
         results = SellableFullStockView.find_by_branch(self.store, branch).find(
             SellableFullStockView.product_id == p1.id)
-        self.assertEquals(results[0].price, Decimal('10.15'))
+        self.assertEqual(results[0].price, Decimal('10.15'))
 
 
 class TestSellableCategoryView(DomainTest):
     def test_category(self):
         category = self.create_sellable_category()
         results = self.store.find(SellableCategoryView, id=category.id)
-        self.failUnless(list(results))
-        self.assertEquals(results[0].category, category)
+        self.assertTrue(list(results))
+        self.assertEqual(results[0].category, category)
 
     def test_get_commission(self):
         category = self.create_sellable_category()
         results = self.store.find(SellableCategoryView, id=category.id)
-        self.failUnless(list(results))
-        self.assertEquals(results[0].get_commission(), None)
+        self.assertTrue(list(results))
+        self.assertEqual(results[0].get_commission(), None)
 
         base_category = self.create_sellable_category()
         self.create_commission_source(category=base_category)
         category.category = base_category
         results = self.store.find(SellableCategoryView, id=category.id)
-        self.assertEquals(results[0].get_commission(), 10)
+        self.assertEqual(results[0].get_commission(), 10)
 
         self.create_commission_source(category=category)
         results = self.store.find(SellableCategoryView, id=category.id)
-        self.assertEquals(results[0].get_commission(), 10)
+        self.assertEqual(results[0].get_commission(), 10)
 
     def test_get_installments_commission(self):
         category = self.create_sellable_category()
         results = self.store.find(SellableCategoryView, id=category.id)
-        self.failUnless(list(results))
-        self.assertEquals(results[0].get_installments_commission(), None)
+        self.assertTrue(list(results))
+        self.assertEqual(results[0].get_installments_commission(), None)
 
         base_category = self.create_sellable_category()
         category.category = base_category
         self.create_commission_source(category=base_category)
         results = self.store.find(SellableCategoryView, id=category.id)
-        self.assertEquals(results[0].get_installments_commission(), 1)
+        self.assertEqual(results[0].get_installments_commission(), 1)
 
         self.create_commission_source(category=category)
         results = self.store.find(SellableCategoryView, id=category.id)
-        self.assertEquals(results[0].get_installments_commission(), 1)
+        self.assertEqual(results[0].get_installments_commission(), 1)
 
     def test_get_suggested_markup(self):
 
@@ -627,18 +624,18 @@ class TestSellableCategoryView(DomainTest):
         category.suggested_markup = 200
 
         view = self.store.find(SellableCategoryView, id=category.id).one()
-        self.assertEquals(view.get_suggested_markup(), 200)
+        self.assertEqual(view.get_suggested_markup(), 200)
 
         category.category = parent_category
         category.suggested_markup = None
         view = self.store.find(SellableCategoryView, id=category.id).one()
-        self.assertEquals(view.get_suggested_markup(), 100)
+        self.assertEqual(view.get_suggested_markup(), 100)
 
 
 class TestQuotationView(DomainTest):
     def test_group_quotation_purchase(self):
         order = self.create_purchase_order()
-        quote = QuoteGroup(store=self.store, branch=order.branch)
+        quote = QuoteGroup(store=self.store, branch=order.branch, station=order.station)
         order.status = PurchaseOrder.ORDER_QUOTING
         quote.add_item(order)
 
@@ -650,11 +647,11 @@ class TestQuotationView(DomainTest):
         quotations[0].close()
 
         results = self.store.find(QuotationView, id=quotations[0].id)
-        self.failUnless(list(results))
-        self.assertEquals(results.count(), 1)
-        self.assertEquals(results[0].group, quote)
-        self.assertEquals(results[0].quotation, quotations[0])
-        self.assertEquals(results[0].purchase, order)
+        self.assertTrue(list(results))
+        self.assertEqual(results.count(), 1)
+        self.assertEqual(results[0].group, quote)
+        self.assertEqual(results[0].quotation, quotations[0])
+        self.assertEqual(results[0].purchase, order)
 
 
 class TestSoldItemView(DomainTest):
@@ -662,42 +659,42 @@ class TestSoldItemView(DomainTest):
     def test_average_cost(self):
         sale = self.create_sale()
         sellable = self.add_product(sale)
-        sale.order()
+        sale.order(self.current_user)
         self.add_payments(sale, method_type=u'money')
-        sale.confirm()
+        sale.confirm(self.current_user)
 
         view = self.store.find(SoldItemView, id=sellable.id).one()
-        self.assertEquals(view.average_cost, 0)
+        self.assertEqual(view.average_cost, 0)
 
 
 class TestAccountView(DomainTest):
     def test_account(self):
         account = self.create_account()
         results = self.store.find(AccountView, id=account.id)
-        self.failUnless(list(results))
-        self.assertEquals(results[0].account, account)
+        self.assertTrue(list(results))
+        self.assertEqual(results[0].account, account)
 
     def test_parent_account(self):
         account = self.create_account()
         account.parent = self.create_account()
         results = self.store.find(AccountView, id=account.id)
-        self.failUnless(list(results))
-        self.assertEquals(results[0].parent_account, account.parent)
+        self.assertTrue(list(results))
+        self.assertEqual(results[0].parent_account, account.parent)
 
     def test_matches(self):
         account = self.create_account()
         account.parent = self.create_account()
         results = self.store.find(AccountView, id=account.id)
-        self.failUnless(list(results))
-        self.failUnless(results[0].matches(account.id))
-        self.failUnless(results[0].matches(account.parent.id))
+        self.assertTrue(list(results))
+        self.assertTrue(results[0].matches(account.id))
+        self.assertTrue(results[0].matches(account.parent.id))
 
     def test_get_combined_value(self):
         a1 = self.create_account()
         a2 = self.create_account()
         results = self.store.find(AccountView, id=a1.id)
-        self.failUnless(list(results))
-        self.assertEquals(results[0].get_combined_value(), 0)
+        self.assertTrue(list(results))
+        self.assertEqual(results[0].get_combined_value(), 0)
 
         t1 = self.create_account_transaction(a1, 1)
         t1.source_account = a1
@@ -709,10 +706,10 @@ class TestAccountView(DomainTest):
         self.store.flush()
 
         results = self.store.find(AccountView, id=a1.id)
-        self.failUnless(list(results))
-        self.assertEquals(results.count(), 1)
+        self.assertTrue(list(results))
+        self.assertEqual(results.count(), 1)
         # The negative sum of t1 and t2
-        self.assertEquals(results[0].get_combined_value(), -10)
+        self.assertEqual(results[0].get_combined_value(), -10)
 
         t3 = self.create_account_transaction(a2, 10)
         t3.source_account = a2
@@ -724,16 +721,44 @@ class TestAccountView(DomainTest):
         self.store.flush()
 
         results = self.store.find(AccountView, id=a1.id)
-        self.failUnless(list(results))
-        self.assertEquals(results.count(), 1)
+        self.assertTrue(list(results))
+        self.assertEqual(results.count(), 1)
         # The negative sum of t1 and t2 plus the sum of t3 and t4
-        self.assertEquals(results[0].get_combined_value(), 90)
+        self.assertEqual(results[0].get_combined_value(), 90)
 
     def test_repr(self):
         a1 = self.create_account()
         results = self.store.find(AccountView, id=a1.id)
-        self.failUnless(list(results))
-        self.assertEquals(repr(results[0]), u'<AccountView Test Account>')
+        self.assertTrue(list(results))
+        self.assertEqual(repr(results[0]), u'<AccountView Test Account>')
+
+
+class TestReturnedSalesView(DomainTest):
+
+    def test_properties(self):
+        self.assertEqual(self.store.find(ReturnedSalesView).count(), 0)
+        # First create a sale
+        sale = self.create_sale(branch=self.current_branch)
+        self.add_product(sale)
+        sale.order(self.current_user)
+        self.add_payments(sale)
+        sale.confirm(self.current_user)
+        sale.group.pay()
+
+        # A new sale and a trade
+        returned_sale = sale.create_sale_return_adapter(self.current_branch, self.current_user,
+                                                        self.current_station)
+        new_sale = self.create_sale()
+        returned_sale.new_sale = new_sale
+        returned_sale.trade(self.current_user)
+
+        # now test the properties
+        self.assertEqual(self.store.find(ReturnedSalesView).count(), 1)
+        view = self.store.find(ReturnedSalesView)[0]
+        assert view
+
+        self.assertEqual(view.new_sale, new_sale)
+        self.assertEqual(view.new_sale_identifier, new_sale.identifier)
 
 
 class TestProductFullStockItemView(DomainTest):
@@ -753,7 +778,7 @@ class TestProductFullStockItemView(DomainTest):
         # event if there is more than one purchase order for the product.
         results = self.store.find(ProductFullStockItemView)
         ids = [r.id for r in results]
-        self.assertEquals(ids.count(product.sellable.id), 1)
+        self.assertEqual(ids.count(product.sellable.id), 1)
 
 
 class TestProductBrandByBranchView(DomainTest):

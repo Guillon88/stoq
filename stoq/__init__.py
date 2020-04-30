@@ -28,10 +28,10 @@ website = 'http://www.stoq.com.br'
 
 #: Major version, should only increase when big, important features
 #: are integrated.
-major_version = 1
+major_version = 4
 
 #: Minor version, increase when doing a new stable release
-minor_version = 11
+minor_version = 8
 
 #: Micro version, increase when doing a bug fix for a stable release
 micro_version = 0
@@ -40,7 +40,7 @@ micro_version = 0
 extra_version = 'rc1'
 
 #: the date the software was released
-release_date = (2016, 3, 29)
+release_date = (2020, 4, 19)
 
 #: if this is a stable release
 stable = True
@@ -53,6 +53,9 @@ version = '.'.join(map(str, stoq_version))
 
 #: stoq version as a string, sans the extra version
 short_version = version[:]
+
+#: If stoq is currently on trial mode
+trial_mode = False
 
 if extra_version:
     stoq_version = stoq_version + (extra_version,)

@@ -88,7 +88,7 @@ class StoqCommandHandler:
                     self.prog_name, cmd, self.prog_name))
                 return 1
 
-        nargs = func.func_code.co_argcount - 2
+        nargs = func.__code__.co_argcount - 2
         if len(args) < nargs:
             raise SystemExit("%s: %s requires at least %d argument(s)" % (
                 self.prog_name, cmd, nargs))
@@ -145,7 +145,10 @@ class StoqCommandHandler:
                                    load_plugins=False)
 
         from stoqlib.database.admin import initialize_system
+        from stoqlib.database.runtime import set_default_store
         from stoqlib.database.settings import db_settings
+        from stoqlib.lib.pgpass import write_pg_pass
+        from stoqlib.net.server import ServerProxy
         if options.dbname:
             db_settings.dbname = options.dbname
         if options.address:
@@ -156,9 +159,21 @@ class StoqCommandHandler:
             db_settings.username = options.username
         if options.password:
             db_settings.password = options.password
+            # a password was sent via command line. Make sure we can run psql by
+            # setting up pgpass
+            write_pg_pass(db_settings.dbname, db_settings.address,
+                          db_settings.port, db_settings.username,
+                          db_settings.password)
+
+        server = ServerProxy()
+        running = server.check_running()
+        if running:
+            server.call('pause_tasks')
+        # ServerProxy may have opened a store
+        set_default_store(None)
 
         try:
-            initialize_system(password=unicode(options.password),
+            initialize_system(password='',
                               force=options.force, empty=options.empty)
         except ValueError as e:
             # Database server is missing pg_trgm
@@ -174,12 +189,23 @@ class StoqCommandHandler:
         if options.register_station and not options.empty:
             self._register_station()
 
+        if options.pre_plugins:
+            self._register_plugins(str(options.pre_plugins).split(','))
+
         if options.plugins:
-            self._enable_plugins(unicode(options.plugins).split(','))
+            self._enable_plugins(str(options.plugins).split(','))
 
         if options.demo:
             self._enable_demo()
+
         config.flush()
+
+        # The schema was upgraded. If it was running before,
+        # restart it so it can load the new code
+        if running:
+            server.call('restart')
+
+        return 0
 
     def opt_init(self, parser, group):
         group.add_option('-e', '--create-examples',
@@ -190,6 +216,9 @@ class StoqCommandHandler:
                          action='store_false',
                          default=True,
                          dest='register_station')
+        group.add_option('', '--register-plugins',
+                         action='store',
+                         dest='pre_plugins')
         group.add_option('', '--enable-plugins',
                          action='store',
                          dest='plugins')
@@ -226,12 +255,12 @@ class StoqCommandHandler:
 
     def _enable_demo(self):
         from stoqlib.database.runtime import new_store
-        store = new_store()
-        store.execute("UPDATE parameter_data SET field_value = '1' WHERE field_name = 'DEMO_MODE';")
-        store.commit()
-        store.close()
+        with new_store() as store:
+            store.execute("INSERT INTO parameter_data (field_name, field_value) "
+                          "VALUES ('DEMO_MODE', '1');")
 
     def _enable_plugins(self, plugin_names):
+        from stoqlib.database.runtime import new_store
         from stoqlib.lib.pluginmanager import (PluginError,
                                                get_plugin_manager)
         manager = get_plugin_manager()
@@ -242,13 +271,42 @@ class StoqCommandHandler:
                 return
 
             if plugin_name not in manager.available_plugins_names:
-                self._run_task(manager.download_plugin(plugin_name))
+                rv, text = manager.download_plugin(plugin_name)
+                print("{}: [{}] {}".format(plugin_name, rv, text))
 
             try:
-                manager.install_plugin(plugin_name)
+                with new_store() as store:
+                    manager.install_plugin(store, plugin_name)
             except PluginError as err:
                 print('ERROR: %s' % (str(err), ))
                 return
+
+    def _register_plugins(self, plugin_names):
+        from stoqlib.database.runtime import new_store
+        from stoqlib.lib.pluginmanager import get_plugin_manager
+        manager = get_plugin_manager()
+
+        with new_store() as store:
+            for name in plugin_names:
+                manager.pre_install_plugin(store, name)
+
+    def _insert_egg(self, plugin_name, filename):
+        from stoqlib.database.runtime import new_store
+        from stoqlib.domain.plugin import PluginEgg
+        from stoqlib.lib.fileutils import md5sum_for_filename
+
+        print('Inserting plugin egg %s %s' % (plugin_name, filename))
+        md5sum = str(md5sum_for_filename(filename))
+        with open(filename, 'rb') as f:
+            with new_store() as store:
+                plugin_egg = store.find(PluginEgg, plugin_name=plugin_name).one()
+                if plugin_egg is None:
+                    plugin_egg = PluginEgg(
+                        store=store,
+                        plugin_name=plugin_name,
+                    )
+                plugin_egg.egg_content = f.read()
+                plugin_egg.egg_md5sum = md5sum
 
     def _provide_app_info(self):
         # FIXME: The webservice need the IAppInfo provided to get the stoq
@@ -272,17 +330,6 @@ class StoqCommandHandler:
         root = logging.getLogger()
         root.setLevel(logging.WARNING)
         root.addHandler(ch)
-
-    def _run_task(self, deferred):
-        from twisted.internet import reactor
-
-        def stop_reactor(*args):
-            if reactor.running:
-                reactor.stop()
-
-        deferred.addCallback(stop_reactor)
-        deferred.addErrback(stop_reactor)
-        reactor.run()
 
     def _register_station(self):
         # Register the current computer as a branch station
@@ -349,11 +396,9 @@ class StoqCommandHandler:
 
     def cmd_updateschema(self, options):
         """Update the database schema"""
-        from stoqlib.api import api
         from stoqlib.database.migration import StoqlibSchemaMigration
         from stoqlib.lib.environment import is_developer_mode
         from stoqlib.net.server import ServerProxy
-        from twisted.internet import reactor
 
         self._read_config(options, check_schema=False, load_plugins=False,
                           register_station=False)
@@ -367,39 +412,20 @@ class StoqCommandHandler:
         else:
             backup = options.disable_backup
 
-        @api.async
-        def migrate(retval):
-            server = ServerProxy()
-            running = yield server.check_running()
+        server = ServerProxy()
+        running = server.check_running()
+        if running:
+            server.call('pause_tasks')
+
+        try:
+            retval = migration.update(backup=backup)
+        finally:
+            # The schema was upgraded. If it was running before,
+            # restart it so it can load the new code
             if running:
-                yield server.call('pause_tasks')
+                server.call('restart')
 
-            try:
-                retval[0] = yield migration.update_async(backup=backup)
-            finally:
-                # The schema was upgraded. If it was running before,
-                # restart it so it can load the new code
-                if running:
-                    yield server.call('restart')
-
-                if reactor.running:
-                    reactor.stop()
-
-        retval = [False]
-        reactor.callWhenRunning(migrate, retval)
-        reactor.run()
-
-        return 0 if retval[0] else 1
-
-    def opt_clone(self, parser, group):
-        group.add_option('', '--dry',
-                         action='store_true',
-                         dest='dry')
-
-    def opt_update(self, parser, group):
-        group.add_option('', '--dry',
-                         action='store_true',
-                         dest='dry')
+        return 0 if retval else 1
 
     def cmd_dump(self, options, output):
         """Create a database dump"""
@@ -434,24 +460,41 @@ class StoqCommandHandler:
         self._provide_app_info()
         self._setup_logging()
 
-        self._enable_plugins([unicode(plugin_name)])
+        self._enable_plugins([str(plugin_name)])
+
+    def opt_update_plugins(self, parser, group):
+        group.add_option('', '--channel',
+                         action="store",
+                         dest="channel",
+                         type="str",
+                         help="which plugin channel to use",
+                         default=None)
 
     def cmd_update_plugins(self, options):
         """Update plugins on Stoq"""
+        if options.channel and options.channel not in ['stable', 'beta', 'alpha', 'dev', 'desktop']:
+            print('invalid channel')
+            return
         self._read_config(options, register_station=False,
                           check_schema=False,
                           load_plugins=False)
         self._provide_app_info()
         self._setup_logging()
 
-        from twisted.internet.defer import DeferredList
         from stoqlib.lib.pluginmanager import get_plugin_manager
         manager = get_plugin_manager()
 
-        deferred_list = [
-            manager.download_plugin(egg_plugin)
-            for egg_plugin in manager.egg_plugins_names]
-        self._run_task(DeferredList(deferred_list))
+        for egg_plugin in manager.egg_plugins_names:
+            rv, text = manager.download_plugin(egg_plugin, options.channel)
+            print("{}: [{}] {}".format(egg_plugin, rv, text))
+
+    def cmd_insert_egg(self, options, plugin_name, filename):
+        """Enable a plugin on Stoq"""
+        self._read_config(options, register_station=False,
+                          check_schema=False,
+                          load_plugins=False)
+        self._setup_logging()
+        self._insert_egg(plugin_name, filename)
 
     def cmd_generate_sintegra(self, options, filename, month):
         """Generate a sintegra file"""
@@ -481,38 +524,12 @@ class StoqCommandHandler:
                          help='Execute SQL command',
                          dest='command')
 
-    def cmd_serve(self, options):
-        """Serve a Stoq XMLRPC server"""
-        from twisted.internet import reactor
-        from stoqlib.lib.daemonutils import DaemonManager
-
-        print('* Starting XMLRPC server...')
-
-        self._read_config(options, register_station=False)
-        port = options.serverport and int(options.serverport)
-        dm = DaemonManager(port=port)
-
-        def on_server_running(daemon_manager):
-            uri = daemon_manager.base_uri
-            print('The XMLRPC server is running on ' + uri)
-
-        defer = dm.start()
-        defer.addCallback(on_server_running)
-
-        reactor.run()
-
-    def opt_serve(self, parser, group):
-        group.add_option('', '--serverport',
-                         action='store',
-                         help='Port to serve the server',
-                         dest='serverport')
-
     def cmd_import(self, options):
         """Import data into Stoq"""
         self._read_config(options, register_station=False)
         from stoqlib.importers import importer
         importer = importer.get_by_type(options.type)
-        importer.feed_file(options.filename)
+        importer.feed_file(options.import_filename)
         importer.process()
 
     def opt_import(self, parser, group):
@@ -523,7 +540,7 @@ class StoqCommandHandler:
         group.add_option('', '--import-filename',
                          action="store",
                          help="Filename to import",
-                         dest="filename")
+                         dest="import_filename")
 
     def cmd_console(self, options):
         """Drop to a Stoq python console"""
@@ -562,6 +579,9 @@ def main(args):
 
     cmd = args[0]
     args = args[1:]
+
+    from stoqlib.lib.environment import configure_locale
+    configure_locale()
 
     # import library or else externals won't be on sys.path
     from stoqlib.lib.kiwilibrary import library

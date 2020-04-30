@@ -5,7 +5,7 @@
   <title>Novidades da versão</title>
   <info>
     <desc>
-      Novidades da versão 1.11
+      Novidades da versão 3.1
     </desc>
 
     <link type="guide" xref="index" group="changelog" />
@@ -27,31 +27,33 @@
   </note>
 
   <section id="last-version">
-    <title>Novidades da versão 1.11</title>
+    <title>Novidades da versão 3.0</title>
     <p>
-      Data do lançamento: 2016-03-29
+      Data do lançamento: 2019-02-22
     </p>
 
     <section>
       <title>Principais funcionalidades</title>
       <list>
-        <item><p>Novo tipo de produto: Grade. Um produto que combina atributos para gerar outros produtos. E.g. Uma "Camiseta" com atributos "Cor" e "Tamanho" pode gerar produtos "Camiseta Vermelha P", "Camiseta Amarela G", etc</p></item>
-        <item><p>Novo tipo de produto: Pacote. Um pacote combina vários produtos em um só, permitindo a compra e a venda dos mesmos como se fossem uma unidade</p></item>
-        <item><p>Adição das classes de imposto PIS e COFINS</p></item>
-        <item><p>Melhorias na seleção de clientes através de sugestões na caixa de texto, pesquisáveis por vários atributos como nome, cpf, rg, telefone, etc</p></item>
-        <item><p>Nova widget que permite a filtragem de ordens de serviço selecionando múltiplas categorias</p></item>
-        <item><p>Ao importar um extrato OFX, a conta será vinculada com a transação existente se o código foi informado no pagamento</p></item>
-        <item><p>É mais obvio no editor de produtos que o mesmo está com um preço promocional</p></item>
-        <item><p>Um inventário pode ser exportado para uma contagem externa, podendo este ser reimportado depois para o preenchimento automático dos dados</p></item>
-        <item><p>Nova opção de exportar um inventário para uma planilha</p></item>
-        <item><p>O gerente agora pode permitir um desconto maior do que o permitido para o usuário no Ponto de Vendas</p></item>
-        <item><p>Se o cliente informou o documento para emissão de nota fiscal eletrônica, este é reutilizado no possível cadastro do mesmo, evitando ter que pedir a mesma informação duas vezes</p></item>
-        <item><p>É possível imprimir etiquetas no aplicativo Estoque</p></item>
-        <item><p>Vendas podem receber um desconto de 100% (um erro acontecia anteriormente nesse caso)</p></item>
-        <item><p>Filiais podem fazer compras para outras filiais em modo sincronizado</p></item>
-        <item><p>Agora transferências podem ser canceladas</p></item>
-        <item><p>Atualização das tabelas IBPT</p></item>
-        <item><p>Várias outras correções e melhorias</p></item>
+        <item><p>Agora é possível deixar recados para os usuários do sistema: Envie mensagens para
+        usuários, perfis de usuário ou todos os usuários de uma filial. Esse aviso aparecerá na tela
+        inicial do Stoq.</p></item>
+        <item><p>Para usuários que não utilizem ECF, agora é permitido abrir mais de um caixa por
+        dia.</p></item>
+        <item><p>Melhor tratamento de dispositivos externos. Fizemos algumas melhorias que devem
+        aumentar a estabilidade do sistema quando comunicando com disposivos externos.</p></item>
+        <item><p>Utilize o Stoq em terminais de auto-serviço com balanças: Configure o Stoq para
+        adicionar um produto automaticamente ao ler o código de um token de venda.</p></item>
+        <item><p>Permissão para criar pagamentos para outras filiais a partir de qualquer computador
+        (em bases sincronizadas)</p></item>
+        <item><p>Diversas melhorias no processo de contagem de inventário, tentando reduzir o número
+        de erros que podem acontecer, como contar um mesmo produto duas vezes e um aviso quando um
+        produto lido não foi encontrado</p></item>
+        <item><p>Diversas informações novas em alguns relatórios, como número da nota fiscal na
+        lista de contas a pagar</p></item>
+        <item><p>Agora é possível indicar o relacionamento ou parentesco entre duas pessoas
+        cadastradas no sistema</p></item>
+        <item><p>Diversas outras melhorias e correçòes de bugs</p></item>
       </list>
     </section>
 
@@ -62,9 +64,10 @@
         Agradecemos a todos que contribuíram para este lançamento acontecer:
       </p>
       <p>
-        Cainã D'Ajuda, Christian Robottom Reis, Eduardo Tadahiro Nishizuka,
-        Felipe Henrique Bellotti Nehmi, Flavia Fernanda Rocha Moraes,
-        Gabriel Gerga, Luis Oishi, Nihey Luz Takizawa, Ronaldo Maia e Thiago Bellini.
+        Andrew Oliveira, Cainã D'Ajuda, Christian Robottom Reis,
+        Eduardo Tadahiro Nishizuka, Felipe Henrique Bellotti Nehmi,
+        Flavia Fernanda Rocha Moraes, Gabriel Gerga, Lucas Couto, Luis Oishi,
+        Luiz Votto, Nihey Luz Takizawa, Ronaldo Maia e Thiago Bellini.
       </p>
 
       <p>

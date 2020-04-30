@@ -77,14 +77,13 @@ class TestProductSearch(GUITest):
 
         self.assertVisible(search._toolbar, ['new_button'])
         self.assertSensitive(search._toolbar, ['edit_button'])
-        self.assertEquals(search._toolbar.edit_button_label.get_label(),
-                          _('_Edit...'))
+        self.assertEqual(search._toolbar.edit_button_label.get_label(), _('_Edit...'))
         self.click(search._toolbar.edit_button)
 
         # We have permission to edit Product, so visual_mode should be false
         args, kwargs = run_dialog.call_args
         self.assertTrue('visual_mode' in kwargs)
-        self.assertEquals(kwargs['visual_mode'], False)
+        self.assertEqual(kwargs['visual_mode'], False)
 
     @mock.patch('stoqlib.gui.search.searcheditor.run_dialog')
     def test_show_without_permission(self, run_dialog):
@@ -98,14 +97,13 @@ class TestProductSearch(GUITest):
         # 'Details'
         self.assertNotVisible(search._toolbar, ['new_button'])
         self.assertSensitive(search._toolbar, ['edit_button'])
-        self.assertEquals(search._toolbar.edit_button_label.get_label(),
-                          _('Details'))
+        self.assertEqual(search._toolbar.edit_button_label.get_label(), _('Details'))
 
         # Editor should be called with visual mode set.
         self.click(search._toolbar.edit_button)
         args, kwargs = run_dialog.call_args
         self.assertTrue('visual_mode' in kwargs)
-        self.assertEquals(kwargs['visual_mode'], True)
+        self.assertEqual(kwargs['visual_mode'], True)
 
         # Retore the default permission so it doens't effect other tests
         pm.set('Product', default_persmission)
@@ -133,32 +131,35 @@ class TestProductSearch(GUITest):
         print_report.assert_called_once_with(
             ProductPriceReport, list(search.results),
             filters=search.search.get_search_filters(),
-            branch_name=search.branch_filter.combo.get_active_text())
+            branch_name=search.branch_filter.combo.get_selected_label())
 
     def test_search(self):
         self.clean_domain([StockTransactionHistory, ProductSupplierInfo,
                            ProductStockItem, Storable, Product])
 
-        branches = self.store.find(Branch)
+        branches = list(self.store.find(Branch))
 
         product = self.create_product()
         storable = self.create_storable(product=product)
-        ProductStockItem(quantity=1, branch=branches[0], storable=storable,
-                         store=self.store)
-        ProductStockItem(quantity=2, branch=branches[1], storable=storable,
-                         store=self.store)
+        self.create_product_stock_item(
+            storable=storable, branch=branches[0], quantity=1)
+        self.create_product_stock_item(
+            storable=storable, branch=branches[1], quantity=2)
         product.sellable.code = u'1'
         product.sellable.description = u'Luvas'
+        product.brand = u'Rawlings'
+        product.internal_use = True
 
         product = self.create_product()
         storable = self.create_storable(product=product)
-        ProductStockItem(quantity=3, branch=branches[0], storable=storable,
-                         store=self.store)
-        ProductStockItem(quantity=4, branch=branches[1], storable=storable,
-                         store=self.store)
+        self.create_product_stock_item(
+            storable=storable, branch=branches[0], quantity=3)
+        self.create_product_stock_item(
+            storable=storable, branch=branches[1], quantity=4)
         product.sellable.code = u'2'
         product.sellable.description = u'Botas'
         product.sellable.status = Sellable.STATUS_CLOSED
+        product.brand = u'Timberland'
 
         search = ProductSearch(self.store)
 
@@ -214,7 +215,7 @@ class TestProductSearchQuantity(GUITest):
         order.status = PurchaseOrder.ORDER_PENDING
         p_item = order.add_item(product.sellable, 10)
         p2_item = order.add_item(product2.sellable, 15)
-        order.confirm()
+        order.confirm(self.current_user)
 
         # Receiving
         receiving = self.create_receiving_order(order, branch, user)
@@ -223,7 +224,7 @@ class TestProductSearchQuantity(GUITest):
         self.create_receiving_order_item(receiving, product.sellable, p_item, 8)
         self.create_receiving_order_item(receiving, product2.sellable, p2_item,
                                          12)
-        receiving.confirm()
+        receiving.confirm(self.current_user)
 
         # Sale
         sale = self.create_sale(branch=branch)
@@ -231,9 +232,9 @@ class TestProductSearchQuantity(GUITest):
         sale.open_date = self.today
         sale.add_sellable(product.sellable, 3)
         sale.add_sellable(product2.sellable, 5)
-        sale.order()
+        sale.order(self.current_user)
         self.add_payments(sale, date=self.today)
-        sale.confirm()
+        sale.confirm(self.current_user)
 
     def test_search(self):
         self._create_domain()
@@ -285,15 +286,15 @@ class TestProductsSoldSearch(GUITest):
 
         product = self.create_product()
         storable = Storable(store=self.store, product=product)
-        ProductStockItem(storable=storable, branch=branch, quantity=5,
-                         store=self.store)
+        self.create_product_stock_item(
+            storable=storable, branch=branch, quantity=5)
         product.sellable.code = u'1'
         product.sellable.description = u'Luvas'
 
         product2 = self.create_product()
         storable2 = Storable(store=self.store, product=product2)
-        ProductStockItem(storable=storable2, branch=branch, quantity=5,
-                         store=self.store)
+        self.create_product_stock_item(
+            storable=storable2, branch=branch, quantity=5)
         product2.sellable.code = u'2'
         product2.sellable.description = u'Botas'
 
@@ -303,9 +304,9 @@ class TestProductsSoldSearch(GUITest):
         sale.open_date = self.today
         sale.add_sellable(product.sellable, 3)
         sale.add_sellable(product2.sellable, 5)
-        sale.order()
+        sale.order(self.current_user)
         self.add_payments(sale, date=self.today)
-        sale.confirm()
+        sale.confirm(self.current_user)
 
     def test_search(self):
         self._create_domain()
@@ -370,12 +371,15 @@ class TestProductStockSearch(GUITest):
                  maximum_quantity=20)
         product.sellable.code = u'1'
         product.sellable.description = u'Luvas'
+        product.brand = u'Rawlings'
+        product.internal_use = True
 
         product2 = self.create_product()
         Storable(store=self.store, product=product2, minimum_quantity=4,
                  maximum_quantity=20)
         product2.sellable.code = u'2'
         product2.sellable.description = u'Botas'
+        product2.brand = u'Aventura'
 
         # Purchase
         order = self.create_purchase_order(branch=branch)
@@ -384,16 +388,15 @@ class TestProductStockSearch(GUITest):
         order.status = PurchaseOrder.ORDER_PENDING
         p_item = order.add_item(product.sellable, 10)
         p2_item = order.add_item(product2.sellable, 15)
-        order.confirm()
+        order.confirm(self.current_user)
 
         # Receiving
         receiving = self.create_receiving_order(order, branch, user)
         receiving.identifier = 222
         receiving.receival_date = self.today
         self.create_receiving_order_item(receiving, product.sellable, p_item, 8)
-        self.create_receiving_order_item(receiving, product2.sellable, p2_item,
-                                         12)
-        receiving.confirm()
+        self.create_receiving_order_item(receiving, product2.sellable, p2_item, 12)
+        receiving.confirm(self.current_user)
 
     def test_search(self):
         self._create_domain()
@@ -438,16 +441,16 @@ class TestProductBrandSearch(GUITest):
 
         product = self.create_product()
         storable = Storable(store=self.store, product=product)
-        ProductStockItem(store=self.store, storable=storable,
-                         branch=branch, quantity=2)
+        self.create_product_stock_item(
+            storable=storable, branch=branch, quantity=2)
         product.brand = u''
         product.sellable.code = u'1'
         product.sellable.description = u'Luvas'
 
         product2 = self.create_product()
         storable2 = Storable(store=self.store, product=product2)
-        ProductStockItem(store=self.store, storable=storable2,
-                         branch=branch, quantity=4)
+        self.create_product_stock_item(
+            storable=storable2, branch=branch, quantity=4)
         product2.brand = u'brand'
         product.sellable.code = u'2'
         product.sellable.description = u'Botas'
@@ -497,16 +500,16 @@ class TestProductClosedStockSearch(GUITest):
 
         product = self.create_product()
         storable = Storable(store=self.store, product=product)
-        ProductStockItem(store=self.store, storable=storable,
-                         branch=branch, quantity=2)
+        self.create_product_stock_item(
+            storable=storable, branch=branch, quantity=2)
         product.sellable.code = u'1'
         product.sellable.description = u'Luvas'
         product.sellable.status = Sellable.STATUS_CLOSED
 
         product = self.create_product()
         storable = Storable(store=self.store, product=product)
-        ProductStockItem(store=self.store, storable=storable,
-                         branch=branch, quantity=4)
+        self.create_product_stock_item(
+            storable=storable, branch=branch, quantity=4)
         product.sellable.code = u'2'
         product.sellable.description = u'Botas'
         product.sellable.status = Sellable.STATUS_CLOSED

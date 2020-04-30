@@ -38,6 +38,7 @@ from stoqlib.database.runtime import new_store
 from stoqlib.domain.devices import FiscalDayHistory, FiscalDayTax
 from stoqlib.domain.interfaces import IContainer
 from stoqlib.exceptions import DeviceError
+from stoqlib.lib.defaults import quantize
 from stoqlib.lib.ibpt import generate_ibpt_message
 from stoqlib.lib.message import warning
 from stoqlib.lib.translation import stoqlib_gettext
@@ -240,7 +241,7 @@ class CouponPrinter(object):
         day = FiscalDayHistory(store=store,
                                emission_date=data.opening_date,
                                station=station,
-                               serial=unicode(data.serial),
+                               serial=str(data.serial),
                                # 1 -> 001, FIXME: should fix stoqdrivers
                                serial_id=int(data.serial_id),
                                coupon_start=coupon_start,
@@ -253,8 +254,8 @@ class CouponPrinter(object):
 
         for code, value, type in data.taxes:
             FiscalDayTax(fiscal_day_history=day,
-                         code=unicode(code), value=value,
-                         type=unicode(type), store=store)
+                         code=str(code), value=value,
+                         type=str(type), store=store)
         store.commit(close=True)
 
     def get_printer(self):
@@ -326,7 +327,7 @@ class Coupon(object):
             return -1
 
         base_price = item.base_price
-        discount_value = (base_price - item.price) * item.quantity
+        discount_value = quantize((base_price - item.price) * item.quantity)
         # If the selling value is greater than the base price
         if discount_value < 0:
             discount_value = 0
@@ -340,7 +341,7 @@ class Coupon(object):
 
         try:
             item_id = self._driver.add_item(code, description, base_price,
-                                            tax_constant.device_value,
+                                            tax_constant.device_value.decode(),
                                             item.quantity, unit,
                                             unit_desc=unit_desc,
                                             discount=discount_value)
@@ -422,7 +423,7 @@ class Coupon(object):
             # When adding a money payment, use base_value so that the payback
             # is show correctly.
             if payment.is_of_method(u'money'):
-                self._driver.add_payment(constant.device_value,
+                self._driver.add_payment(constant.device_value.decode(),
                                          payment.base_value)
 
             # Card payments were merged above. Use that instead.
@@ -432,12 +433,12 @@ class Coupon(object):
                 # This payment was already addded
                 if not card_data.nsu in card_payments:
                     continue
-                self._driver.add_payment(constant.device_value,
+                self._driver.add_payment(constant.device_value.decode(),
                                          card_payments[card_data.nsu])
                 del card_payments[card_data.nsu]
             # In other cases, add the real value of payment.
             else:
-                self._driver.add_payment(constant.device_value,
+                self._driver.add_payment(constant.device_value.decode(),
                                          payment.value)
 
         return True
@@ -492,8 +493,8 @@ class Coupon(object):
         constant = self._get_payment_method_constant(payment)
         receipt_id = self._driver.get_payment_receipt_identifier(constant.constant_name)
 
-        self._driver.payment_receipt_open(receipt_id, coo, constant.device_value,
-                                          value)
+        self._driver.payment_receipt_open(receipt_id, coo,
+                                          constant.device_value.decode(), value)
         self._driver.payment_receipt_print(receipt)
         self._driver.payment_receipt_close()
 

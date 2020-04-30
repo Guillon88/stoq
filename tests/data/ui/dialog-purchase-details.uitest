@@ -1,13 +1,13 @@
 editor: PurchaseDetailsDialog
 GtkDialog(main_dialog.toplevel): title='Purchase Details', hidden
-  GtkVBox(main_dialog._main_vbox):
-    GtkVBox(main_dialog.vbox, expand=True, fill=True):
+  GtkBox(main_dialog._main_vbox, orientation=vertical):
+    GtkBox(main_dialog.vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(main_dialog.header):
       GtkEventBox(main_dialog.main, expand=True, fill=True, padding=6): slave PurchaseDetailsDialog is attached
-        GtkVBox(toplevel):
+        GtkBox(vbox1, orientation=vertical):
           GtkTable(table1, fill=True):
             GtkLabel(label1): 'Open Date:'
-            ProxyLabel(open_date): '<span >01/01/12</span>'
+            ProxyLabel(open_date): '<span >01/01/2012</span>'
             GtkLabel(label5): 'Order Number:'
             ProxyLabel(identifier): '<span >00123</span>'
             GtkLabel(label2): 'Supplier:'
@@ -19,7 +19,7 @@ GtkDialog(main_dialog.toplevel): title='Purchase Details', hidden
             GtkLabel(label3): 'Order Status:'
             ProxyLabel(status): '<span >Quoting</span>'
           GtkNotebook(notebook2, expand=True, fill=True):
-            GtkVBox(payments_vbox):
+            GtkBox(payments_vbox, orientation=vertical):
               ObjectList(payments_list, expand=True, fill=True):
                 column: title='Payment #'
                 column: title='Description', expand
@@ -28,19 +28,19 @@ GtkDialog(main_dialog.toplevel): title='Purchase Details', hidden
                 column: title='Status'
                 column: title='Value'
                 column: title='Paid value'
-                row: 999, u'1/1 Money for order 00123', datetime.datetime(2012, 1, 1, 0, 0), None, u'Preview', <currency $1000>, None
+                row: 999, '1/1 Money for order 00123', datetime.datetime(2012, 1, 1, 0, 0), None, 'Preview', <currency $1,000>, None
               GtkTable(table4, fill=True):
                 GtkLabel(label8): 'Discount:'
-                ProxyLabel(total_discount): '<span >$ 0.00</span>'
+                ProxyLabel(total_discount): '<span >$0.00</span>'
                 GtkLabel(label4): 'Penalty:'
-                ProxyLabel(total_penalty): '<span >$ 0.00</span>'
+                ProxyLabel(total_penalty): '<span >$0.00</span>'
                 ProxyLabel(kiwilabel16): 'Total Paid:'
-                ProxyLabel(total_paid): '<span >$ 0.00</span>'
+                ProxyLabel(total_paid): '<span >$0.00</span>'
                 GtkLabel(label7): 'Interest:'
-                ProxyLabel(total_interest): '<span >$ 0.00</span>'
+                ProxyLabel(total_interest): '<span >$0.00</span>'
                 GtkLabel(label10): 'Total:'
-                ProxyLabel(total_value): '<span >$1000.00</span>'
-            GtkHBox(hbox2):
+                ProxyLabel(total_value): '<span >$1,000.00</span>'
+            GtkBox(hbox2, orientation=horizontal):
               ObjectList(payments_info_list, expand=True, fill=True):
                 column: title='When'
                 column: title='Payment', expand
@@ -48,33 +48,38 @@ GtkDialog(main_dialog.toplevel): title='Purchase Details', hidden
                 column: title='From'
                 column: title='To'
                 column: title='Reason'
-            GtkVBox(ordered_vbox):
+            GtkBox(ordered_vbox, orientation=vertical):
               ObjectList(ordered_items, expand=True, fill=True):
                 column: title='Description', expand
                 column: title='Qty'
                 column: title='Cost'
                 column: title='Total'
-                row: u'Description', u'8 ', <currency $125>, Decimal('1000.00000000000')
-              GtkHBox(fill=True):
+                row: 'Description', Decimal('8.000'), <currency $135>, <currency $1,080>
+              SummaryLabel(fill=True):
                 GtkLabel(expand=True, fill=True, padding=6): '<b>Total</b>'
-                GtkLabel(): '<b>$1000.00</b>'
-            GtkVBox(received_vbox):
+                GtkLabel(): '<b>$1,080.00</b>'
+            GtkBox(received_vbox, orientation=vertical):
               ObjectList(received_items, expand=True, fill=True):
                 column: title='Description', expand
                 column: title='Qty Received'
                 column: title='Cost'
                 column: title='Total'
-                row: u'Description', u'0 ', <currency $125>, Decimal('0E-11')
-              GtkTable(table2, pack-end):
+                column: title='Current Stock'
+                row: 'Description', Decimal('0.000'), <currency $135>, <currency $0>, None
+              GtkButtonBox(hbuttonbox2, orientation=horizontal, fill=True):
+                GtkButton(export_received): 'Export to spreadsheet'
+              GtkTable(table2):
                 ProxyLabel(kiwilabel2): 'Discount:'
-                ProxyLabel(total_discounts): '<span >$ 0.00</span>'
+                ProxyLabel(total_discounts): '<span >$0.00</span>'
                 ProxyLabel(kiwilabel6): 'Subtotal:'
-                ProxyLabel(receiving_subtotal): '<span >$ 0.00</span>'
+                ProxyLabel(receiving_subtotal): '<span >$1,000.00</span>'
+                ProxyLabel(kiwilabel1): 'Quantity:'
+                ProxyLabel(receiving_quantity): '<span >8.0</span>'
                 ProxyLabel(kiwilabel4): 'Surcharge:'
-                ProxyLabel(total_surcharges): '<span >$ 0.00</span>'
+                ProxyLabel(total_surcharges): '<span >$0.00</span>'
                 ProxyLabel(kiwilabel8): 'Total:'
-                ProxyLabel(receiving_total): '<span >$ 0.00</span>'
-            GtkVBox(additional_info_vbox):
+                ProxyLabel(receiving_total): '<span >$1,000.00</span>'
+            GtkBox(additional_info_vbox, orientation=vertical):
               GtkTable(table3, fill=True):
                 ProxyLabel(kiwilabel10): 'Salesperson:'
                 ProxyLabel(salesperson_name): '<span ></span>'
@@ -86,23 +91,25 @@ GtkDialog(main_dialog.toplevel): title='Purchase Details', hidden
                 ProxyLabel(kiwilabel9): 'Agreed Freight Type:'
                 ProxyLabel(freight_type): '<span >FOB</span>'
                 ProxyLabel(kiwilabel11): 'Expected Freight Value:'
-                ProxyLabel(expected_freight): '<span >$ 0.00</span>'
-                ProxyLabel(received_freight_type_label): 'Received Freight Type:', hidden
-                ProxyLabel(received_freight_type): '<span ></span>', hidden
-                ProxyLabel(received_freight_label): 'Received Freight Value:', hidden
-                ProxyLabel(received_freight): '<span >$ 0.00</span>', hidden
-            GtkVBox(vbox2):
+                ProxyLabel(expected_freight): '<span >$0.00</span>'
+                ProxyLabel(received_freight_type_label): 'Received Freight Type:'
+                ProxyLabel(received_freight_type): '<span >FOB</span>'
+                ProxyLabel(received_freight_label): 'Received Freight Value:'
+                ProxyLabel(received_freight): '<span >$0.00</span>'
+            GtkBox(vbox2, orientation=vertical):
               GtkScrolledWindow(scrolledwindow1, expand=True, fill=True):
                 ProxyTextView(notes):
-          GtkHButtonBox(hbuttonbox1, fill=True):
+          GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+            GtkButton(print_items_button):
             GtkButton(print_labels): 'gtk-print'
             GtkButton(export_csv): 'Export to spreadsheet'
             GtkButton(print_button): 'gtk-print'
-      GtkHBox(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(main_dialog.extra_holder, expand=True, fill=True, padding=6):
         GtkEventBox(main_dialog.print_holder, expand=True, fill=True):
         GtkEventBox(main_dialog.notice, fill=True):
         GtkEventBox(main_dialog.details_holder, padding=6, pack-end):
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
-      GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(main_dialog.action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
+        GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden

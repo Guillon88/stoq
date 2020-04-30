@@ -1,10 +1,10 @@
 slave: _GridOptionsSlave
-kiwi+ui+listdialog+ListContainer(listcontainer):
+ListContainer(toplevel):
   ObjectList(expand=True, fill=True):
     column: title='Description', expand
     column: title='Active'
     column: title='Option order'
-  GtkVBox(fill=True, padding=6):
+  GtkBox(orientation=vertical, fill=True, padding=6):
     GtkButton(fill=True): 'gtk-add'
     GtkButton(fill=True): 'gtk-remove', insensitive
     GtkButton(fill=True): 'gtk-edit', insensitive

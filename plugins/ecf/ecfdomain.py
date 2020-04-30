@@ -107,11 +107,15 @@ class ECFPrinter(Domain):
             else:
                 continue
 
+            device_value = constants.get_value(constant, None)
+            if isinstance(device_value, str):
+                device_value = device_value.encode()
+
             DeviceConstant(constant_type=constant_type,
-                           constant_name=unicode(describe_constant(constant)),
+                           constant_name=str(describe_constant(constant)),
                            constant_value=constant_value,
                            constant_enum=int(constant),
-                           device_value=constants.get_value(constant, None),
+                           device_value=constants.get_value(constant, None).encode(),
                            printer=self,
                            store=store)
 
@@ -123,10 +127,10 @@ class ECFPrinter(Domain):
             else:
                 constant_name = describe_constant(constant)
             DeviceConstant(constant_type=DeviceConstant.TYPE_TAX,
-                           constant_name=unicode(constant_name),
+                           constant_name=str(constant_name),
                            constant_value=value,
                            constant_enum=int(constant),
-                           device_value=device_value,
+                           device_value=device_value.encode(),
                            printer=self,
                            store=store)
 
@@ -225,9 +229,6 @@ class ECFPrinter(Domain):
         # may send commands to the ECF, and we just need the description.
         # TODO: Improve stoqdrivers so we can get this easyer
         port = VirtualPort()
-        port.setTimeout = lambda x: True
-        port.setParity = lambda x: True
-        port.setWriteTimeout = lambda x: True
         driver = BasePrinter(brand=self.brand, model=self.model, port=port)
         return driver.get_model_name()
 

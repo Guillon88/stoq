@@ -28,8 +28,7 @@
 
 import pickle
 
-import gobject
-import gtk
+from gi.repository import Gtk, Gdk, GObject
 from kiwi.python import Settable
 from kiwi.utils import gsignal
 from kiwi.ui.objectlist import Column, ObjectList
@@ -43,44 +42,31 @@ class KanbanObjectListColumn(Column):
         return renderer, 'markup'
 
 
-class CellRendererTextBox(gtk.CellRendererText):
+class CellRendererTextBox(Gtk.CellRendererText):
 
-    PADDING = 3
     SIZE = 6
 
     #: the magin color of the renderer, this the part to the left of it,
     #: indicating a category color
-    margin_color = gobject.property(type=str)
+    margin_color = GObject.Property(type=str)
 
     def do_render(self, drawable, widget, background_area, cell_area,
-                  expose_area, flags):
-        if flags & gtk.CELL_RENDERER_SELECTED:
-            state = gtk.STATE_SELECTED
+                  flags):
+        if flags & Gtk.CellRendererState.SELECTED:
+            state = Gtk.StateFlags.SELECTED
         else:
-            state = gtk.STATE_NORMAL
+            state = Gtk.StateFlags.NORMAL
 
-        if type(drawable) == gtk.gdk.Pixmap:
-            cr = drawable.cairo_create()
-            cr.set_source_color(widget.style.bg[gtk.STATE_SELECTED])
-            cr.paint()
-        else:
-            widget.style.paint_box(drawable, state, gtk.SHADOW_IN,
-                                   None, widget, "frame",
-                                   cell_area.x + self.PADDING,
-                                   cell_area.y + self.PADDING,
-                                   cell_area.width - (self.PADDING * 2),
-                                   cell_area.height - (self.PADDING * 2))
-        color = self.props.margin_color
-        if color is not None:
-            cr = drawable.cairo_create()
-            cr.rectangle(cell_area.x + self.PADDING - 1,
-                         cell_area.y + self.PADDING,
-                         4, cell_area.height - (self.PADDING * 2))
-            cr.set_source_color(gtk.gdk.color_parse(color))
-            cr.fill()
+        context = widget.get_style_context()
+        context.set_state(state)
 
-        gtk.CellRendererText.do_render(self, drawable, widget, background_area,
-                                       cell_area, expose_area, flags)
+        Gtk.render_background(context, drawable, cell_area.x, cell_area.y,
+                              cell_area.width, cell_area.height)
+        Gtk.render_focus(context, drawable, cell_area.x, cell_area.y, cell_area.width,
+                         cell_area.height)
+
+        Gtk.CellRendererText.do_render(self, drawable, widget, background_area,
+                                       cell_area, flags)
 
     def on_get_size(self, widget, cell_area=None):
         if cell_area is None:
@@ -91,7 +77,8 @@ class CellRendererTextBox(gtk.CellRendererText):
                     cell_area.width + (self.SIZE * 2),
                     cell_area.height + (self.SIZE * 2))
 
-gobject.type_register(CellRendererTextBox)
+
+GObject.type_register(CellRendererTextBox)
 
 
 class KanbanViewColumn(object):
@@ -100,8 +87,16 @@ class KanbanViewColumn(object):
     It just has a title and can be cleared via :attr:`.clear` and
     you can append an item via :attr:`.append_item`
     """
-    def __init__(self, title):
+
+    def __init__(self, title, value):
+        """
+        :param title: The title for this column
+        :param value: A value associated with this column. Can be used to
+          determine what should be done when an item is drag and droped into a
+          column
+        """
         self.title = title
+        self.value = value
         self.view = None
         self.object_list = None
 
@@ -114,7 +109,7 @@ class KanbanViewColumn(object):
         self.object_list.append(item)
 
 
-class KanbanView(gtk.Frame):
+class KanbanView(Gtk.Frame):
     """
     This is a kanban view which can be used to display a set
     of columns with boxes that can be rearranged.
@@ -129,17 +124,17 @@ class KanbanView(gtk.Frame):
     # item activated
     gsignal('item-activated', object)
     gsignal('item-dragged', object, object, retval=bool)
-    gsignal('item-popup-menu', object, object)
+    gsignal('item-popup-menu', object, object, object)
     gsignal('selection-changed', object)
     gsignal('activate-link', object)
 
     def __init__(self):
         super(KanbanView, self).__init__()
-        self.hbox = gtk.HBox()
+        self.hbox = Gtk.HBox()
         self.add(self.hbox)
         self.hbox.show()
 
-        self.set_shadow_type(gtk.SHADOW_ETCHED_IN)
+        self.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
 
         # column title -> column
         self._columns = {}
@@ -176,7 +171,7 @@ class KanbanView(gtk.Frame):
         :param KanbanViewColumn column: column to add
         """
         object_list = self._create_list(column.title)
-        self.hbox.pack_start(object_list)
+        self.hbox.pack_start(object_list, True, True, 0)
         object_list.show()
 
         self._columns[column.title] = column
@@ -194,10 +189,10 @@ class KanbanView(gtk.Frame):
         """
         for treeview in self._treeviews.values():
             treeview.enable_model_drag_source(
-                gtk.gdk.BUTTON1_MASK, self.TREEVIEW_DND_TARGETS,
-                gtk.gdk.ACTION_DEFAULT | gtk.gdk.ACTION_MOVE)
+                Gdk.ModifierType.BUTTON1_MASK, self.TREEVIEW_DND_TARGETS,
+                Gdk.DragAction.DEFAULT | Gdk.DragAction.MOVE)
             treeview.enable_model_drag_dest(
-                self.TREEVIEW_DND_TARGETS, gtk.gdk.ACTION_DEFAULT)
+                self.TREEVIEW_DND_TARGETS, Gdk.DragAction.DEFAULT)
             treeview.connect(
                 "drag-data-get", self._on_drag_data_get_data)
             treeview.connect(
@@ -228,7 +223,11 @@ class KanbanView(gtk.Frame):
             return None
         if self._selected_iter is not None:
             model = self._selected_treeview.get_model()
-            return model[self._selected_iter][0]
+            try:
+                return model[self._selected_iter][0]
+            except TypeError:
+                # Dont know why this happens
+                return None
 
     def render_item(self, column, renderer, item):
         """
@@ -249,18 +248,18 @@ class KanbanView(gtk.Frame):
         :param markup: PangoMarkup with the text to add
         """
         if self._message_label is None:
-            self._viewport = gtk.Viewport()
-            self._viewport.set_shadow_type(gtk.SHADOW_NONE)
+            self._viewport = Gtk.Viewport()
+            self._viewport.set_shadow_type(Gtk.ShadowType.NONE)
             self.remove(self.hbox)
             self.add(self._viewport)
 
-            self._message_box = gtk.EventBox()
+            self._message_box = Gtk.EventBox()
             self._message_box.modify_bg(
-                gtk.STATE_NORMAL, gtk.gdk.color_parse('white'))
+                Gtk.StateType.NORMAL, Gdk.color_parse('white'))
             self._viewport.add(self._message_box)
             self._message_box.show()
 
-            self._message_label = gtk.Label()
+            self._message_label = Gtk.Label()
             self._message_label.connect(
                 'activate-link', self._on_message_label__activate_link)
             self._message_label.set_use_markup(True)
@@ -299,8 +298,8 @@ class KanbanView(gtk.Frame):
         object_list.connect('right-click',
                             self._on_right_click)
         sw = object_list.get_scrolled_window()
-        sw.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
-        sw.set_shadow_type(gtk.SHADOW_NONE)
+        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sw.set_shadow_type(Gtk.ShadowType.NONE)
 
         treeview = object_list.get_treeview()
         treeview.set_name(column_title)
@@ -311,9 +310,9 @@ class KanbanView(gtk.Frame):
         column = object_list.get_column_by_name('markup')
         column.treeview_column.set_clickable(False)
 
-        white = gtk.gdk.color_parse('white')
-        treeview.modify_base(gtk.STATE_ACTIVE, white)
-        treeview.modify_base(gtk.STATE_SELECTED, white)
+        white = Gdk.color_parse('white')
+        treeview.modify_base(Gtk.StateType.ACTIVE, white)
+        treeview.modify_base(Gtk.StateType.SELECTED, white)
 
         object_list.set_cell_data_func(self._on_results__cell_data_func)
         return object_list
@@ -354,7 +353,7 @@ class KanbanView(gtk.Frame):
         self.emit('item-activated', item)
 
     def _on_right_click(self, olist, item, event):
-        self.emit('item-popup-menu', item, event)
+        self.emit('item-popup-menu', olist, item, event)
 
     def _on_button_press_event(self, treeview, event):
         retval = treeview.get_path_at_pos(int(event.x),
@@ -375,15 +374,16 @@ class KanbanView(gtk.Frame):
             return
 
         selection_data = self._create_selection_data(treeview, titer)
-        selection.set(selection.target, 8, selection_data)
+        selection.set(selection.get_target(), 8, selection_data)
 
     def _create_selection_data(self, treeview, titer):
         model = treeview.get_model()
         path = model[titer].path
-        return pickle.dumps([treeview.get_name(), path])
+        return pickle.dumps([treeview.get_name(), path.to_string()])
 
     def _load_selection_data(self, selection_data):
         column_title, path = pickle.loads(selection_data)
+        path = Gtk.TreePath.new_from_string(path)
         treeview = self._treeviews[column_title]
         model = treeview.get_model()
         return model[path][0]
@@ -391,10 +391,10 @@ class KanbanView(gtk.Frame):
     def _on_drag_data_received_data(self, treeview, context, x, y,
                                     selection, info, etime):
         model = treeview.get_model()
-        if selection.data is None:
+        if selection.get_data() is None:
             context.finish(False, False, etime)
             return
-        item = self._load_selection_data(selection.data)
+        item = self._load_selection_data(selection.get_data())
         column = self._columns[treeview.get_name()]
         retval = self.emit('item-dragged', column, item)
         if retval is False:
@@ -405,27 +405,28 @@ class KanbanView(gtk.Frame):
         if drop_info:
             path, position = drop_info
             titer = model.get_iter(path)
-            if (position == gtk.TREE_VIEW_DROP_BEFORE or
-                position == gtk.TREE_VIEW_DROP_INTO_OR_BEFORE):
+            if (position == Gtk.TreeViewDropPosition.BEFORE or
+                    position == Gtk.TreeViewDropPosition.INTO_OR_BEFORE):
                 titer = model.insert_before(titer, [item])
             else:
                 titer = model.insert_after(titer, [item])
         else:
             titer = model.append([item])
 
-        if context.action == gtk.gdk.ACTION_MOVE:
+        if context.get_actions() & Gdk.DragAction.MOVE:
             context.finish(True, True, etime)
 
         treeview.grab_focus()
         self._maybe_selection_changed(treeview, titer)
 
-gobject.type_register(KanbanView)
+
+GObject.type_register(KanbanView)
 
 
 def main():
-    win = gtk.Window()
+    win = Gtk.Window()
     win.set_size_request(600, 300)
-    win.connect('destroy', gtk.main_quit)
+    win.connect('destroy', Gtk.main_quit)
 
     kanban = KanbanView()
     for title in ['Opened', 'Approved', 'Executing', 'Finished']:
@@ -445,7 +446,8 @@ def main():
 
     win.show_all()
 
-    gtk.main()
+    Gtk.main()
+
 
 if __name__ == '__main__':
     main()

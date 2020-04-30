@@ -34,7 +34,7 @@ from stoqlib.domain.commission import Commission
 from stoqlib.domain.payment.method import CheckData
 from stoqlib.domain.payment.payment import Payment
 from stoqlib.domain.payment.views import OutPaymentView
-from stoqlib.domain.person import Person, Client, Individual
+from stoqlib.domain.person import Person, Client, Individual, Supplier
 from stoqlib.domain.sale import Sale
 from stoqlib.domain.sellable import Sellable
 from stoqlib.domain.test.domaintest import DomainTest
@@ -49,13 +49,19 @@ class ClientView(Viewable):
     person_name = Person.name
     total_sales = Sum(Sale.total_amount)
 
+    # This will be retrieved as None (because clients are not suppliers in the
+    # tests) and even though the column is defined as "allow_none=False"
+    # it should not fail in the selects bellow.
+    supplier_status = Supplier.status
+
     tables = [
         Client,
         LeftJoin(Person, Person.id == Client.person_id),
+        LeftJoin(Supplier, Person.id == Supplier.person_id),
         LeftJoin(Sale, Sale.client_id == Client.id),
     ]
 
-    group_by = [Person, Client, person_name]
+    group_by = [Person, Client, person_name, supplier_status]
 
 
 class ViewableTest(DomainTest):
@@ -70,41 +76,41 @@ class ViewableTest(DomainTest):
                                       date=due_date)
         # Results should have only one item
         results = list(self.store.find(OutPaymentView))
-        self.assertEquals(len(results), 1)
+        self.assertEqual(len(results), 1)
 
         # And the viewable result should be for the same payment (and have same
         # due_date)
         viewable = results[0]
-        self.assertEquals(viewable.payment, payment)
-        self.assertEquals(viewable.due_date.date(), due_date)
+        self.assertEqual(viewable.payment, payment)
+        self.assertEqual(viewable.due_date.date(), due_date)
 
         # Update the payment due date
         new_due_date = datetime.date(2010, 4, 22)
         payment.due_date = new_due_date
 
         # Before syncing, the due date still have the old value
-        self.assertEquals(viewable.due_date.date(), due_date)
+        self.assertEqual(viewable.due_date.date(), due_date)
 
         # Sync the viewable object and the due date should update to the new
         # value
         viewable.sync()
-        self.assertEquals(viewable.due_date.date(), new_due_date)
+        self.assertEqual(viewable.due_date.date(), new_due_date)
 
     def test_eq(self):
         client = self.create_client(name=u'Fulano')
         view = self.store.find(ClientView, Client.id == client.id).one()
-        self.failIf(view == client)
+        self.assertFalse(view == client)
 
         view2 = self.store.find(ClientView, Client.id == client.id).one()
         self.assertEqual(view, view2)
 
     def test_store(self):
         item = self.store.find(ClientView).any()
-        self.assertEquals(item.store, self.store)
+        self.assertEqual(item.store, self.store)
 
     def test_hash(self):
         item = self.store.find(ClientView).any()
-        self.assertEquals(hash(item), hash(item.id))
+        self.assertEqual(hash(item), hash(item.id))
 
     def test_viewable_with_group_by(self):
         client = self.create_client(name=u'Fulano')
@@ -117,9 +123,9 @@ class ViewableTest(DomainTest):
         views = self.store.find(ClientView)
         for view in views:
             if view.client == client:
-                self.assertEquals(view.person, client.person)
-                self.assertEquals(view.person_name, u'Fulano')
-                self.assertEquals(view.total_sales, 364)
+                self.assertEqual(view.person, client.person)
+                self.assertEqual(view.person_name, u'Fulano')
+                self.assertEqual(view.total_sales, 364)
                 break
         else:
             raise AssertionError('client should be found in the view')
@@ -137,7 +143,7 @@ class ViewableTest(DomainTest):
                                                  new_joins=new_joins)
 
         item = self.store.find(NewViewable, Client.id == client.id).one()
-        self.assertEquals(item.cpf, '123.123.123-12')
+        self.assertEqual(item.cpf, '123.123.123-12')
 
         item = self.store.find(ClientView, Client.id == client.id).one()
         self.assertFalse(hasattr(item, 'cpf'))
@@ -162,3 +168,10 @@ class ViewableTest(DomainTest):
         self.assertTrue(ClientView.has_join_with(table=Client))
         self.assertTrue(ClientView.has_join_with(table=Sale))
         self.assertFalse(ClientView.has_join_with(table=Sellable))
+
+    def test_allow_none_still_on_original_class(self):
+        vf = ClientView.supplier_status.variable_factory
+        self.assertNotIn('allow_none', vf.keywords)
+
+        vf = Supplier.status.variable_factory
+        self.assertFalse(vf.keywords['allow_none'])

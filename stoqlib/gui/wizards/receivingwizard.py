@@ -27,14 +27,14 @@
 import datetime
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column
 from storm.expr import And
 
 from stoqlib.api import api
 from stoqlib.domain.purchase import PurchaseOrder, PurchaseOrderView
-from stoqlib.domain.receiving import ReceivingOrder
+from stoqlib.domain.receiving import ReceivingOrder, ReceivingInvoice
 from stoqlib.gui.base.wizards import (WizardEditorStep, BaseWizard,
                                       BaseWizardStep)
 from stoqlib.gui.base.dialogs import run_dialog
@@ -46,8 +46,9 @@ from stoqlib.gui.events import ReceivingOrderWizardFinishEvent
 from stoqlib.gui.search.searchcolumns import IdentifierColumn, SearchColumn
 from stoqlib.gui.search.searchslave import SearchSlave
 from stoqlib.gui.utils.printing import print_labels
-from stoqlib.lib.defaults import MAX_INT
-from stoqlib.lib.formatters import format_quantity, get_formatted_cost
+from stoqlib.lib.defaults import MAX_INT, quantize
+from stoqlib.lib.formatters import (format_quantity, get_formatted_cost,
+                                    get_formatted_price)
 from stoqlib.lib.message import yesno, warning
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -62,7 +63,9 @@ class _TemporaryReceivingItem(object):
         self.description = item.sellable.description
         self.category_description = item.sellable.get_category_description()
         self.unit_description = item.sellable.unit_description
-        self.cost = item.cost
+        self.cost = currency(quantize(item.cost + item.unit_ipi_value))
+        self.ipi_value = item.ipi_value
+        self.icms_st_value = item.icms_st_value
         self.remaining_quantity = item.get_pending_quantity()
         self.storable = item.sellable.product_storable
         self.is_batch = self.storable and self.storable.is_batch
@@ -115,7 +118,7 @@ class PurchaseSelectionStep(BaseWizardStep):
         executer = self.search.get_query_executer()
         executer.add_query_callback(self.get_extra_query)
         self._create_filters()
-        self.search.result_view.set_selection_mode(gtk.SELECTION_MULTIPLE)
+        self.search.result_view.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         self.search.result_view.connect('selection-changed',
                                         self._on_results__selection_changed)
         self.search.result_view.connect('row-activated',
@@ -130,14 +133,15 @@ class PurchaseSelectionStep(BaseWizardStep):
 
         # Dont let the user receive purchases from other branches when working
         # in synchronized mode
-        if api.sysparam.get_bool('SYNCHRONIZED_MODE'):
+        if (api.sysparam.get_bool('SYNCHRONIZED_MODE') and not
+                api.can_see_all_branches()):
             branch = api.get_current_branch(self.store)
             query = And(query,
                         PurchaseOrderView.branch_id == branch.id)
         return query
 
     def _get_columns(self):
-        return [IdentifierColumn('identifier', title=_('Payment #'), sorted=True),
+        return [IdentifierColumn('identifier', title=_('Purchase #'), sorted=True),
                 SearchColumn('open_date', title=_('Date Started'),
                              data_type=datetime.date, width=100),
                 SearchColumn('expected_receival_date', data_type=datetime.date,
@@ -251,7 +255,7 @@ class ReceivingOrderItemStep(BaseWizardStep):
         self.force_validation()
 
     def _setup_widgets(self):
-        adjustment = gtk.Adjustment(lower=0, upper=MAX_INT, step_incr=1)
+        adjustment = Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1)
         self.purchase_items.set_columns([
             Column('code', title=_('Code'),
                    data_type=str, searchable=True, visible=False),
@@ -270,6 +274,10 @@ class ReceivingOrderItemStep(BaseWizardStep):
                    width=50),
             Column('cost', title=_('Cost'), data_type=currency,
                    format_func=get_formatted_cost, width=90),
+            Column('ipi_value', title=_('IPI'), data_type=currency, visible=False,
+                   format_func=get_formatted_price, editable=True, width=90),
+            Column('icms_st_value', title=_('ICMS ST'), data_type=currency,
+                   visible=False, format_func=get_formatted_price, editable=True, width=90),
             Column('total', title=_('Total'), data_type=currency, width=100)])
         # We must clear the ObjectTree before
         self.purchase_items.clear()
@@ -290,19 +298,29 @@ class ReceivingOrderItemStep(BaseWizardStep):
         return sum([item.total for item in self.purchase_items])
 
     def _create_receiving_order(self):
-        # We only let the user get this far if the purchases select are for the
-        # same branch and supplier
         supplier_id = self.purchases[0].supplier_id
-        branch_id = self.purchases[0].branch_id
+        branch = self.purchases[0].branch
+
+        # If the receiving is for another branch, we need a temporary identifier
+        temporary_identifier = None
+        if (api.sysparam.get_bool('SYNCHRONIZED_MODE') and
+                api.get_current_branch(self.store) != branch):
+            temporary_identifier = ReceivingOrder.get_temporary_identifier(self.store)
 
         # We cannot create the model in the wizard since we haven't
         # selected a PurchaseOrder yet which ReceivingOrder depends on
         # Create the order here since this is the first place where we
         # actually have a purchase selected
+        receiving_invoice = ReceivingInvoice(
+            supplier=supplier_id, store=self.store, branch=branch,
+            station=api.get_current_station(self.store),
+            responsible=api.get_current_user(self.store))
         self.wizard.model = self.model = ReceivingOrder(
-            responsible=api.get_current_user(self.store),
-            supplier=supplier_id, invoice_number=None,
-            branch=branch_id, store=self.store)
+            identifier=temporary_identifier,
+            receiving_invoice=receiving_invoice,
+            responsible=receiving_invoice.responsible,
+            station=api.get_current_station(self.store),
+            invoice_number=None, branch=branch, store=self.store)
 
         for row in self.purchases:
             self.model.add_purchase(row.purchase)
@@ -317,14 +335,20 @@ class ReceivingOrderItemStep(BaseWizardStep):
                     self.model.add_purchase_item(
                         item.purchase_item,
                         quantity=quantity,
-                        batch_number=batch)
+                        batch_number=batch,
+                        ipi_value=item.ipi_value,
+                        icms_st_value=item.icms_st_value)
             elif item.quantity > 0:
                 parent_item = self.model.add_purchase_item(item.purchase_item,
-                                                           item.quantity)
+                                                           item.quantity,
+                                                           ipi_value=item.ipi_value,
+                                                           icms_st_value=item.icms_st_value)
                 for child in item.children_items:
                     self.model.add_purchase_item(child.purchase_item,
                                                  quantity=child.quantity,
-                                                 parent_item=parent_item)
+                                                 parent_item=parent_item,
+                                                 ipi_value=child.ipi_value,
+                                                 icms_st_value=child.icms_st_value)
 
     def _edit_item(self, item):
         retval = run_dialog(BatchIncreaseSelectionDialog, self.wizard,
@@ -349,13 +373,13 @@ class ReceivingOrderItemStep(BaseWizardStep):
 
     def _on_purchase_items__cell_data_func(self, column, renderer, obj, text):
         renderer.set_property('sensitive', not obj.purchase_item.parent_item)
-        if not isinstance(renderer, gtk.CellRendererText):
+        if not isinstance(renderer, Gtk.CellRendererText):
             return text
 
-        if column.attribute == 'quantity':
-            editable = not obj.is_batch and obj.purchase_item.parent_item
-            renderer.set_property('editable-set', not editable)
-            renderer.set_property('editable', not editable)
+        if column.attribute in ['ipi_value', 'icms_st_value', 'quantity']:
+            editable = not (obj.is_batch or obj.purchase_item.parent_item)
+            renderer.set_property('editable-set', editable)
+            renderer.set_property('editable', editable)
 
         renderer.set_property('foreground', 'red')
         renderer.set_property('foreground-set', obj.need_adjust_batch)
@@ -400,7 +424,8 @@ class ReceivingInvoiceStep(WizardEditorStep):
 
     def post_init(self):
         self._is_valid = False
-        self.invoice_slave = ReceivingInvoiceSlave(self.store, self.model)
+        self.invoice_slave = ReceivingInvoiceSlave(
+            self.store, self.model.receiving_invoice)
         self.invoice_slave.connect('activate', self._on_invoice_slave__activate)
         self.attach_slave("place_holder", self.invoice_slave)
         # Slaves must be focused after being attached
@@ -432,7 +457,7 @@ class ReceivingInvoiceStep(WizardEditorStep):
 
 class ReceivingOrderWizard(BaseWizard):
     title = _("Receive Purchase Order")
-    size = (750, 350)
+    size = (850, 350)
     need_cancel_confirmation = True
     # help_section = 'purchase-new-receival'
 
@@ -447,7 +472,7 @@ class ReceivingOrderWizard(BaseWizard):
         if not param:
             return
         if not yesno(_(u'Do you want to print the labels for the received products?'),
-                     gtk.RESPONSE_YES, _(u'Print labels'), _(u"Don't print")):
+                     Gtk.ResponseType.YES, _(u'Print labels'), _(u"Don't print")):
             return
         label_data = run_dialog(SkipLabelsEditor, self, self.store)
         if label_data:
@@ -467,7 +492,7 @@ class ReceivingOrderWizard(BaseWizard):
                 continue
             self.store.remove(item)
 
-        self.model.confirm()
+        self.model.confirm(api.get_current_user(self.store))
         self.retval = self.model
         # Confirm before printing to avoid losing data if something breaks
         self.store.confirm(self.retval)

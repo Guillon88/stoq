@@ -27,12 +27,9 @@
 import datetime
 from decimal import Decimal
 
-import gobject
-import gtk
+from gi.repository import Gtk, GObject
 from kiwi import ValueUnset
-from kiwi.environ import environ
 from kiwi.python import enum
-from kiwi.ui.pixbufutils import pixbuf_from_string
 from kiwi.ui.widgets.checkbutton import ProxyCheckButton
 from kiwi.ui.widgets.combo import ProxyComboBox
 from kiwi.ui.widgets.entry import ProxyDateEntry
@@ -62,7 +59,6 @@ from stoqlib.gui.search.searchoptions import (Any,
                                               LowerThan,
                                               Today,
                                               Yesterday)
-from stoqlib.gui.widgets.hintedentry import HintedEntry
 from stoqlib.gui.widgets.searchfilterbutton import SearchFilterButton
 from stoqlib.lib.defaults import MAX_INT
 from stoqlib.lib.translation import stoqlib_gettext
@@ -75,31 +71,31 @@ _ = stoqlib_gettext
 #
 
 @implementer(ISearchFilter)
-class SearchFilter(gtk.HBox):
+class SearchFilter(Gtk.HBox):
     """
     A base class used by common search filters
     """
 
     #: the label of this filter
-    label = gobject.property(type=str, flags=(gobject.PARAM_READWRITE))
+    label = GObject.Property(type=str, flags=(GObject.ParamFlags.READWRITE))
 
     gsignal('changed')
     gsignal('removed')
     __gtype_name__ = 'SearchFilter'
 
     def __init__(self, label=''):
-        gtk.HBox.__init__(self)
+        super(SearchFilter, self).__init__()
+
         self.props.label = label
         self._label = label
         self._remove_button = None
 
     def _add_remove_button(self):
-        self._remove_button = SearchFilterButton(stock=gtk.STOCK_REMOVE)
-        self._remove_button.set_relief(gtk.RELIEF_NONE)
-        self._remove_button.set_label_visible(False)
+        self._remove_button = SearchFilterButton(icon='list-remove-symbolic')
+        self._remove_button.set_relief(Gtk.ReliefStyle.NONE)
         self._remove_button.connect('clicked', self._on_remove_clicked)
         self._remove_button.show()
-        self.pack_start(self._remove_button, False, False)
+        self.pack_start(self._remove_button, False, False, 0)
 
     def _on_remove_clicked(self, button):
         self.emit('removed')
@@ -142,6 +138,9 @@ class SearchFilter(gtk.HBox):
             self._add_remove_button()
 
 
+GObject.type_register(SearchFilter)
+
+
 class DateSearchFilter(SearchFilter):
     """
     A filter which helps you to search by a date interval.
@@ -160,8 +159,8 @@ class DateSearchFilter(SearchFilter):
         """
         self._options = {}
         SearchFilter.__init__(self, label=label)
-        self.title_label = gtk.Label(label)
-        self.pack_start(self.title_label, False, False)
+        self.title_label = Gtk.Label(label=label)
+        self.pack_start(self.title_label, False, False, 0)
         self.title_label.show()
 
         self.mode = ProxyComboBox()
@@ -171,8 +170,8 @@ class DateSearchFilter(SearchFilter):
         self.pack_start(self.mode, False, False, 6)
         self.mode.show()
 
-        self.from_label = gtk.Label(_("From:"))
-        self.pack_start(self.from_label, False, False)
+        self.from_label = Gtk.Label(label=_("From:"))
+        self.pack_start(self.from_label, False, False, 0)
         self.from_label.show()
 
         self.start_date = ProxyDateEntry()
@@ -181,8 +180,8 @@ class DateSearchFilter(SearchFilter):
         self.pack_start(self.start_date, False, False, 6)
         self.start_date.show()
 
-        self.to_label = gtk.Label(_("To:"))
-        self.pack_start(self.to_label, False, False)
+        self.to_label = Gtk.Label(label=_("To:"))
+        self.pack_start(self.to_label, False, False, 0)
         self.to_label.show()
 
         self.end_date = ProxyDateEntry()
@@ -287,8 +286,8 @@ class DateSearchFilter(SearchFilter):
         """
         pos = len(self.mode) + 1
         for name, option_type in [
-            (_('Custom day'), DateSearchFilter.Type.USER_DAY),
-            (_('Custom interval'), DateSearchFilter.Type.USER_INTERVAL)]:
+                (_('Custom day'), DateSearchFilter.Type.USER_DAY),
+                (_('Custom interval'), DateSearchFilter.Type.USER_INTERVAL)]:
 
             self.mode.insert_item(pos, name, option_type)
             pos += 1
@@ -451,6 +450,9 @@ class DateSearchFilter(SearchFilter):
                 self._internal_set_start_date(end - datetime.timedelta(days=1))
 
 
+GObject.type_register(DateSearchFilter)
+
+
 class ComboSearchFilter(SearchFilter):
     """
     - a label
@@ -467,8 +469,8 @@ class ComboSearchFilter(SearchFilter):
         """
         self._block_updates = False
         SearchFilter.__init__(self, label=label)
-        label = gtk.Label(label)
-        self.pack_start(label, False, False)
+        label = Gtk.Label(label=label)
+        self.pack_start(label, False, False, 0)
         label.show()
         self.title_label = label
 
@@ -506,7 +508,9 @@ class ComboSearchFilter(SearchFilter):
             for item in self.combo.get_model_items().values():
                 if item is None:
                     continue
-                if item.id == value_id:
+                # Filter can come as a string or as a FilterItem object
+                item_id = item if isinstance(item, str) else item.id
+                if item_id == value_id:
                     value = item
                     break
         self.select(value)
@@ -566,6 +570,9 @@ class ComboSearchFilter(SearchFilter):
     def _on_combo__content_changed(self, mode):
         if not self._block_updates:
             self.emit('changed')
+
+
+GObject.type_register(ComboSearchFilter)
 
 
 class BoolSearchFilter(SearchFilter):
@@ -634,6 +641,9 @@ class BoolSearchFilter(SearchFilter):
             self.emit('changed')
 
 
+GObject.type_register(BoolSearchFilter)
+
+
 class StringSearchFilter(SearchFilter):
     """
     Contains:
@@ -644,6 +654,9 @@ class StringSearchFilter(SearchFilter):
     :ivar entry: the entry
     :ivar label: the label
     """
+
+    __gtype_name__ = 'StringSearchFilter'
+
     def __init__(self, label, chars=0, container=None):
         """
         Create a new StringSearchFilter object.
@@ -652,8 +665,8 @@ class StringSearchFilter(SearchFilter):
         """
         self._container = container
         SearchFilter.__init__(self, label=label)
-        self.title_label = gtk.Label(label)
-        self.pack_start(self.title_label, False, False)
+        self.title_label = Gtk.Label(label=label)
+        self.pack_start(self.title_label, False, False, 0)
         self.title_label.show()
 
         self._options = {}
@@ -661,20 +674,16 @@ class StringSearchFilter(SearchFilter):
         self.mode.connect('content-changed', self._on_mode__content_changed)
         self.pack_start(self.mode, False, False, 6)
 
-        self.entry = HintedEntry()
-        self.entry.set_hint(_("Search"))
-        self.entry.show_hint()
+        self.entry = Gtk.Entry()
+        self.entry.set_placeholder_text(_("Search"))
         self.entry.props.secondary_icon_sensitive = False
-        data = environ.get_resource_string('stoq', 'pixmaps',
-                                           'stoq-funnel-16x16.png')
-        image = pixbuf_from_string(data)
-        self.entry.set_icon_from_pixbuf(gtk.ENTRY_ICON_PRIMARY,
-                                        image)
-        self.entry.set_icon_tooltip_text(gtk.ENTRY_ICON_PRIMARY,
+        self.entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY,
+                                           'fa-filter-symbolic')
+        self.entry.set_icon_tooltip_text(Gtk.EntryIconPosition.PRIMARY,
                                          _("Add a filter"))
-        self.entry.set_icon_from_stock(gtk.ENTRY_ICON_SECONDARY,
-                                       gtk.STOCK_CLEAR)
-        self.entry.set_icon_tooltip_text(gtk.ENTRY_ICON_SECONDARY,
+        self.entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY,
+                                           'edit-clear-symbolic')
+        self.entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY,
                                          _("Clear the search"))
         self.entry.connect("icon-release", self._on_entry__icon_release)
         self.entry.connect('activate', self._on_entry__activate)
@@ -684,14 +693,14 @@ class StringSearchFilter(SearchFilter):
         self.pack_start(self.entry, False, False, 6)
         self.entry.show()
 
-        for option in (ContainsAll, ContainsExactly, DoesNotContain, IdenticalTo):
-            self._add_option(option)
+        # Default filter will be only contains all. When advanced filter is enabled it will add
+        # other options
+        self._add_option(ContainsAll)
         self.mode.select_item_by_position(0)
 
-    def _add_option(self, option_type, position=-2):
+    def _add_option(self, option_type):
         option = option_type()
-        num = abs(position)
-        self.mode.insert_item(num, option.name, option_type)
+        self.mode.append_item(option.name, option_type)
         self._options[option_type] = option
 
     #
@@ -708,7 +717,7 @@ class StringSearchFilter(SearchFilter):
         entry.props.secondary_icon_sensitive = bool(entry.get_text())
 
     def _position_filter_menu(self, data):
-        window = self.entry.get_icon_window(gtk.ENTRY_ICON_PRIMARY)
+        window = self.entry.get_icon_window(Gtk.EntryIconPosition.PRIMARY)
         x, y = window.get_origin()
         y += window.get_size()[1]
         border = self.entry.style_get_property('progress-border')
@@ -717,16 +726,16 @@ class StringSearchFilter(SearchFilter):
         return (x, y, True)
 
     def _on_entry__icon_release(self, entry, icon_pos, event):
-        if icon_pos == gtk.ENTRY_ICON_SECONDARY:
+        if icon_pos == Gtk.EntryIconPosition.SECONDARY:
             entry.set_text("")
             entry.grab_focus()
             self.emit('changed')
-        elif icon_pos == gtk.ENTRY_ICON_PRIMARY:
+        elif icon_pos == Gtk.EntryIconPosition.PRIMARY:
             # We don't need create popup filters if haven't search columns.
             if (not self._container or not hasattr(self._container, 'menu') or
-                not self._container.menu):
+                    not self._container.menu):
                 return
-            self._container.menu.popup(None, None,
+            self._container.menu.popup(None, None, None,
                                        self._position_filter_menu, 0, event.time)
 
     #
@@ -736,13 +745,15 @@ class StringSearchFilter(SearchFilter):
     def get_state(self):
         option = self.mode.get_selected_data()
         return StringQueryState(filter=self,
-                                text=unicode(self.entry.get_text()),
+                                text=str(self.entry.get_text()),
                                 mode=option and option.mode)
 
     def set_state(self, text, mode=None):
         self.entry.set_text(text)
-        if mode is not None:
-            self.mode.select_item_by_position(mode)
+        for i in self.mode.get_model_items().values():
+            if i.mode == mode:
+                self.mode.select_item_by_data(i)
+                break
 
     def get_title_label(self):
         return self.title_label
@@ -762,11 +773,16 @@ class StringSearchFilter(SearchFilter):
 
     def enable_advanced(self):
         # Do not show the funnel icon if its an advanced filter
-        self.entry.set_icon_from_pixbuf(gtk.ENTRY_ICON_PRIMARY, None)
+        self.entry.set_icon_from_pixbuf(Gtk.EntryIconPosition.PRIMARY, None)
+        for option in [ContainsExactly, IdenticalTo, DoesNotContain]:
+            self._add_option(option)
         self.mode.show()
 
     def set_label(self, label):
         self.title_label.set_text(label)
+
+
+GObject.type_register(StringSearchFilter)
 
 
 class NumberSearchFilter(SearchFilter):
@@ -784,9 +800,9 @@ class NumberSearchFilter(SearchFilter):
         self._options = {}
 
         SearchFilter.__init__(self, label=label)
-        self.title_label = gtk.Label(label)
+        self.title_label = Gtk.Label(label=label)
         self.title_label.set_alignment(1.0, 0.5)
-        self.pack_start(self.title_label, False, False)
+        self.pack_start(self.title_label, False, False, 0)
         self.title_label.show()
 
         self.mode = ProxyComboBox()
@@ -794,20 +810,20 @@ class NumberSearchFilter(SearchFilter):
         self.pack_start(self.mode, False, False, 6)
         self.mode.show()
 
-        self.start = gtk.SpinButton(climb_rate=1.0)
-        self.start.get_adjustment().step_increment = 1.0
-        self.start.set_range(-MAX_INT - 1, MAX_INT)
+        self.start = Gtk.SpinButton(climb_rate=1.0)
+        self.start.set_adjustment(Gtk.Adjustment(lower=-MAX_INT - 1, upper=MAX_INT,
+                                                 step_increment=1))
         self.pack_start(self.start, False, False, 6)
         self.start.show()
         self.start.connect_after('activate', self._on_entry__activate)
 
-        self.and_label = gtk.Label(_("And"))
-        self.pack_start(self.and_label, False, False)
+        self.and_label = Gtk.Label(label=_("And"))
+        self.pack_start(self.and_label, False, False, 0)
         self.and_label.show()
 
-        self.end = gtk.SpinButton(climb_rate=1.0)
-        self.end.get_adjustment().step_increment = 1.0
-        self.end.set_range(-MAX_INT - 1, MAX_INT)
+        self.end = Gtk.SpinButton(climb_rate=1.0)
+        self.start.set_adjustment(Gtk.Adjustment(lower=-MAX_INT - 1, upper=MAX_INT,
+                                                 step_increment=1))
         self.pack_start(self.end, False, False, 6)
         self.end.show()
         self.end.connect_after('activate', self._on_entry__activate)
@@ -910,6 +926,9 @@ class NumberSearchFilter(SearchFilter):
         self._options[option_type] = option
 
 
+GObject.type_register(NumberSearchFilter)
+
+
 class MultiSearchFilter(SearchFilter):
     """A multi object search filter, containing:
 
@@ -917,11 +936,13 @@ class MultiSearchFilter(SearchFilter):
       - a multicombo widget
     """
 
+    __gtype_name__ = 'MultiSearchFilter'
+
     def __init__(self, label, items):
         super(MultiSearchFilter, self).__init__(label=label)
 
-        self._title_label = gtk.Label(label)
-        self.pack_start(self._title_label, False, False)
+        self._title_label = Gtk.Label(label=label)
+        self.pack_start(self._title_label, False, False, 0)
 
         self._combo = ProxyMultiCombo(width=400)
         self._combo.prefill(items)
@@ -961,3 +982,6 @@ class MultiSearchFilter(SearchFilter):
 
     def _on_combo__content_changed(self, combo):
         self.emit('changed')
+
+
+GObject.type_register(MultiSearchFilter)

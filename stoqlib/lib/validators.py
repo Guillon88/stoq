@@ -28,6 +28,7 @@ import re
 
 from kiwi.datatypes import converter, ValidationError
 
+from stoqlib.lib.algorithms import modulo11
 from stoqlib.lib.formatters import raw_phone_number, raw_postal_code
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -41,17 +42,25 @@ POSTAL_CODE_CHAR_LEN = 8
 
 
 def is_date_in_interval(date, start_date, end_date):
-    """Check if a certain date is in an interval. The function accepts
-    None values for start_date and end_date and, in this case, return True
-    if there is no interval to check."""
+    """Check if a certain date is within a given interval
+
+    Ignores the hours on the bounding dates and accepts None values for them.
+    We choose to return False if there is no interval to check. If a sale has a value
+    for an bounding date but not the other, only the former will be considered.
+    """
+    if not start_date and not end_date:
+        return False
+
     assert isinstance(date, datetime.datetime)
+    date = date.date()
     q1 = q2 = True
     if start_date:
         assert isinstance(start_date, datetime.datetime)
-        q1 = date >= start_date
+        q1 = date >= start_date.date()
     if end_date:
         assert isinstance(end_date, datetime.datetime)
-        q2 = date <= end_date
+        q2 = date <= end_date.date()
+
     return q1 and q2
 
 #
@@ -60,14 +69,14 @@ def is_date_in_interval(date, start_date, end_date):
 
 
 def validate_phone_number(phone_number):
-    if not isinstance(phone_number, basestring):
+    if not isinstance(phone_number, str):
         return False
 
     phone_number = raw_phone_number(phone_number)
-    digits = len(phone_number)
-    if digits == 11:
-        return phone_number[:1] == '0'
-    return digits in range(7, 11)
+    if phone_number and phone_number[0] == '0':
+        phone_number = phone_number[1:]
+
+    return len(phone_number) in range(7, 12)
 
 #
 # Adress validators
@@ -82,7 +91,7 @@ def validate_postal_code(postal_code):
 
 def validate_area_code(code):
     """Validates Brazilian area codes"""
-    if isinstance(code, basestring):
+    if isinstance(code, str):
         try:
             code = converter.from_string(int, code)
         except ValidationError:
@@ -100,13 +109,13 @@ def validate_area_code(code):
 def validate_cpf(cpf):
     cpf = ''.join(re.findall(r'\d', str(cpf)))
 
-    if not cpf or len(cpf) < 11:
+    if not cpf or len(cpf) != 11:
         return False
 
     # FIXME: use modulo11 from algorithms.py
 
     # With the first 9 digits, we calculate the last two digits (verifiers)
-    new = map(int, cpf)[:9]
+    new = list(map(int, cpf))[:9]
 
     while len(new) < 11:
         s = sum([(len(new) + 1 - i) * v for i, v in enumerate(new)]) % 11
@@ -132,13 +141,13 @@ def validate_cnpj(cnpj):
     """
     cnpj = ''.join(re.findall(r'\d', str(cnpj)))
 
-    if not cnpj or len(cnpj) < 14:
+    if not cnpj or len(cnpj) != 14:
         return False
 
     # FIXME: use modulo11 from algorithms.py
 
     # With the first 12 digts, we calculate the last 2 digits (verifiers)
-    new = map(int, cnpj)[:12]
+    new = list(map(int, cnpj))[:12]
 
     verification_base = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
 
@@ -164,7 +173,7 @@ def validate_cfop(cfop):
 
     Valid C.F.O.P. format: '9.999', where 9 is any digit in 0-9.
     """
-    if not isinstance(cfop, basestring):
+    if not isinstance(cfop, str):
         return False
 
     if not '.' in cfop:
@@ -184,7 +193,7 @@ def validate_cfop(cfop):
 
 
 def _validate_type(type_, value):
-    if isinstance(value, basestring):
+    if isinstance(value, str):
         try:
             # Just converting to see if any errors are raised.
             converter.from_string(type_, value)
@@ -226,7 +235,7 @@ def validate_percentage(value):
     Works for int, float, Decimal and basestring (if it
     can be converted to Decimal).
     """
-    if isinstance(value, basestring):
+    if isinstance(value, str):
         try:
             value = converter.from_string(Decimal, value)
         except ValidationError:
@@ -244,9 +253,26 @@ def validate_email(value):
 
 def validate_cst(cst):
     """Try to validate a CST to PIS/COFINS tax."""
-    valid_cst = [1, 2, 3, 4, 5, 6, 7, 8, 49, 50, 51, 52, 53, 54, 55, 56, 60,
+    valid_cst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 49, 50, 51, 52, 53, 54, 55, 56, 60,
                  61, 62, 63, 64, 65, 66, 67, 70, 71, 72, 73, 74, 75, 98, 99]
     if cst in valid_cst:
         return True
 
     return False
+
+
+def validate_invoice_key(key):
+    if len(key) != 44:
+        return False
+
+    return int(key[-1]) == modulo11(key[:-1])
+
+
+def validate_vehicle_license_plate(value):
+    """Validate Vehicle License Plate"""
+    if len(value) not in (6, 7):
+        return False
+
+    # Despite most license plates are in uppercase, we should allow lowercase
+    exp = '^[a-zA-Z]{2,3}[0-9]{4}|[a-zA-Z]{3,4}[0-9]{3}$'
+    return re.match(exp, value)

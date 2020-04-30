@@ -22,7 +22,7 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-import gtk
+from gi.repository import Gtk
 import mock
 
 from decimal import Decimal
@@ -140,8 +140,14 @@ class TestSaleQuoteItemSlave(GUITest):
 
         editor = SaleQuoteItemEditor(self.store, sale_item)
         slave = editor.item_slave
-        self.assertEquals(unicode(slave.reserved.emit('validate', 2)),
-                          "Not enough stock to reserve.")
+        upper = slave.reserved.get_adjustment().get_upper()
+        self.assertEqual(upper, 1)
+        self.assertEqual(str(slave.reserved.emit('validate', 2)),
+                         "Not enough stock to reserve.")
+
+        slave.quantity.update(3)
+        upper = slave.reserved.get_adjustment().get_upper()
+        self.assertEqual(upper, 3)
 
     def test_reserve_service(self):
         service = self.create_service(description=u'Service')
@@ -160,10 +166,10 @@ class TestSaleQuoteItemSlave(GUITest):
 
         editor = SaleQuoteItemEditor(self.store, sale_item)
         slave = editor.item_slave
-        self.assertEquals(unicode(slave.reserved.emit('validate', 3)),
-                          "One or more components for this package doesn't have "
-                          "enough of stock to reserve")
-        self.assertSensitive(slave, ['reserved', 'quantity', 'price'])
+        self.assertEqual(str(slave.reserved.emit('validate', 3)),
+                         "One or more components for this package doesn't have "
+                         "enough of stock to reserve")
+        self.assertSensitive(slave, ['reserved', 'quantity'])
         slave.reserved.update(1)
         self.click(editor.main_dialog.ok_button)
 
@@ -192,7 +198,7 @@ class TestSaleQuoteItemSlave(GUITest):
         self.click(editor.main_dialog.ok_button)
         stock_item = child_storable.get_stock_item(child_item.sale.branch,
                                                    child_item.batch)
-        self.assertEquals(stock_item.quantity, 2)
+        self.assertEqual(stock_item.quantity, 2)
 
     def test_edit_package_child(self):
         package_product = self.create_product(is_package=True)
@@ -249,17 +255,17 @@ class TestSaleQuoteItemSlave(GUITest):
         # Lets call the manager and ask for permission
         with mock.patch('stoqlib.gui.editors.saleeditor.run_dialog') as rd:
             rd.return_value = manager
-            slave.price.emit('icon-press', gtk.ENTRY_ICON_PRIMARY, None)
+            slave.price.emit('icon-press', Gtk.EntryIconPosition.PRIMARY, None)
 
         # Now it should be possible to confirm
         self.click(editor.main_dialog.ok_button)
         events_after = self.store.find(Event).count()
-        self.assertEquals(events_after, events_before + 1)
+        self.assertEqual(events_after, events_before + 1)
 
         last_event = self.store.find(Event).order_by(Event.id).last()
         expected = (u'Sale 333123: User username authorized 9.00 % '
                     u'of discount changing\n Description value from $10.00 to $9.10.')
-        self.assertEquals(last_event.description, expected)
+        self.assertEqual(last_event.description, expected)
 
     def test_on_confirm_without_discount(self):
         events_before = self.store.find(Event).count()
@@ -284,7 +290,7 @@ class TestSaleQuoteItemSlave(GUITest):
         # Lets call the manager and ask for permission
         with mock.patch('stoqlib.gui.editors.saleeditor.run_dialog') as rd:
             rd.return_value = manager
-            slave.price.emit('icon-press', gtk.ENTRY_ICON_PRIMARY, None)
+            slave.price.emit('icon-press', Gtk.EntryIconPosition.PRIMARY, None)
 
         # Forget about the discount
         slave.price.update(currency('10'))
@@ -293,7 +299,7 @@ class TestSaleQuoteItemSlave(GUITest):
         self.click(editor.main_dialog.ok_button)
         events_after = self.store.find(Event).count()
         # The number of events doesn't changed
-        self.assertEquals(events_after, events_before)
+        self.assertEqual(events_after, events_before)
 
 
 class TestSaleClientEditor(GUITest):
@@ -306,14 +312,13 @@ class TestSaleClientEditor(GUITest):
         sale.status = sale.STATUS_CONFIRMED
         editor = SaleClientEditor(self.store, model=sale)
 
-        self.assertEquals(editor.status.get_text(),
-                          (u"Confirmed" or u"Ordered"))
-        self.assertFalse(editor.salesperson_combo.get_sensitive())
-        self.assertEquals(zoidberg, editor.model.client)
+        self.assertEqual(editor.status_str.get_text(), (u"Confirmed" or u"Ordered"))
+        self.assertFalse(editor.salesperson_id.get_sensitive())
+        self.assertEqual(zoidberg, editor.model.client)
 
-        editor.client.select_item_by_data(bender.id)
+        editor.fields['client'].set_value(bender)
         self.click(editor.main_dialog.ok_button)
-        self.assertEquals(bender, sale.client)
+        self.assertEqual(bender, sale.client)
 
         self.check_editor(editor, 'editor-sale-client-edit')
 
@@ -330,13 +335,12 @@ class TestSalesPersonEditor(GUITest):
 
         editor = SalesPersonEditor(self.store, model=sale)
         self.check_editor(editor, 'editor-salesperson-edit')
-        self.assertEquals(editor.salesperson_combo.get_selected(), salesperson1)
-        self.assertFalse(editor.client_box.get_property('visible'))
-        self.assertFalse(editor.client_lbl.get_property('visible'))
+        self.assertEqual(editor.salesperson_id.get_selected(), salesperson1.id)
+        self.assertFalse(editor.client.get_property('visible'))
 
-        editor.salesperson_combo.select_item_by_data(salesperson2)
+        editor.salesperson_id.select_item_by_data(salesperson2.id)
         self.click(editor.main_dialog.ok_button)
-        self.assertEquals(sale.salesperson, salesperson2)
+        self.assertEqual(sale.salesperson, salesperson2)
 
 
 class TestSaleTokenEditor(GUITest):
@@ -358,4 +362,5 @@ class TestSaleTokenEditor(GUITest):
         self.assertNotSensitive(editor.main_dialog, ['ok_button'])
 
         editor.code.set_text(u'sale token 2')
+        editor.name.set_text(u'sale token 2')
         self.assertSensitive(editor.main_dialog, ['ok_button'])

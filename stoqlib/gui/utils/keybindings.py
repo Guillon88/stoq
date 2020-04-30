@@ -24,7 +24,6 @@
 
 import platform
 
-import gtk
 from kiwi.component import get_utility
 
 from stoqlib.lib.interfaces import IApplicationDescriptions
@@ -266,6 +265,8 @@ _bindings = [
      _("Create a new consignment")),
     ('app.purchase.new_product', '',
      _("Create a new product")),
+    ('app.purchase.new_reconciliation', '',
+     _("Start a new purchase reconciliation")),
     ('app.purchase.search_categories', '<Primary>c',
      _("Search for categories")),
     ('app.purchase.search_products', '<Primary>d',
@@ -471,9 +472,6 @@ class KeyBindingCategory(object):
         self.label = label
 
 
-_pre_gtk_2_24_9 = gtk.gtk_version < (2, 24, 9)
-
-
 class KeyBindingGroup(object):
     def __init__(self, bindings):
         self._bindings = bindings
@@ -482,8 +480,6 @@ class KeyBindingGroup(object):
         if not name in self._bindings:
             raise AttributeError(name)
         binding = self._bindings[name]
-        if _pre_gtk_2_24_9:
-            binding = binding.replace('<Primary>', '<Control>')
         if platform.system() == 'Darwin':
             binding = binding.replace('<Alt>', '<Control>')
         return binding

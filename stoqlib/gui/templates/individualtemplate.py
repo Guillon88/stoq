@@ -25,14 +25,16 @@
 
 from kiwi.datatypes import ValidationError
 from kiwi.python import AttributeForwarder
+from kiwi.utils import gsignal
 
 from stoqlib.api import api
 from stoqlib.domain.address import CityLocation
-from stoqlib.domain.person import Individual
+from stoqlib.domain.person import Individual, IndividualView
 from stoqlib.gui.editors.baseeditor import BaseEditorSlave
 from stoqlib.gui.slaves.addressslave import CityLocationMixin
 from stoqlib.lib.dateutils import localtoday
 from stoqlib.lib.translation import stoqlib_gettext
+from stoqlib.gui.utils.databaseform import DatabaseForm
 
 _ = stoqlib_gettext
 
@@ -43,12 +45,32 @@ class _IndividualDocuments(BaseEditorSlave):
     proxy_widgets = ('cpf',
                      'rg_expedition_date',
                      'rg_expedition_local',
-                     'rg_number')
+                     'rg_number',
+                     'state_registry',
+                     'city_registry')
 
-    def setup_proxies(self):
+    def __init__(self, store, model, visual_mode=None, ui_form_name=None):
+        self.db_form = DatabaseForm(ui_form_name) if ui_form_name else None
+        BaseEditorSlave.__init__(self, store, model, visual_mode=visual_mode)
+
+    def _setup_widgets(self):
         self.document_l10n = api.get_l10n_field('person_document')
         self.cpf_lbl.set_label(self.document_l10n.label + ':')
         self.cpf.set_mask(self.document_l10n.entry_mask)
+
+    def _setup_form_fields(self):
+        if not self.db_form:
+            return
+
+        # Do not update the widget if the model already has a responsible
+        if self.model.responsible:
+            return
+
+        self.db_form.update_widget(self.cpf, other=self.cpf_lbl)
+
+    def setup_proxies(self):
+        self._setup_widgets()
+        self._setup_form_fields()
         self.proxy = self.add_proxy(self.model,
                                     _IndividualDocuments.proxy_widgets)
 
@@ -76,14 +98,18 @@ class _IndividualDetailsModel(AttributeForwarder):
         'marital_status',
         'get_marital_statuses',
         'birth_location',
-        'gender'
+        'gender',
+        'responsible',
     ]
 
-    def __init__(self, target, store):
+    def __init__(self, target, store, ui_form_name=None):
         """
-        :param model: an Individial
+        :param target: an Individial
         :param store: a store
         """
+        # Even though we dont use ui_form_name anywhere in this class, its setup
+        # is made in a way we need this argument. see persontemplate
+        # attach_model_slave method
         AttributeForwarder.__init__(self, target)
         self.store = store
         if not target.birth_location:
@@ -94,14 +120,16 @@ class _IndividualDetailsModel(AttributeForwarder):
         self.country = target.birth_location.country
 
     def is_married(self):
-        return (self.target.marital_statuses ==
-                Individual.STATUS_MARRIED)
+        return self.target.marital_statuses == Individual.STATUS_MARRIED
 
     def is_male(self):
         return self.target.gender == Individual.GENDER_MALE
 
     def is_female(self):
         return self.target.gender == Individual.GENDER_FEMALE
+
+    def is_none(self):
+        return self.target.gender is None
 
     def birth_location_changed(self):
         return (self.city != self.target.birth_location.city or
@@ -132,15 +160,31 @@ class _IndividualDetailsSlave(BaseEditorSlave, CityLocationMixin):
         'city',
         'country',
         'state',
+        'responsible',
     ]
+    gsignal('responsible-changed', object)
+
+    def __init__(self, store, model, visual_mode=False, ui_form_name=None):
+        # Even though we dont use ui_form_name anywhere in this class, its setup
+        # is made in a way we need this argument. see persontemplate
+        # attach_model_slave method
+        BaseEditorSlave.__init__(self, store, model, visual_mode=visual_mode)
 
     def _setup_widgets(self):
+        from stoqlib.gui.widgets.queryentry import IndividualEntryGadget
+        self.unregistered_check.set_active(self.model.is_none())
         self.male_check.set_active(self.model.is_male())
         self.female_check.set_active(self.model.is_female())
         self.marital_status.prefill(self.model.get_marital_statuses())
+        self.person_gadget = IndividualEntryGadget(
+            store=self.store,
+            entry=self.responsible,
+            initial_value=self.model.responsible,
+            search_clause=IndividualView.id != self.model.target.id
+        )
 
     def _update_marital_status(self):
-        if self.model.is_married():
+        if self.marital_status.read() == Individual.STATUS_MARRIED:
             self.spouse_lbl.show()
             self.spouse_name.show()
         else:
@@ -167,7 +211,9 @@ class _IndividualDetailsSlave(BaseEditorSlave, CityLocationMixin):
         self.female_check.set_sensitive(False)
 
     def on_confirm(self):
-        if self.male_check.get_active():
+        if self.unregistered_check.get_active():
+            self.model.gender = None
+        elif self.male_check.get_active():
             self.model.gender = Individual.GENDER_MALE
         else:
             self.model.gender = Individual.GENDER_FEMALE
@@ -185,13 +231,16 @@ class _IndividualDetailsSlave(BaseEditorSlave, CityLocationMixin):
         if date > localtoday().date():
             return ValidationError(_(u"Birth date must be less than today"))
 
+    def after_responsible__content_changed(self, *args):
+        self.emit('responsible-changed', self.responsible.read())
+
 
 class IndividualEditorTemplate(BaseEditorSlave):
     model_type = Individual
     gladefile = 'BaseTemplate'
 
     def __init__(self, store, model=None, person_slave=None,
-                 visual_mode=False):
+                 visual_mode=False, ui_form_name=None):
         """ Creates a new IndividualEditorTemplate object
 
         :param store: a store
@@ -200,6 +249,7 @@ class IndividualEditorTemplate(BaseEditorSlave):
         :param visual_model:
         """
         self._person_slave = person_slave
+        self.ui_form_name = ui_form_name
         BaseEditorSlave.__init__(self, store, model, visual_mode=visual_mode)
 
     def get_person_slave(self):
@@ -215,7 +265,12 @@ class IndividualEditorTemplate(BaseEditorSlave):
     def setup_slaves(self):
         self.model = self.store.fetch(self.model)
         self.documents_slave = self._person_slave.attach_model_slave(
-            'individual_holder', _IndividualDocuments, self.model)
+            'individual_holder', _IndividualDocuments, self.model,
+            self.ui_form_name)
         self.details_slave = self._person_slave.attach_model_slave(
             'details_holder', _IndividualDetailsSlave,
             _IndividualDetailsModel(self.model, self.store))
+
+    def on_details_slave__responsible_changed(self, *args):
+        has_responsible = bool(self.details_slave.responsible.read())
+        self.documents_slave.cpf.set_property('mandatory', not has_responsible)

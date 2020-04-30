@@ -24,7 +24,7 @@
 
 import datetime
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 from kiwi.ui.widgets.combo import ProxyComboBox
 from kiwi.ui.widgets.entry import ProxyEntry
@@ -88,8 +88,8 @@ class AccountEditor(BaseEditor):
         BaseEditor.__init__(self, store, model)
 
         action_area = self.main_dialog.action_area
-        action_area.set_layout(gtk.BUTTONBOX_END)
-        action_area.pack_start(self._test_button, expand=False, fill=False)
+        action_area.set_layout(Gtk.ButtonBoxStyle.END)
+        action_area.pack_start(self._test_button, False, False, 0)
         action_area.set_child_secondary(self._test_button, True)
         self._test_button.show()
 
@@ -103,13 +103,13 @@ class AccountEditor(BaseEditor):
                        store=store)
 
     def _setup_widgets(self):
-        self._test_button = gtk.Button(_("Print a test bill"))
+        self._test_button = Gtk.Button.new_with_label(_("Print a test bill"))
         self._test_button.connect('clicked',
                                   self._on_test_button__clicked)
         self.parent_accounts = AccountTree(with_code=False, create_mode=True)
         self.parent_accounts.connect('selection-changed',
                                      self._on_parent_accounts__selection_changed)
-        self.tree_box.pack_start(self.parent_accounts)
+        self.tree_box.pack_start(self.parent_accounts, True, True, 0)
         self.tree_box.reorder_child(self.parent_accounts, 0)
 
         if sysparam.compare_object('IMBALANCE_ACCOUNT', self.model):
@@ -166,8 +166,8 @@ class AccountEditor(BaseEditor):
             bank_account = BankAccount(account=self.model,
                                        store=self.store)
         # FIXME: Who sets this to a str?
-        bank_account.bank_account = unicode(self.bank_model.bank_account)
-        bank_account.bank_branch = unicode(self.bank_model.bank_branch)
+        bank_account.bank_account = str(self.bank_model.bank_account)
+        bank_account.bank_branch = str(self.bank_model.bank_branch)
         if self._bank_number is not None:
             bank_account.bank_number = self.bank_model.bank_number
 
@@ -175,7 +175,7 @@ class AccountEditor(BaseEditor):
 
     def _save_bank_bill_options(self, bank_account):
         for option, entry in self._option_fields.items():
-            value = unicode(entry.get_text())
+            value = str(entry.get_text())
             bill_option = self.store.find(BillOption,
                                           bank_account=bank_account,
                                           option=option).one()
@@ -188,16 +188,16 @@ class AccountEditor(BaseEditor):
 
     def _add_widget(self, label, widget, options=False):
         n_rows = self.table.props.n_rows
-        l = gtk.Label()
+        l = Gtk.Label()
         l.set_markup(label)
         l.props.xalign = 1.0
         self.table.resize(n_rows + 1, 2)
         self.table.attach(
             l, 0, 1, n_rows, n_rows + 1,
-            gtk.FILL, 0, 0, 0)
+            Gtk.AttachOptions.FILL, 0, 0, 0)
         self.table.attach(
             widget, 1, 2, n_rows, n_rows + 1,
-            gtk.EXPAND | gtk.FILL, 0, 0, 0)
+            Gtk.AttachOptions.EXPAND | Gtk.AttachOptions.FILL, 0, 0, 0)
         if options:
             self._bank_option_widgets.extend([l, widget])
         else:
@@ -262,7 +262,8 @@ class AccountEditor(BaseEditor):
                 entry.props.data_type = 'str'
                 entry.connect('validate', self._on_bank_option__validate,
                               bank_info, option)
-                self._add_widget("<i>%s</i>:" % (api.escape(option.capitalize()), ),
+                name = option.replace('_', ' ').capitalize()
+                self._add_widget("<i>%s</i>:" % api.escape(name),
                                  entry, options=True)
                 entry.show()
                 self._option_fields[option] = entry
@@ -278,8 +279,8 @@ class AccountEditor(BaseEditor):
         if not self.model.bank:
             return
 
-        self.bank_model.bank_branch = self.model.bank.bank_branch.encode('utf-8')
-        self.bank_model.bank_account = self.model.bank.bank_account.encode('utf-8')
+        self.bank_model.bank_branch = self.model.bank.bank_branch
+        self.bank_model.bank_account = self.model.bank.bank_account
         self.bank_proxy.update('bank_branch')
         self.bank_proxy.update('bank_account')
 

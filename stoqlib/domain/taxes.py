@@ -24,16 +24,21 @@
 
 # pylint: enable=E1101
 
+import collections
 from decimal import Decimal
 
 from storm.info import get_cls_info
 from storm.references import Reference
+from zope.interface import implementer
 
 from stoqlib.database.properties import (EnumCol, UnicodeCol, QuantityCol, DateTimeCol,
                                          PriceCol, IntCol, BoolCol, PercentCol,
                                          IdCol)
 from stoqlib.domain.base import Domain
+from stoqlib.domain.interfaces import IDescribable
 from stoqlib.lib.dateutils import localtoday
+from stoqlib.lib.defaults import quantize
+from stoqlib.lib.parameters import sysparam
 
 # SIGLAS:
 # BC - Base de Calculo
@@ -122,6 +127,10 @@ class BaseICMS(BaseTax):
     bc_include_ipi = BoolCol(default=True)
     bc_st_include_ipi = BoolCol(default=True)
 
+    # Funco de Combate à Pobreza
+    p_fcp = PercentCol(default=None)
+    p_fcp_st = PercentCol(default=None)
+
     # Simples Nacional
     csosn = IntCol(default=None)
     p_cred_sn = PercentCol(default=None)
@@ -182,11 +191,18 @@ class BaseCOFINS(BaseTax):
 class ProductIcmsTemplate(BaseICMS):
     __storm_table__ = 'product_icms_template'
 
+    REASON_LIVESTOCK = 3
+    REASON_OTHERS = 9
+    REASON_AGRICULTURAL_AGENCY = 12
+
     product_tax_template_id = IdCol()
     product_tax_template = Reference(product_tax_template_id, 'ProductTaxTemplate.id')
 
     # Simples Nacional
     p_cred_sn_valid_until = DateTimeCol(default=None)
+
+    # Motivo de Desoneração do ICMS
+    mot_des_icms = IntCol(default=None)
 
     def is_p_cred_sn_valid(self):
         """Returns if p_cred_sn has expired."""
@@ -209,6 +225,7 @@ class ProductIpiTemplate(BaseIPI):
     product_tax_template = Reference(product_tax_template_id, 'ProductTaxTemplate.id')
 
 
+@implementer(IDescribable)
 class ProductPisTemplate(BasePIS):
     """Template of PIS tax"""
 
@@ -217,7 +234,11 @@ class ProductPisTemplate(BasePIS):
     product_tax_template_id = IdCol()
     product_tax_template = Reference(product_tax_template_id, 'ProductTaxTemplate.id')
 
+    def get_description(self):
+        return self.product_tax_template.name
 
+
+@implementer(IDescribable)
 class ProductCofinsTemplate(BaseCOFINS):
     """Template of COFINS tax"""
 
@@ -225,6 +246,9 @@ class ProductCofinsTemplate(BaseCOFINS):
 
     product_tax_template_id = IdCol()
     product_tax_template = Reference(product_tax_template_id, 'ProductTaxTemplate.id')
+
+    def get_description(self):
+        return self.product_tax_template.name
 
 
 class ProductTaxTemplate(Domain):
@@ -235,10 +259,12 @@ class ProductTaxTemplate(Domain):
 
     __storm_table__ = 'product_tax_template'
 
-    types = {TYPE_ICMS: u"ICMS",
-             TYPE_IPI: u"IPI",
-             TYPE_PIS: u"PIS",
-             TYPE_COFINS: u"COFINS"}
+    types = collections.OrderedDict([
+        (TYPE_ICMS, u"ICMS"),
+        (TYPE_IPI, u"IPI"),
+        (TYPE_PIS, u"PIS"),
+        (TYPE_COFINS, u"COFINS"),
+    ])
 
     type_map = {TYPE_ICMS: ProductIcmsTemplate,
                 TYPE_IPI: ProductIpiTemplate,
@@ -259,11 +285,20 @@ class ProductTaxTemplate(Domain):
 
 class InvoiceItemIcms(BaseICMS):
     __storm_table__ = 'invoice_item_icms'
+
     v_bc = PriceCol(default=None)
     v_icms = PriceCol(default=None)
 
     v_bc_st = PriceCol(default=None)
     v_icms_st = PriceCol(default=None)
+
+    # Fundo de Combate à Pobreza
+    v_fcp = PriceCol(default=None)
+    v_fcp_st = PriceCol(default=None)
+    v_fcp_st_ret = PriceCol(default=None)
+
+    # Alíquota suportada pelo Consumidor Final (FCP + ICMS)
+    p_st = PercentCol(default=None)
 
     # Simples Nacional
     v_cred_icms_sn = PriceCol(default=None)
@@ -271,12 +306,24 @@ class InvoiceItemIcms(BaseICMS):
     v_bc_st_ret = PriceCol(default=None)
     v_icms_st_ret = PriceCol(default=None)
 
+    # Valor da desoneração do ICMS
+    v_icms_deson = PriceCol(default=None)
+
+    def _calc_v_icms_deson(self, invoice_item):
+        item_icms = invoice_item.get_total() * self.p_icms / 100
+        desonerated_value = self.v_bc * self.p_icms / 100
+        v_icms_deson = item_icms - desonerated_value
+
+        # This information cannot be zero, and it must exists in certain
+        # webservices
+        self.v_icms_deson = max(v_icms_deson, Decimal('0.01'))
+
     def _calc_cred_icms_sn(self, invoice_item):
         if self.p_cred_sn >= 0:
             self.v_cred_icms_sn = invoice_item.get_total() * self.p_cred_sn / 100
 
     def _calc_st(self, invoice_item):
-        self.v_bc_st = invoice_item.price * invoice_item.quantity
+        self.v_bc_st = quantize(invoice_item.price * invoice_item.quantity)
 
         if self.bc_st_include_ipi and invoice_item.ipi_info:
             self.v_bc_st += invoice_item.ipi_info.v_ipi
@@ -291,8 +338,13 @@ class InvoiceItemIcms(BaseICMS):
         if self.v_icms is not None and self.v_icms_st is not None:
             self.v_icms_st -= self.v_icms
 
+        if self.v_bc_st is not None and self.p_fcp_st is not None:
+            self.v_fcp_st = self.v_bc_st * self.p_fcp_st / 100
+        if self.v_fcp is not None and self.v_fcp_st is not None:
+            self.v_fcp_st -= self.v_fcp
+
     def _calc_normal(self, invoice_item):
-        self.v_bc = invoice_item.price * invoice_item.quantity
+        self.v_bc = quantize(invoice_item.price * invoice_item.quantity)
 
         if self.bc_include_ipi and invoice_item.ipi_info:
             self.v_bc += invoice_item.ipi_info.v_ipi
@@ -302,6 +354,9 @@ class InvoiceItemIcms(BaseICMS):
 
         if self.p_icms is not None and self.v_bc is not None:
             self.v_icms = self.v_bc * self.p_icms / 100
+
+        if self.p_fcp is not None and self.v_bc is not None:
+            self.v_fcp = self.v_bc * self.p_fcp / 100
 
     def _update_normal(self, invoice_item):
         """Atualiza os dados de acordo com os calculos do Regime Tributário
@@ -318,16 +373,19 @@ class InvoiceItemIcms(BaseICMS):
 
         elif self.cst == 20:
             self._calc_normal(invoice_item)
+            self._calc_v_icms_deson(invoice_item)
 
         elif self.cst == 30:
             self.v_icms = 0
             self.v_bc = 0
 
             self._calc_st(invoice_item)
+            self._calc_v_icms_deson(invoice_item)
 
         elif self.cst in (40, 41, 50):
             self.v_icms = 0
             self.v_bc = 0
+            self._calc_v_icms_deson(invoice_item)
 
         elif self.cst == 51:
             self._calc_normal(invoice_item)
@@ -335,15 +393,22 @@ class InvoiceItemIcms(BaseICMS):
         elif self.cst == 60:
             self.v_bc_st_ret = 0
             self.v_icms_st_ret = 0
+            self.v_fcp_st_ret = 0
+            if self.p_fcp_st is not None and self.p_icms_st is not None:
+                self.p_st = self.p_fcp_st + self.p_icms_st
 
         elif self.cst in (70, 90):
             self._calc_normal(invoice_item)
             self._calc_st(invoice_item)
+            self._calc_v_icms_deson(invoice_item)
 
     def _update_simples(self, invoice_item):
         if self.csosn in [300, 400, 500]:
             self.v_bc_st_ret = 0
             self.v_icms_st_ret = 0
+            self.v_fcp_st_ret = 0
+            if self.p_fcp_st is not None and self.p_icms_st is not None:
+                self.p_st = self.p_fcp_st + self.p_icms_st
 
         if self.csosn in [101, 201]:
             if self.p_cred_sn is None:
@@ -371,7 +436,7 @@ class InvoiceItemIcms(BaseICMS):
 
     @classmethod
     def get_tax_template(cls, invoice_item):
-        return invoice_item.sellable.product.icms_template
+        return invoice_item.sellable.product.get_icms_template(invoice_item.parent.branch)
 
 
 class InvoiceItemIpi(BaseIPI):
@@ -398,7 +463,7 @@ class InvoiceItemIpi(BaseIPI):
             return
 
         if self.calculo == self.CALC_ALIQUOTA:
-            self.v_bc = invoice_item.price * invoice_item.quantity
+            self.v_bc = quantize(invoice_item.price * invoice_item.quantity)
             if self.p_ipi is not None:
                 self.v_ipi = self.v_bc * self.p_ipi / 100
         elif self.calculo == self.CALC_UNIDADE:
@@ -407,13 +472,15 @@ class InvoiceItemIpi(BaseIPI):
 
     @classmethod
     def get_tax_template(cls, invoice_item):
-        return invoice_item.sellable.product.ipi_template
+        return invoice_item.sellable.product.get_ipi_template(invoice_item.parent.branch)
 
 
 class InvoiceItemPis(BasePIS):
     """Invoice of PIS tax."""
 
     __storm_table__ = 'invoice_item_pis'
+
+    PIS_NAO_CUMULATIVO_PADRAO = Decimal('1.65')
 
     #: Value of PIS tax.
     v_pis = PriceCol(default=0)
@@ -438,14 +505,35 @@ class InvoiceItemPis(BasePIS):
         # because the taxpayer is exempt.
         if self.cst in [4, 5, 6, 7, 8, 9]:
             return
+
+        # When the branch is Simples Nacional (CRT 1 or 2) and the pis is 99,
+        # the values should be zero
+        if self.cst == 99 and invoice_item.parent.branch.crt in [1, 2]:
+            self.v_bc = 0
+            self.p_pis = 0
+            self.v_pis = 0
+            return
+
         cost = self._get_item_cost(invoice_item)
-        self.v_bc = invoice_item.quantity * (invoice_item.price - cost)
+        if self.p_pis == self.PIS_NAO_CUMULATIVO_PADRAO:
+            # Regime de incidencia não cumulativa
+            self.v_bc = quantize(invoice_item.quantity * (invoice_item.price - cost))
+        else:
+            # Regime de incidencia cumulativa
+            self.v_bc = quantize(invoice_item.quantity * invoice_item.price)
+
         if self.p_pis is not None:
-            self.v_pis = self.v_bc * self.p_pis / 100
+            self.v_pis = quantize(self.v_bc * self.p_pis / 100)
 
     @classmethod
     def get_tax_template(cls, invoice_item):
-        return invoice_item.sellable.product.pis_template
+        default_pis = sysparam.get_object(invoice_item.store, 'DEFAULT_PRODUCT_PIS_TEMPLATE')
+        # FIXME: Allow use PIS templates in services
+        if invoice_item.sellable.service:
+            return default_pis
+
+        return (invoice_item.sellable.product.get_pis_template(invoice_item.parent.branch) or
+                default_pis)
 
     #
     # Private API
@@ -464,6 +552,8 @@ class InvoiceItemCofins(BaseCOFINS):
     """Invoice of COFINS tax."""
 
     __storm_table__ = 'invoice_item_cofins'
+
+    COFINS_NAO_CUMULATIVO_PADRAO = Decimal('7.6')
 
     #: Value of COFINS tax
     v_cofins = PriceCol(default=0)
@@ -488,14 +578,35 @@ class InvoiceItemCofins(BaseCOFINS):
         # because the taxpayer is exempt.
         if self.cst in [4, 5, 6, 7, 8, 9]:
             return
+
+        # When the branch is Simples Nacional (CRT 1 or 2) and the cofins is 99,
+        # the values should be zero
+        if self.cst == 99 and invoice_item.parent.branch.crt in [1, 2]:
+            self.v_bc = 0
+            self.p_cofins = 0
+            self.v_cofins = 0
+            return
+
         cost = self._get_item_cost(invoice_item)
-        self.v_bc = invoice_item.quantity * (invoice_item.price - cost)
+        if self.p_cofins == self.COFINS_NAO_CUMULATIVO_PADRAO:
+            # Regime de incidencia não cumulativa
+            self.v_bc = quantize(invoice_item.quantity * (invoice_item.price - cost))
+        else:
+            # Regime de incidencia cumulativa
+            self.v_bc = quantize(invoice_item.quantity * invoice_item.price)
+
         if self.p_cofins is not None:
-            self.v_cofins = self.v_bc * self.p_cofins / 100
+            self.v_cofins = quantize(self.v_bc * self.p_cofins / 100)
 
     @classmethod
     def get_tax_template(cls, invoice_item):
-        return invoice_item.sellable.product.cofins_template
+        default_cofins = sysparam.get_object(invoice_item.store, 'DEFAULT_PRODUCT_COFINS_TEMPLATE')
+        # FIXME: Allow use COFINS templates in services
+        if invoice_item.sellable.service:
+            return default_cofins
+
+        return (invoice_item.sellable.product.get_cofins_template(invoice_item.parent.branch) or
+                default_cofins)
 
     #
     # Private API

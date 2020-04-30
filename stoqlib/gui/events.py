@@ -222,6 +222,17 @@ class WizardSellableItemStepEvent(Event):
     """
 
 
+@public(since="1.13")
+class WizardAddSellableEvent(Event):
+    """
+    This event is emitted when a sellable is added on a stock operation wizard,
+    such as sales, loans, transfers and decreases.
+
+    :param wizard: The wizard that is handling the operation.
+    :param item: The operation item added to the operation.
+    """
+
+
 #
 # POS Events
 #
@@ -238,6 +249,18 @@ class POSConfirmSaleEvent(Event):
 
     :param sale_items: A list of objects representing the itens added in the
       Sale. This objects are instances of `<stoq.gui.pos.TemporarySaleItem>`
+    """
+
+
+@public(since="1.13")
+class POSAddSellableEvent(Event):
+    """
+    This event is emitted when a sellable is added on the pos app.
+
+    :param sellable: The sellable `<stoqlib.domain.sellable.Sellable>` object
+      added to the sale
+    :param quantity: The quantity of the sellable added
+    :param batch: The batch of the sellable added
     """
 
 
@@ -357,11 +380,28 @@ class SaleQuoteWizardFinishEvent(Event):
     """
 
 
-@public(since="1.10.0")
-class ClientSaleValidationEvent(Event):
+@public(since="1.12.0")
+class InvoiceSetupEvent(Event):
     """
-     This event is issued when the customer is selected in a sale wizard.
+     This event is triggered before an operation wizard commit to check
+     and/or setup the invoice data. If the return value is False, the commit is not
+     done, and the wizard should let the user fix the mistakes or do a rollback.
+     If it's True, the wizard can go on with the commit. If the event is not caught
+     or the callsite returns None, the wizard can go on with the commit too.
 
-     :param person: The person
-        <stoqlib.domain.person.Person> object to extract the street number.
+     :rtype: bool or NoneType
+     :returns: A bool value representing the validity of the invoice data or None
+    """
+
+
+@public(since="1.13")
+class StockOperationPersonValidationEvent(Event):
+    """
+     This event is issued when a person is about to be associated to a stock operation.
+
+     :param person: The <stoqlib.domain.person.Person> of the model added to the operation.
+     :param person_type: The type of the model added, such as Client, Branch,
+       Transporter.
+    :rtype: <kiwy.datatypes.ValidationError>
+    :returns: A ValidationError if validation fails else None
     """

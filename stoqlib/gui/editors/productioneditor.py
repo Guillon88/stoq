@@ -35,7 +35,7 @@ This file contains several editors used in the production process:
 
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 
 from stoqlib.api import api
@@ -78,9 +78,9 @@ class ProductionItemEditor(BaseEditor):
             self.location_content.hide()
 
     def setup_editor_widgets(self):
-        self.identifier.set_text(unicode(self.model.order.identifier))
+        self.identifier.set_text(str(self.model.order.identifier))
         self.quantity.set_adjustment(
-            gtk.Adjustment(lower=0, upper=self.get_max_quantity(), step_incr=1))
+            Gtk.Adjustment(lower=0, upper=self.get_max_quantity(), step_increment=1))
 
         if isinstance(self.model, (ProductionItem, ProductionMaterial)):
             sellable = self.model.product.sellable
@@ -175,7 +175,7 @@ class ProductionMaterialLostEditor(ProductionItemProducedEditor):
 
     def validate_confirm(self):
         try:
-            self.model.add_lost(self.quantity.read())
+            self.model.add_lost(api.get_current_user(self.store), self.quantity.read())
         except (ValueError, AssertionError):
             info(_(u'Can not lose this quantity. Not enough materials '
                    'allocated to this production.'))
@@ -199,7 +199,7 @@ class ProductionMaterialAllocateEditor(ProductionItemProducedEditor):
 
     def validate_confirm(self):
         try:
-            self.model.allocate(self.quantity.read())
+            self.model.allocate(api.get_current_user(self.store), self.quantity.read())
         except (ValueError, AssertionError):
             info(_(u'Can not allocate this quantity.'))
             return False

@@ -26,22 +26,20 @@
 
 import decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.component import get_utility
 from kiwi.currency import currency, format_price
 from kiwi.datatypes import ValidationError
-from kiwi.python import Settable
 from kiwi.ui.objectlist import Column
 
 from stoqlib.api import api
-from stoqlib.database.exceptions import IntegrityError
 from stoqlib.domain.costcenter import CostCenter
 from stoqlib.domain.events import CreatePaymentEvent
-from stoqlib.domain.fiscal import CfopData, Invoice
+from stoqlib.domain.fiscal import CfopData
 from stoqlib.domain.payment.card import CreditProvider
 from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.domain.payment.payment import Payment
-from stoqlib.domain.person import SalesPerson, Transporter
+from stoqlib.domain.person import SalesPerson, Transporter, Person, Client
 from stoqlib.domain.sale import Sale, SaleComment
 from stoqlib.enums import CreatePaymentStatus, ChangeSalespersonPolicy
 from stoqlib.exceptions import SellError, StoqlibError, PaymentMethodError
@@ -59,7 +57,8 @@ from stoqlib.gui.editors.fiscaleditor import CfopEditor
 from stoqlib.gui.editors.noteeditor import NoteEditor
 from stoqlib.gui.editors.personeditor import ClientEditor, TransporterEditor
 from stoqlib.gui.events import (ConfirmSaleWizardFinishEvent,
-                                ClientSaleValidationEvent)
+                                StockOperationPersonValidationEvent,
+                                InvoiceSetupEvent)
 from stoqlib.gui.interfaces import IDomainSlaveMapper
 from stoqlib.gui.slaves.cashchangeslave import CashChangeSlave
 from stoqlib.gui.slaves.paymentmethodslave import SelectPaymentMethodSlave
@@ -236,9 +235,8 @@ class BaseMethodSelectionStep(object):
         method = PaymentMethod.get_by_name(self.store, method_name)
         description = _(u'%s returned for sale %s') % (method.description,
                                                        self.model.identifier)
-        payment = method.create_payment(Payment.TYPE_OUT,
-                                        payment_group=self.model.group,
-                                        branch=self.model.branch,
+        payment = method.create_payment(self.model.branch, api.get_current_station(self.store),
+                                        Payment.TYPE_OUT, payment_group=self.model.group,
                                         value=(payments_value - sale_total),
                                         description=description)
         payment.set_pending()
@@ -262,8 +260,9 @@ class BaseMethodSelectionStep(object):
         money_method = PaymentMethod.get_by_name(self.store, u'money')
         total = total or self.wizard.get_total_to_pay()
         try:
-            return money_method.create_payment(Payment.TYPE_IN, self.model.group,
-                                               self.model.branch, total)
+            return money_method.create_payment(self.model.branch,
+                                               api.get_current_station(self.store), Payment.TYPE_IN,
+                                               self.model.group, total)
         except PaymentMethodError as err:
             warning(str(err))
 
@@ -424,8 +423,7 @@ class ConfirmSaleBatchStep(WizardEditorStep):
         marker('running SalesPersonStep')
         self._update_sale_items()
         step = SalesPersonStep(self.wizard, self.store, self.model,
-                               self.wizard.payment_group,
-                               self.wizard.invoice_model)
+                               self.wizard.payment_group)
         marker('finished creating SalesPersonStep')
         return step
 
@@ -483,7 +481,7 @@ class ConfirmSaleBatchStep(WizardEditorStep):
     #
 
     def _on_sale_items__cell_data_func(self, column, renderer, obj, text):
-        if not isinstance(renderer, gtk.CellRendererText):
+        if not isinstance(renderer, Gtk.CellRendererText):
             return text
 
         # Set red to provide a visual indication for the user that
@@ -510,17 +508,13 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
     """
     gladefile = 'SalesPersonStep'
     model_type = Sale
-    proxy_widgets = ('salesperson',
+    proxy_widgets = ['salesperson',
                      'client',
                      'transporter',
-                     'cost_center')
-
-    invoice_widgets = ('invoice_number', )
+                     'cost_center']
     cfop_widgets = ('cfop', )
 
-    def __init__(self, wizard, store, model, payment_group,
-                 invoice_model, previous=None):
-        self.invoice_model = invoice_model
+    def __init__(self, wizard, store, model, payment_group, previous=None):
         self.pm_slave = None
         self.payment_group = payment_group
 
@@ -547,7 +541,29 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
         self.cash_change_slave.update_total_sale_amount(to_pay)
         self.total_lbl.update(to_pay)
 
+    def _update_sale_client(self):
+        """Update the sale client based on the informed document
+
+        If the sale does not have a client yet, and the current_document (informed by
+        the ecf plugin) is set, and a person with the given document exists, that client
+        will be associated with this sale.
+        """
+        if self.model.client or not self.wizard._current_document:
+            return
+
+        person = Person.get_by_document(self.store,
+                                        str(self.wizard._current_document))
+        if not person:
+            return
+
+        if person.client:
+            self.model.client = person.client
+        else:
+            self.model.client = Client(store=self.store, person=person)
+
     def _setup_clients_widget(self):
+        self._update_sale_client()
+
         marker('Filling clients')
         self.client_gadget = ClientEntryGadget(
             entry=self.client,
@@ -557,10 +573,12 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
             run_editor=self._run_client_editor)
         marker('Filled clients')
 
-    def _run_client_editor(self, store, model, description=None):
+    def _run_client_editor(self, store, model, description=None,
+                           visual_mode=False):
         return run_person_role_dialog(ClientEditor, self.wizard, store, model,
                                       document=self.wizard._current_document,
-                                      description=description)
+                                      description=description,
+                                      visual_mode=visual_mode)
 
     def _fill_transporter_combo(self):
         marker('Filling transporters')
@@ -625,7 +643,8 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
             self.client.set_property('mandatory', mandatory_client)
 
         marker('Filling sales persons')
-        salespersons = SalesPerson.get_active_salespersons(self.store)
+        salespersons = SalesPerson.get_active_salespersons(self.store,
+                                                           api.get_current_branch(self.store))
         self.salesperson.prefill(salespersons)
         marker('Finished filling sales persons')
 
@@ -652,19 +671,6 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
             self.cfop.hide()
             self.create_cfop.hide()
 
-        # the maximum number allowed for an invoice is 999999999.
-        self.invoice_number.set_adjustment(
-            gtk.Adjustment(lower=1, upper=999999999, step_incr=1))
-
-        if not self.model.invoice_number:
-            new_invoice_number = Invoice.get_next_invoice_number(self.store)
-            self.invoice_model.invoice_number = new_invoice_number
-        else:
-            new_invoice_number = self.model.invoice_number
-            self.invoice_model.invoice_number = new_invoice_number
-            self.invoice_number.set_sensitive(False)
-
-        self.invoice_model.original_invoice = new_invoice_number
         marker('Finished setting up widgets')
 
     def _refresh_next(self, validation_value):
@@ -691,6 +697,15 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
             self.cash_change_slave.received_value.grab_focus()
 
         self.force_validation()
+        self.data_table.set_focus_chain([
+            self.salesperson,
+            self.invoice_number_holder,
+            self.client_gadget.box,
+            self.transporter,
+            self.create_transporter,
+            self.cfop,
+            self.create_cfop,
+        ])
         marker('Leaving post_init')
 
     def setup_slaves(self):
@@ -722,10 +737,7 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
     def setup_proxies(self):
         marker('Setting up proxies')
         self.setup_widgets()
-        self.proxy = self.add_proxy(self.model,
-                                    SalesPersonStep.proxy_widgets)
-        self.invoice_proxy = self.add_proxy(self.invoice_model,
-                                            self.invoice_widgets)
+        self.proxy = self.add_proxy(self.model, self.proxy_widgets)
         if self.model.client:
             self.client_gadget.set_editable(False)
         if sysparam.get_bool('ASK_SALES_CFOP'):
@@ -735,6 +747,18 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
     #
     # Callbacks
     #
+
+    def key_F5(self):
+        self.salesperson.grab_focus()
+
+    def key_F6(self):
+        self.client.grab_focus()
+
+    def key_F7(self):
+        self.transporter.grab_focus()
+
+    def key_F8(self):
+        self.cash_change_slave.received_value.grab_focus()
 
     def on_client__content_changed(self, entry):
         # This gets called before setup_slaves, but we must wait until slaves
@@ -764,10 +788,7 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
         except SellError as e:
             return ValidationError(e)
 
-        try:
-            ClientSaleValidationEvent.emit(client.person)
-        except Exception as e:
-            return ValidationError(e)
+        return StockOperationPersonValidationEvent.emit(client.person, type(client))
 
     def on_create_transporter__clicked(self, button):
         store = api.new_store()
@@ -816,6 +837,10 @@ class SalesPersonStep(BaseMethodSelectionStep, WizardEditorStep):
         if invoice.check_unique_invoice_number_by_branch(value, branch):
             return ValidationError(_(u'Invoice number already used.'))
 
+    def on_transporter__validate(self, widget, transporter):
+        return StockOperationPersonValidationEvent.emit(transporter.person,
+                                                        type(transporter))
+
 
 #
 # Wizards for sales
@@ -825,7 +850,7 @@ class ConfirmSaleWizard(BaseWizard):
     """A wizard used when confirming a sale order. It means generate
     payments, fiscal data and update stock
     """
-    size = (600, 400)
+    size = (700, 400)
     title = _("Sale Checkout")
     help_section = 'sale-confirm'
 
@@ -852,18 +877,12 @@ class ConfirmSaleWizard(BaseWizard):
         self._current_document = current_document
         self.model = model
 
-        # invoice_model is a Settable so avoid bug 4218, where more
-        # than one checkout may try to use the same invoice number.
-        self.invoice_model = Settable(invoice_number=None,
-                                      original_invoice=None)
-
         adjusted_batches = model.check_and_adjust_batches()
         if not adjusted_batches:
             first_step = ConfirmSaleBatchStep(store, self, model, None)
         else:
             marker('running SalesPersonStep')
-            first_step = SalesPersonStep(self, store, model, self.payment_group,
-                                         self.invoice_model)
+            first_step = SalesPersonStep(self, store, model, self.payment_group)
             marker('finished creating SalesPersonStep')
 
         BaseWizard.__init__(self, store, first_step, model)
@@ -874,7 +893,7 @@ class ConfirmSaleWizard(BaseWizard):
             # but cannot confirm and are thrown back to the main
             # POS interface
             if self.model.can_order():
-                self.model.order()
+                self.model.order(api.get_current_user(self.store))
 
         marker('leaving ConfirmSaleWizard.__init__')
 
@@ -883,10 +902,6 @@ class ConfirmSaleWizard(BaseWizard):
             raise StoqlibError("Invalid datatype for model, it should be "
                                "of type Sale, got %s instead" % model)
         self.payment_group = model.group
-
-    def _invoice_changed(self):
-        return (self.invoice_model.invoice_number !=
-                self.invoice_model.original_invoice)
 
     def get_subtotal(self):
         """Fetch the sale subtotal without querying the database.
@@ -924,7 +939,7 @@ class ConfirmSaleWizard(BaseWizard):
         return self.get_total_to_pay() > 0
 
     def print_sale_details(self):
-        if yesno(_("Do you want to print this sale's details?"), gtk.RESPONSE_YES,
+        if yesno(_("Do you want to print this sale's details?"), Gtk.ResponseType.YES,
                  _("Print Details"), _("Don't Print")):
             print_report(SaleOrderReport, self.model)
 
@@ -937,40 +952,33 @@ class ConfirmSaleWizard(BaseWizard):
             run_dialog(MissingItemsDialog, self, self.model, missing)
             return False
 
-        self.retval = True
-        invoice_number = self.invoice_model.invoice_number
-
-        # Workaround for bug 4218: If the invoice is was already used by
-        # another store (another cashier), try using the next one
-        # available, or show a warning if the number was manually set.
-        while True:
-            try:
-                self.store.savepoint('before_set_invoice_number')
-                self.model.invoice_number = invoice_number
-                # We need to flush the database here, or a possible collision
-                # of invoice_number will only be detected later on, when the
-                # execution flow is not in the try-except anymore.
-                self.store.flush()
-            except IntegrityError:
-                self.store.rollback_to_savepoint('before_set_invoice_number')
-                if self._invoice_changed():
-                    warning(_(u"The invoice number %s is already used. "
-                              "Confirm the sale again to chose another one.") %
-                            invoice_number)
-                    self.retval = False
-                    break
-                else:
-                    invoice_number += 1
-            else:
-                break
-
-        self.close()
+        for item in self.model.get_items():
+            sellable = item.sellable
+            if not sellable.is_available(self.model.branch):
+                self.close()
+                warning(_("%s is not available for sale. Try making it "
+                          "available first or change it on sale and then try again.") % (
+                    sellable.get_description()))
+                return False
 
         group = self.model.group
         # FIXME: This is set too late on Sale.confirm(). If PaymentGroup don't
         #        have a payer, we won't be able to print bills/booklets.
         group.payer = self.model.client and self.model.client.person
 
+        invoice_ok = InvoiceSetupEvent.emit()
+        if invoice_ok is False:
+            # If there is any problem with the invoice, the event will display an error
+            # message and the dialog is kept open so the user can fix whatever is wrong.
+            # If this is the second time the user is trying to confirm, an
+            # error message is being displayed saying that the payment can't be
+            # created twice, so we clear the payments created to avoid the message
+            # TODO: Create the payments on the wizard finish event (here)
+            self.payment_group.clear_unused()
+            return
+
+        self.retval = True
+        self.close()
         retval = ConfirmSaleWizardFinishEvent.emit(self.model)
         if retval is not None:
             self.retval = retval

@@ -27,8 +27,7 @@ import decimal
 from datetime import date
 import logging
 
-import pango
-import gtk
+from gi.repository import Gtk, Pango
 from kiwi.currency import currency
 from kiwi.datatypes import converter
 from kiwi.ui.objectlist import Column
@@ -125,36 +124,29 @@ class TillApp(ShellApp):
             ("SearchClosedTill", None, _("Closed till search..."),
              group.get('search_closed_till'),
              _("Search for all closed tills")),
-            ("Confirm", gtk.STOCK_APPLY, _("Confirm..."),
+            ("Confirm", Gtk.STOCK_APPLY, _("Confirm..."),
              group.get('confirm_sale'),
              _("Confirm the selected sale, decreasing stock and making it "
                "possible to receive it's payments")),
+
             # FIXME: This button should change the label to "Cancel" when the
             # selected sale can be cancelled and not returned, since that's
             # what is going to happen when the user click in it
-            ("Return", gtk.STOCK_CANCEL, _("Return..."),
+            ("Return", Gtk.STOCK_CANCEL, _("Return..."),
              group.get('return_sale'),
              _("Return the selected sale, returning stock and the client's "
                "payments")),
-            ("Details", gtk.STOCK_INFO, _("Details..."),
+            ("Details", Gtk.STOCK_INFO, _("Details..."),
              group.get('sale_details'),
              _("Show details of the selected sale")),
+            ("Payment", Gtk.STOCK_INFO, _("Edit payments..."), None,
+             _("Edit payments of the selected sale")),
         ]
 
-        self.till_ui = self.add_ui_actions('', actions,
-                                           filename="till.xml")
+        self.till_ui = self.add_ui_actions(actions)
         self.set_help_section(_("Till help"), 'app-till')
 
-        self.Confirm.set_short_label(_('Confirm'))
-        self.Return.set_short_label(_('Return'))
-        self.Details.set_short_label(_('Details'))
-        self.Confirm.props.is_important = True
-        self.Return.props.is_important = True
-        self.Details.props.is_important = True
-
     def create_ui(self):
-        self.popup = self.uimanager.get_widget('/TillSelection')
-
         self.current_branch = api.get_current_branch(self.store)
         # Groups
         self.main_vbox.set_focus_chain([self.app_vbox])
@@ -165,36 +157,41 @@ class TillApp(ShellApp):
         self._setup_printer()
         self._setup_widgets()
         self.status_link.set_use_markup(True)
-        self.status_link.set_justify(gtk.JUSTIFY_CENTER)
+        self.status_link.set_justify(Gtk.Justification.CENTER)
 
-    def get_title(self):
-        return _('[%s] - Till') % (
-            api.get_current_branch(self.store).get_description(), )
+    def get_domain_options(self):
+        options = [
+            ('fa-info-circle-symbolic', _('Details'), 'till.Details', True),
+            ('fa-check-symbolic', _('Confirm'), 'till.Confirm', True),
+            ('fa-undo-symbolic', _('Return'), 'till.Return', True),
+            ('', _('Payment'), 'till.Payment', False),
+        ]
+
+        return options
 
     def activate(self, refresh=True):
+        self.window.add_print_items()
+        self.window.add_export_items()
+        self.window.add_extra_items([self.TillOpen, self.TillVerify, self.TillClose])
         self.window.add_new_items([self.TillAddCash,
-                                   self.TillRemoveCash])
-        self.window.add_search_items([self.SearchFiscalTillOperations,
-                                      self.SearchClient,
-                                      self.SearchSale])
-        self.window.Print.set_tooltip(_("Print a report of these sales"))
+                                   self.TillRemoveCash, self.PaymentReceive])
+        self.window.add_search_items([
+            self.SearchClient,
+            self.SearchSale,
+            self.SearchSoldItemsByBranch,
+            self.SearchCardPayment,
+            # Separator
+            self.SearchClosedTill,
+            self.SearchTillHistory,
+            self.SearchFiscalTillOperations,
+            self.TillDailyMovement,
+        ])
         if refresh:
             self.refresh()
         self._printer.run_initial_checks()
         self.check_open_inventory()
 
         self.search.focus_search_entry()
-
-    def deactivate(self):
-        self.uimanager.remove_ui(self.till_ui)
-
-    def new_activate(self):
-        if not self.TillAddCash.get_sensitive():
-            return
-        self._run_add_cash_dialog()
-
-    def search_activate(self):
-        self._run_search_dialog(TillFiscalOperationsSearch)
 
     #
     # ShellApp
@@ -206,30 +203,44 @@ class TillApp(ShellApp):
     def create_filters(self):
         self.search.set_query(self._query_executer)
         self.set_text_field_columns(['client_name', 'salesperson_name',
-                                     'identifier_str'])
+                                     'identifier_str', 'token_code',
+                                     'token_name'])
         self.status_filter = ComboSearchFilter(_(u"Show orders"),
                                                self._get_status_values())
         self.add_filter(self.status_filter, position=SearchFilterPosition.TOP,
                         columns=['status'])
 
     def get_columns(self):
-        return [IdentifierColumn('identifier', title=_('Sale #'),
-                                 sorted=True),
-                Column('status_name', title=_(u'Status'), data_type=str,
-                       visible=True),
-                SearchColumn('open_date', title=_('Date Started'), width=110,
-                             data_type=date, justify=gtk.JUSTIFY_RIGHT),
-                SearchColumn('client_name', title=_('Client'),
-                             data_type=str, expand=True,
-                             ellipsize=pango.ELLIPSIZE_END),
-                SearchColumn('salesperson_name', title=_('Salesperson'),
-                             data_type=str, width=180,
-                             ellipsize=pango.ELLIPSIZE_END),
-                SearchColumn('total_quantity', title=_('Quantity'),
-                             data_type=decimal.Decimal, width=100,
-                             format_func=format_quantity),
-                SearchColumn('total', title=_('Total'), data_type=currency,
-                             width=100)]
+        columns = [
+            IdentifierColumn('identifier', title=_('Sale #'),
+                             sorted=True),
+            Column('status_name', title=_(u'Status'), data_type=str,
+                   visible=True),
+            SearchColumn('open_date', title=_('Date Started'), width=110,
+                         data_type=date, justify=Gtk.Justification.RIGHT),
+        ]
+
+        if api.sysparam.get_bool('USE_SALE_TOKEN'):
+            columns.append(Column('token_str', title=_(u'Sale token'),
+                                  data_type=str, visible=True))
+
+        columns.extend([
+            SearchColumn('client_name', title=_('Client'),
+                         data_type=str, expand=True,
+                         ellipsize=Pango.EllipsizeMode.END),
+            SearchColumn('salesperson_name', title=_('Salesperson'),
+                         data_type=str, width=180,
+                         ellipsize=Pango.EllipsizeMode.END),
+            SearchColumn('total_quantity', title=_('Quantity'),
+                         data_type=decimal.Decimal, width=100,
+                         format_func=format_quantity),
+            SearchColumn('total', title=_('Total'), data_type=currency,
+                         width=100),
+            SearchColumn('missing_payment', title=_('Missing Payment'), data_type=currency,
+                         width=150),
+        ])
+
+        return columns
 
     #
     # Private
@@ -270,7 +281,7 @@ class TillApp(ShellApp):
 
         # Change the sale status to ORDERED
         if retval and sale.can_order():
-            sale.order()
+            sale.order(api.get_current_user(store))
 
         if store.confirm(retval):
             self.refresh()
@@ -287,7 +298,7 @@ class TillApp(ShellApp):
         if (sale.status == Sale.STATUS_QUOTE and
             expire_date and expire_date.date() < date.today() and
             not yesno(_("This quote has expired. Confirm it anyway?"),
-                      gtk.RESPONSE_YES,
+                      Gtk.ResponseType.YES,
                       _("Confirm quote"), _("Don't confirm"))):
             store.close()
             return
@@ -305,12 +316,20 @@ class TillApp(ShellApp):
         if not coupon:
             store.close()
             return
-        subtotal = self._add_sale_items(sale, coupon)
+        subtotal = coupon.add_sale_items(sale)
         try:
             if coupon.confirm(sale, store, subtotal=subtotal):
                 workorders = WorkOrder.find_by_sale(store, sale)
                 for order in workorders:
-                    order.close()
+                    # at this poing, orders could be either FINISHED or
+                    # DELIVERED (closed). If it is finished, we should close it
+                    # (mark delivered) ...
+                    if order.can_close():
+                        order.close()
+                    else:
+                        # ... but if it didn't need closing, it should already
+                        # be delivered.
+                        assert order.is_finished()
                 store.commit()
                 self.refresh()
             else:
@@ -330,19 +349,10 @@ class TillApp(ShellApp):
                 if not yesno(_("Failed to open the fiscal coupon.\n"
                                "Until it is opened, it's not possible to "
                                "confirm the sale. Do you want to try again?"),
-                             gtk.RESPONSE_YES, _("Try again"), _("Cancel coupon")):
+                             Gtk.ResponseType.YES, _("Try again"), _("Cancel coupon")):
                     return None
 
         return coupon
-
-    def _add_sale_items(self, sale, coupon):
-        subtotal = 0
-        for sale_item in sale.get_items(with_children=False):
-            coupon.add_item(sale_item)
-            for child in sale_item.children_items:
-                coupon.add_item(child)
-            subtotal += sale_item.price * sale_item.quantity
-        return subtotal
 
     def _update_total(self):
         balance = currency(self._get_till_balance())
@@ -363,7 +373,7 @@ class TillApp(ShellApp):
     def _get_till_balance(self):
         """Returns the balance of till operations"""
         try:
-            till = Till.get_current(self.store)
+            till = Till.get_current(self.store, api.get_current_station(self.store))
         except TillError:
             till = None
 
@@ -398,13 +408,16 @@ class TillApp(ShellApp):
             # when confirming sales in till, we also might want to cancel
             # sales
             can_return = (sale_view.can_return() or
-                          sale_view.can_cancel())
+                          sale_view.can_cancel(api.get_current_user(self.store)))
+            can_edit_payment = sale_view.sale.can_edit()
         else:
+            can_edit_payment = False
             can_confirm = can_return = False
 
         self.set_sensitive([self.Details], bool(sale_view))
         self.set_sensitive([self.Confirm], can_confirm)
         self.set_sensitive([self.Return], can_return)
+        self.set_sensitive([self.Payment], can_edit_payment)
 
     def _check_selected(self):
         sale_view = self.results.get_selected()
@@ -455,7 +468,7 @@ class TillApp(ShellApp):
         # We dont have an ecf. Disable till related operations
         widgets = [self.TillOpen, self.TillClose, self.TillVerify, self.TillAddCash,
                    self.TillRemoveCash, self.SearchTillHistory, self.app_vbox,
-                   self.Confirm, self.Return, self.Details]
+                   self.Confirm, self.Return, self.Details, self.Payment]
         self.set_sensitive(widgets, has_ecf)
         text = _(u"Till operations requires a connected fiscal printer")
         self.small_status.set_text(text)
@@ -501,7 +514,7 @@ class TillApp(ShellApp):
             self.search_holder.show()
             self.footer_hbox.show()
             self.large_status.hide()
-            till = Till.get_current(self.store)
+            till = Till.get_current(self.store, api.get_current_station(self.store))
             text = _(u"Till opened on %s") % till.opening_date.strftime('%x')
             self.small_status.set_text(text)
         self._update_toolbar_buttons()
@@ -515,11 +528,12 @@ class TillApp(ShellApp):
 
     def on_Confirm__activate(self, action):
         selected = self.results.get_selected()
+        branch = api.get_current_branch(self.store)
 
         # If there are unfinished workorders associated with the sale, we
         # cannot print the coupon yet. Instead lets just create the payments.
         workorders = WorkOrder.find_by_sale(self.store, selected.sale)
-        if not all(wo.can_close() for wo in workorders):
+        if not all(wo.can_close(branch) or wo.is_finished() for wo in workorders):
             self._create_sale_payments(selected)
         else:
             self._confirm_order(selected)
@@ -534,11 +548,11 @@ class TillApp(ShellApp):
     def on_results__has_rows(self, results, has_rows):
         self._update_total()
 
-    def on_results__right_click(self, results, result, event):
-        self.popup.popup(None, None, None, event.button, event.time)
-
     def on_Details__activate(self, action):
         self._run_details_dialog()
+
+    def on_Payment__activate(self, action):
+        self._create_sale_payments(self.results.get_selected())
 
     def on_Return__activate(self, action):
         self._return_sale()

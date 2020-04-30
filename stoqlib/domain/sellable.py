@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
 # vi:si:et:sw=4:sts=4:ts=4
 
-##
-## Copyright (C) 2005-2013 Async Open Source <http://www.async.com.br>
-## All rights reserved
-##
-## This program is free software; you can redistribute it and/or modify
-## it under the terms of the GNU Lesser General Public License as published by
-## the Free Software Foundation; either version 2 of the License, or
-## (at your option) any later version.
-##
-## This program is distributed in the hope that it will be useful,
-## but WITHOUT ANY WARRANTY; without even the implied warranty of
-## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-## GNU Lesser General Public License for more details.
-##
-## You should have received a copy of the GNU Lesser General Public License
-## along with this program; if not, write to the Free Software
-## Foundation, Inc., or visit: http://www.gnu.org/.
-##
-## Author(s): Stoq Team <stoq-devel@async.com.br>
-##
+#
+# Copyright (C) 2005-2013 Async Open Source <http://www.async.com.br>
+# All rights reserved
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., or visit: http://www.gnu.org/.
+#
+# Author(s): Stoq Team <stoq-devel@async.com.br>
+#
 """
 Domain objects related to something that can be sold, such a |product|
 or a |service|.
@@ -35,6 +35,7 @@ or a |service|.
 
 # pylint: enable=E1101
 
+import collections
 from decimal import Decimal
 
 from kiwi.currency import currency
@@ -51,6 +52,7 @@ from stoqlib.domain.events import (CategoryCreateEvent, CategoryEditEvent,
                                    SellableCheckTaxesEvent)
 from stoqlib.domain.interfaces import IDescribable
 from stoqlib.domain.image import Image
+from stoqlib.domain.overrides import SellableBranchOverride
 from stoqlib.exceptions import SellableError, TaxError
 from stoqlib.lib.defaults import quantize
 from stoqlib.lib.dateutils import localnow
@@ -132,12 +134,12 @@ class SellableTaxConstant(Domain):
     #: the percentage value of the tax
     tax_value = PercentCol(default=None)
 
-    _mapping = {
-        int(TaxType.NONE): u'TAX_NONE',                      # Não tributado - ICMS
-        int(TaxType.EXEMPTION): u'TAX_EXEMPTION',            # Isento - ICMS
-        int(TaxType.SUBSTITUTION): u'TAX_SUBSTITUTION',      # Substituição tributária - ICMS
-        int(TaxType.SERVICE): u'TAX_SERVICE',                # ISS
-    }
+    _mapping = collections.OrderedDict([
+        (int(TaxType.NONE), u'TAX_NONE'),                      # Não tributado - ICMS
+        (int(TaxType.EXEMPTION), u'TAX_EXEMPTION'),            # Isento - ICMS
+        (int(TaxType.SUBSTITUTION), u'TAX_SUBSTITUTION'),      # Substituição tributária - ICMS
+        (int(TaxType.SERVICE), u'TAX_SERVICE'),                # ISS
+    ])
 
     def get_value(self):
         """
@@ -181,6 +183,13 @@ class SellableCategory(Domain):
 
     #: The category description
     description = UnicodeCol()
+
+    #: A color that will be used in reports and interface for this category
+    color = UnicodeCol()
+
+    #: The sort order of this category. Usefull when you need a category to appear before all other
+    #: categories
+    sort_order = IntCol(default=0)
 
     #: Define the suggested markup when calculating the sellable's price.
     suggested_markup = PercentCol(default=0)
@@ -390,8 +399,10 @@ class Sellable(Domain):
     #: but it should not be possible to create a |purchase|/|sale| with it
     STATUS_CLOSED = u'closed'
 
-    statuses = {STATUS_AVAILABLE: _(u'Available'),
-                STATUS_CLOSED: _(u'Closed')}
+    statuses = collections.OrderedDict([
+        (STATUS_AVAILABLE, _(u'Available')),
+        (STATUS_CLOSED, _(u'Closed')),
+    ])
 
     #: a code used internally by the shop to reference this sellable.
     #: It is usually not printed and displayed to |clients|, barcode is for that.
@@ -405,23 +416,40 @@ class Sellable(Domain):
     #: status the sellable is in
     status = EnumCol(allow_none=False, default=STATUS_AVAILABLE)
 
-    # FIXME: This is only used for purchase orders without suppliers,
-    #        Perhaps we should update this as we purchase the product
     #: cost of the sellable, this is not tied to a specific |supplier|,
-    #: which may have a different cost.
+    #: which may have a different cost. This can also be the production cost of
+    #: manufactured item by the company.
     cost = PriceCol(default=0)
 
     #: price of sellable, how much the |client| paid.
     base_price = PriceCol(default=0)
 
+    #: the last time the cost was updated
+    cost_last_updated = DateTimeCol(default_factory=localnow)
+
+    #: the last time the price was updated
+    price_last_updated = DateTimeCol(default_factory=localnow)
+
     #: full description of sellable
     description = UnicodeCol(default=u'')
+
+    #: short description of sellable
+    short_description = UnicodeCol(default=u'')
 
     #: maximum discount allowed
     max_discount = PercentCol(default=0)
 
     #: commission to pay after selling this sellable
     commission = PercentCol(default=0)
+
+    #: A sort order to override default alphabetic order in lists.
+    sort_order = IntCol()
+
+    #: If this is a favorite sellable
+    favorite = BoolCol()
+
+    #: Some keywords for this sellable.
+    keywords = UnicodeCol()
 
     #: notes for the sellable
     notes = UnicodeCol(default=u'')
@@ -430,11 +458,6 @@ class Sellable(Domain):
 
     #: the |sellableunit|, quantities of this sellable are in this unit.
     unit = Reference(unit_id, 'SellableUnit.id')
-
-    image_id = IdCol(default=None)
-
-    #: the |image|, a picture representing the sellable
-    image = Reference(image_id, 'Image.id')
 
     category_id = IdCol(default=None)
 
@@ -469,6 +492,12 @@ class Sellable(Domain):
 
     #: When the promotional/special price ends
     on_sale_end_date = DateTimeCol(default=None)
+
+    #: This sellable's images
+    images = ReferenceSet('id', 'Image.sellable_id')
+
+    #: specifies whether the product requires kitchen production
+    requires_kitchen_production = BoolCol(default=False)
 
     def __init__(self, store=None,
                  category=None,
@@ -509,6 +538,23 @@ class Sellable(Domain):
             cost = self.cost
         return currency(quantize(cost + (cost * (markup / currency(100)))))
 
+    def _get_from_override(self, attr, branch):
+        """Get an attribute from SellableBranchOverride
+
+        :param attr: a string with a sellable attribute name
+        :param branch: a branch
+
+        :returns: The value of an attribute from the sellable_branch_override
+        of a sellable, or the attribute from the actual sellable
+        """
+        override = SellableBranchOverride.find_by_sellable(sellable=self, branch=branch)
+        value = getattr(self, attr)
+        if override is None:
+            return value
+
+        override_value = getattr(override, attr)
+        return override_value if override_value is not None else value
+
     #
     # Properties
     #
@@ -529,6 +575,14 @@ class Sellable(Domain):
         return self.unit and self.unit.description or u""
 
     @property
+    def image(self):
+        """This sellable's main image."""
+        # FIXME: Should we use .first() here? What will happen if there are
+        # more than one image with "is_main" flag set to True? There's no way
+        # to prevent that in the database
+        return self.images.find(is_main=True).one()
+
+    @property
     def markup(self):
         """Markup, the opposite of discount, a value added
         on top of the sale. It's calculated as::
@@ -544,10 +598,7 @@ class Sellable(Domain):
 
     @property
     def price(self):
-        if self.is_on_sale():
-            return self.on_sale_price
-        else:
-            return self.base_price
+        return self.get_price()
 
     @price.setter
     def price(self, price):
@@ -564,7 +615,24 @@ class Sellable(Domain):
     #  Accessors
     #
 
-    def is_available(self):
+    def _get_table_price(self, branch):
+        table_price = sysparam.get_object(self.store, 'DEFAULT_TABLE_PRICE')
+        if branch and branch.default_client_category:
+            table_price = branch.default_client_category
+        return table_price
+
+    def get_price(self, branch=None):
+        if self.is_on_sale():
+            return self.on_sale_price
+
+        category = self._get_table_price(branch)
+        if category:
+            info = self.get_category_price_info(category)
+            if info:
+                return info.price
+        return self.base_price
+
+    def is_available(self, branch):
         """Whether the sellable is available and can be sold.
 
         :returns: ``True`` if the item can be sold, ``False`` otherwise.
@@ -572,27 +640,29 @@ class Sellable(Domain):
         # FIXME: Perhaps this should be done elsewhere. Johan 2008-09-26
         if sysparam.compare_object('DELIVERY_SERVICE', self.service):
             return True
-        return self.status == self.STATUS_AVAILABLE
 
-    def set_available(self):
+        status = self._get_from_override('status', branch)
+        return status == self.STATUS_AVAILABLE
+
+    def set_available(self, branch):
         """Mark the sellable as available
 
         Being available means that it can be ordered or sold.
 
         :raises: :exc:`ValueError`: if the sellable is already available
         """
-        if self.is_available():
+        if self.is_available(branch):
             raise ValueError('This sellable is already available')
         self.status = self.STATUS_AVAILABLE
 
-    def is_closed(self):
+    def is_closed(self, branch):
         """Whether the sellable is closed or not.
 
         :returns: ``True`` if closed, ``False`` otherwise.
         """
-        return self.status == Sellable.STATUS_CLOSED
+        return not self.is_available(branch)
 
-    def close(self):
+    def close(self, branch):
         """Mark the sellable as closed.
 
         After the sellable is closed, this will call the close method of the
@@ -600,7 +670,7 @@ class Sellable(Domain):
 
         :raises: :exc:`ValueError`: if the sellable is already closed
         """
-        if self.is_closed():
+        if self.is_closed(branch):
             raise ValueError('This sellable is already closed')
 
         assert self.can_close()
@@ -626,6 +696,7 @@ class Sellable(Domain):
         return super(Sellable, self).can_remove(
             skip=[('product', 'id'),
                   ('service', 'id'),
+                  ('image', 'sellable_id'),
                   ('client_category_price', 'sellable_id')])
 
     def can_close(self):
@@ -708,7 +779,15 @@ class Sellable(Domain):
         else:
             info = self
 
-        return max(user_discount, info.max_discount)
+        return Decimal(max(user_discount, info.max_discount))
+
+    def get_requires_kitchen_production(self, branch):
+        """Check if a sellable requires kitchen production
+
+        :param branch: branch for checking if there is a sellable_branch_override
+        :returns: Whether the sellable requires kitchen production for a given branch
+        """
+        return self._get_from_override('requires_kitchen_production', branch)
 
     def check_code_exists(self, code):
         """Check if there is another sellable with the same code.
@@ -726,7 +805,7 @@ class Sellable(Domain):
         """
         return self.check_unique_value_exists(Sellable.barcode, barcode)
 
-    def check_taxes_validity(self):
+    def check_taxes_validity(self, branch):
         """Check if icms taxes are valid.
 
         This check is done because some icms taxes (such as CSOSN 101) have
@@ -736,8 +815,8 @@ class Sellable(Domain):
 
         :raises: :exc:`TaxError` if there are any issues with the sellable taxes.
         """
-        icms_template = self.product and self.product.icms_template
-        SellableCheckTaxesEvent.emit(self)
+        icms_template = self.product and self.product.get_icms_template(branch)
+        SellableCheckTaxesEvent.emit(self, branch)
         if not icms_template:
             return
         elif not icms_template.p_cred_sn:
@@ -858,6 +937,14 @@ class Sellable(Domain):
         obj = self.product or self.service
         obj.on_update()
 
+    def on_object_changed(self, attr, old_value, value):
+        if attr == 'cost':
+            self.cost_last_updated = localnow()
+            if self.product:
+                self.product.update_product_cost(value)
+        elif attr == 'base_price':
+            self.price_last_updated = localnow()
+
     #
     # Classmethods
     #
@@ -873,6 +960,9 @@ class Sellable(Domain):
         category_prices = self.get_category_prices()
         for category_price in category_prices:
             category_price.remove()
+
+        for image in self.images:
+            self.store.remove(image)
 
         if self.product:
             self.product.remove()

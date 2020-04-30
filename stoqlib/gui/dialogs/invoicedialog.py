@@ -23,11 +23,13 @@
 ##
 ##
 
-import gtk
+from gi.repository import Gtk
 
 from kiwi.ui.objectlist import Column
 
+from stoqlib.api import api
 from stoqlib.domain.invoice import InvoiceLayout, InvoicePrinter
+from stoqlib.domain.fiscal import Invoice
 from stoqlib.domain.sale import Sale
 from stoqlib.gui.base.lists import ModelListDialog, ModelListSlave
 from stoqlib.gui.editors.baseeditor import BaseEditor
@@ -48,7 +50,7 @@ class _InvoiceLayoutListSlave(ModelListSlave):
         Column('description', _('Description'), data_type=str,
                expand=True, sorted=True),
         Column('size', _('Size'), data_type=str, width=90,
-               format_func=lambda (w, h): '%dx%d' % (w, h)),
+               format_func=lambda w_h: '%dx%d' % (w_h[0], w_h[1])),
     ]
 
     def delete_model(self, model, store):
@@ -85,7 +87,7 @@ class SaleInvoicePrinterDialog(BaseEditor):
     model_type = Sale
     model_name = _(u'Sale Invoice')
     gladefile = 'SaleInvoicePrinterDialog'
-    proxy_widgets = ('invoice_number', )
+    proxy_widgets = ['invoice_number']
     title = _(u'Sale Invoice Dialog')
     size = (250, 100)
 
@@ -95,16 +97,19 @@ class SaleInvoicePrinterDialog(BaseEditor):
         self._setup_widgets()
 
     def _setup_widgets(self):
-        self.main_dialog.ok_button.set_label(gtk.STOCK_PRINT)
+        self.main_dialog.ok_button.set_label(Gtk.STOCK_PRINT)
 
-        if self.model.invoice_number is not None:
+        if self.model.invoice.invoice_number is not None:
             self.invoice_number.set_sensitive(False)
         else:
-            last_invoice_number = Sale.get_last_invoice_number(self.store) or 0
-            self.invoice_number.update(last_invoice_number + 1)
+            # FIXME: This is for the old invoice printing infrastructure that is
+            # no longer used. Remove this code when possible
+            next_invoice_number = Invoice.get_next_invoice_number(
+                self.store, api.get_current_branch(self.store), series=1)
+            self.invoice_number.update(next_invoice_number)
 
     def setup_proxies(self):
-        self.add_proxy(self.model, SaleInvoicePrinterDialog.proxy_widgets)
+        self.add_proxy(self.model.invoice, SaleInvoicePrinterDialog.proxy_widgets)
 
     def on_confirm(self):
         invoice = SaleInvoice(self.model, self._printer.layout)

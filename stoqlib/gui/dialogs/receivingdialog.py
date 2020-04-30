@@ -25,7 +25,7 @@
 """ Classes for Receiving Order Details Dialog """
 
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column, SummaryLabel
 
@@ -38,6 +38,7 @@ from stoqlib.gui.dialogs.labeldialog import SkipLabelsEditor
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.gui.slaves.receivingslave import ReceivingInvoiceSlave
 from stoqlib.gui.utils.printing import print_labels
+from stoqlib.gui.wizards.stockdecreasewizard import StockDecreaseWizard
 
 _ = stoqlib_gettext
 
@@ -74,29 +75,30 @@ class ReceivingOrderDetailsDialog(BaseEditor):
         value_format = '<b>%s</b>'
         total_label = value_format % api.escape(_("Total:"))
         products_summary_label = SummaryLabel(klist=self.product_list,
-                                              column='total',
+                                              column='total_with_ipi',
                                               label=total_label,
                                               value_format=value_format)
 
         products_summary_label.show()
-        self.products_vbox.pack_start(products_summary_label, False)
+        self.products_vbox.pack_start(products_summary_label, False, True, 0)
 
         label = self.print_labels.get_children()[0]
         label = label.get_children()[0].get_children()[1]
         label.set_label(_(u'Print labels'))
+        self.return_btn.set_sensitive(not self.model.is_totally_returned())
 
     def _get_product_columns(self):
         return [Column("sellable.code", title=_("Code"), data_type=str,
-                       justify=gtk.JUSTIFY_RIGHT, width=130),
+                       justify=Gtk.Justification.RIGHT, width=130),
                 Column("sellable.description", title=_("Description"),
                        data_type=str, width=80, expand=True),
                 Column("quantity_unit_string", title=_("Quantity"),
                        data_type=str, width=90,
-                       justify=gtk.JUSTIFY_RIGHT),
-                Column("cost", title=_("Cost"), width=80,
+                       justify=Gtk.Justification.RIGHT),
+                Column("cost_with_ipi", title=_("Cost"), width=80,
                        format_func=get_formatted_cost, data_type=currency,
-                       justify=gtk.JUSTIFY_RIGHT),
-                Column("total", title=_("Total"), justify=gtk.JUSTIFY_RIGHT,
+                       justify=Gtk.Justification.RIGHT),
+                Column("total_with_ipi", title=_("Total"), justify=Gtk.Justification.RIGHT,
                        data_type=currency, width=100)]
 
     #
@@ -113,7 +115,11 @@ class ReceivingOrderDetailsDialog(BaseEditor):
         self.add_proxy(self.model, ['notes'])
 
     def setup_slaves(self):
-        self.invoice_slave = ReceivingInvoiceSlave(self.store, self.model,
+        if not self.model.receiving_invoice:
+            return
+
+        self.invoice_slave = ReceivingInvoiceSlave(self.store,
+                                                   self.model.receiving_invoice,
                                                    visual_mode=True)
         self.attach_slave("details_holder", self.invoice_slave)
 
@@ -121,3 +127,10 @@ class ReceivingOrderDetailsDialog(BaseEditor):
         label_data = run_dialog(SkipLabelsEditor, self, self.store)
         if label_data:
             print_labels(label_data, self.store, receiving=self.model)
+
+    def on_return_btn__clicked(self, button):
+        with api.new_store() as store:
+            receiving_order = store.fetch(self.model)
+            if run_dialog(StockDecreaseWizard, self, store,
+                          receiving_order=receiving_order):
+                self.return_btn.set_sensitive(not self.model.is_totally_returned())

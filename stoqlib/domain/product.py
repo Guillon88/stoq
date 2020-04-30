@@ -1,25 +1,25 @@
 # -*- coding: utf-8 -*-
 # vi:si:et:sw=4:sts=4:ts=4
 
-##
-## Copyright (C) 2005-2013 Async Open Source <http://www.async.com.br>
-## All rights reserved
-##
-## This program is free software; you can redistribute it and/or modify
-## it under the terms of the GNU Lesser General Public License as published by
-## the Free Software Foundation; either version 2 of the License, or
-## (at your option) any later version.
-##
-## This program is distributed in the hope that it will be useful,
-## but WITHOUT ANY WARRANTY; without even the implied warranty of
-## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-## GNU Lesser General Public License for more details.
-##
-## You should have received a copy of the GNU Lesser General Public License
-## along with this program; if not, write to the Free Software
-## Foundation, Inc., or visit: http://www.gnu.org/.
-##
-## Author(s): Stoq Team <stoq-devel@async.com.br>
+#
+# Copyright (C) 2005-2013 Async Open Source <http://www.async.com.br>
+# All rights reserved
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., or visit: http://www.gnu.org/.
+#
+# Author(s): Stoq Team <stoq-devel@async.com.br>
 
 """
 Product, a physical goods that can be purchased, stored and sold.
@@ -27,7 +27,7 @@ It's purchased by a supplier and sold to client.
 
 Imports that will be used in this doctest:
 
-    >>> from stoqlib.database.runtime import new_store, get_current_branch
+    >>> from stoqlib.database.runtime import new_store
     >>> from stoqlib.domain.product import Product, ProductStockItem, Storable
     >>> from stoqlib.domain.product import StockTransactionHistory
 
@@ -54,7 +54,8 @@ storable facet.
 The storable needs to have it's stock created, let's do so. Note that a reason
 is always required when changing the stock quantity
 
-    >>> storable.increase_stock(10, branch, StockTransactionHistory.TYPE_INITIAL, None)
+    >>> user = ExampleCreator.create(store, 'LoginUser')
+    >>> storable.increase_stock(10, branch, StockTransactionHistory.TYPE_INITIAL, None, user)
 
 A stock item should now be available for the storable:
 
@@ -71,8 +72,8 @@ The branch and storable should be set properly
 Fetch the stock item for the current branch and verify that the
 stock_items are unique:
 
-    >>> current_branch = get_current_branch(store)
-    >>> stock_item2 = storable.get_stock_item(current_branch, batch=None)
+    >>> other_branch = ExampleCreator.create(store, 'Other Branch')
+    >>> stock_item2 = storable.get_stock_item(other_branch, batch=None)
     >>> stock_item != stock_item2
     True
 
@@ -82,28 +83,36 @@ stock_items are unique:
 
 # pylint: enable=E1101
 
+import collections
 from decimal import Decimal
 
 from kiwi.currency import currency
 from storm.references import Reference, ReferenceSet
-from storm.expr import (And, Eq, LeftJoin, Alias, Sum, Coalesce, Select, Join, Cast)
+from storm.exceptions import NotOneError
+from storm.expr import (And, Eq, LeftJoin, Alias, Sum, Coalesce, Select, Join,
+                        Cast, Or, In)
 from zope.interface import implementer
 
+from stoqlib.api import api
 from stoqlib.database.expr import (Field, TransactionTimestamp,
-                                   ArrayAgg, Contains, IsContainedBy)
+                                   ArrayAgg, Contains, IsContainedBy,
+                                   SplitPart)
 from stoqlib.database.properties import (BoolCol, DateTimeCol, DecimalCol,
                                          EnumCol, IdCol, IntCol, PercentCol,
                                          PriceCol, QuantityCol, UnicodeCol)
-from stoqlib.database.runtime import get_current_user
+from stoqlib.database.runtime import autoreload_object
 from stoqlib.database.viewable import Viewable
 from stoqlib.domain.base import Domain
 from stoqlib.domain.events import (ProductCreateEvent, ProductEditEvent,
                                    ProductRemoveEvent, ProductStockUpdateEvent)
 from stoqlib.domain.interfaces import IDescribable
-from stoqlib.domain.person import Person, Branch
+from stoqlib.domain.overrides import ProductBranchOverride
+from stoqlib.domain.person import Person, Branch, LoginUser
 from stoqlib.domain.sellable import Sellable
 from stoqlib.exceptions import StockError
 from stoqlib.lib.dateutils import localnow, localtoday
+from stoqlib.lib.defaults import quantize
+from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.stringutils import next_value_for
 from stoqlib.lib.translation import stoqlib_gettext, stoqlib_ngettext
 
@@ -161,6 +170,23 @@ class ProductSupplierInfo(Domain):
     #: the product code in the supplier
     supplier_code = UnicodeCol(default=u'')
 
+    branch_id = IdCol()
+
+    #: the branch the supplier is for
+    branch = Reference(branch_id, 'Branch.id')
+
+    #
+    # Classmethods
+    #
+
+    @classmethod
+    def find_by_product_supplier(cls, store, product, supplier, branch: Branch):
+        supplier_infos = store.find(cls, And(cls.product == product,
+                                             cls.supplier == supplier,
+                                             Or(cls.branch_id == branch.id,
+                                                Eq(cls.branch_id, None))))
+        return supplier_infos.order_by(cls.branch_id).first()
+
     #
     # Auxiliary methods
     #
@@ -174,7 +200,11 @@ class ProductSupplierInfo(Domain):
             self.lead_time,
             stoqlib_ngettext(_(u"Day"), _(u"Days"), self.lead_time))
 
+    def get_branch_str(self):
+        return self.branch.get_description() if self.branch else _(u'All Branches')
 
+
+@implementer(IDescribable)
 class Product(Domain):
     """A Product is a thing that can be:
 
@@ -205,14 +235,14 @@ class Product(Domain):
     TYPE_GRID = 4
     TYPE_PACKAGE = 5
 
-    product_types = {
-        TYPE_COMMON: _("Regular product"),
-        TYPE_BATCH: _("Product with batch control"),
-        TYPE_WITHOUT_STOCK: _("Product without stock control"),
-        TYPE_CONSIGNED: _("Consigned product"),
-        TYPE_GRID: _("Grid product"),
-        TYPE_PACKAGE: _("Package product"),
-    }
+    product_types = collections.OrderedDict([
+        (TYPE_COMMON, _("Regular product")),
+        (TYPE_BATCH, _("Product with batch control")),
+        (TYPE_WITHOUT_STOCK, _("Product without stock control")),
+        (TYPE_CONSIGNED, _("Consigned product")),
+        (TYPE_GRID, _("Grid product")),
+        (TYPE_PACKAGE, _("Package product")),
+    ])
 
     #: |sellable| for this product
     sellable = Reference('id', 'Sellable.id')
@@ -281,6 +311,12 @@ class Product(Domain):
     #: Brazil specific: NFE: nomenclature comon do mercuosol
     ncm = UnicodeCol(default=None)
 
+    #: Brazil specific. NFE. Código Especificador da Substituição Tributária
+    cest = UnicodeCol(default=None)
+
+    #: Brazil specific. NFE. Código Benefício Fiscal
+    c_benef = UnicodeCol(default=None)
+
     #: NFE: see ncm
     ex_tipi = UnicodeCol(default=None)
 
@@ -291,25 +327,25 @@ class Product(Domain):
     icms_template_id = IdCol(default=None)
 
     #: the :class:`stoqlib.domain.taxes.ProductIcmsTemplate` tax for *self*
-    icms_template = Reference(icms_template_id, 'ProductIcmsTemplate.id')
+    _icms_template = Reference(icms_template_id, 'ProductIcmsTemplate.id')
 
     #: Id of IPI tax in product tax template
     ipi_template_id = IdCol(default=None)
 
     #: the :class:`stoqlib.domain.taxes.ProductIpiTemplate` tax for *self*
-    ipi_template = Reference(ipi_template_id, 'ProductIpiTemplate.id')
+    _ipi_template = Reference(ipi_template_id, 'ProductIpiTemplate.id')
 
     #: Id of PIS tax in product tax template
     pis_template_id = IdCol(default=None)
 
     #: the :class:`stoqlib.domain.taxes.ProductPisTemplate` tax for *self*
-    pis_template = Reference(pis_template_id, 'ProductPisTemplate.id')
+    _pis_template = Reference(pis_template_id, 'ProductPisTemplate.id')
 
     #: Id of COFINS tax in product tax template
     cofins_template_id = IdCol(default=None)
 
     #: the :class:`stoqlib.domain.taxes.ProductCofinsTemplate` tax for *self*
-    cofins_template = Reference(cofins_template_id, 'ProductCofinsTemplate.id')
+    _cofins_template = Reference(cofins_template_id, 'ProductCofinsTemplate.id')
 
     #: Used for composed products only
     quality_tests = ReferenceSet('id', 'ProductQualityTest.product_id')
@@ -333,8 +369,13 @@ class Product(Domain):
     #: This means this product can be bought but cannot be sold
     internal_use = BoolCol(default=False)
 
-    # Indicates if the product is a of TYPE_PACKAGE
+    #: Indicates if the product is a of TYPE_PACKAGE
     is_package = BoolCol(default=False)
+
+    #: If this is a composed product, this indicates how much the production
+    #: process yields of this product. For instance, certain recipe could yield
+    #: 2.5Kgs of some food.
+    yield_quantity = QuantityCol(default=1)
 
     def __init__(self, **kwargs):
         assert 'sellable' in kwargs
@@ -414,7 +455,76 @@ class Product(Domain):
     #  Public API
     #
 
-    def set_as_storable_product(self, quantity=0):
+    def get_description(self):
+        return self.description
+
+    def get_icms_template(self, branch: Branch):
+        """Returns the icms template that should be used for this product
+
+        :param branch: the branch that will be selling this product.
+        """
+        override = ProductBranchOverride.find_product(branch, self)
+        if override:
+            return override.icms_template or self._icms_template
+        return self._icms_template
+
+    def set_icms_template(self, value):
+        """Sets the icms template for this product"""
+        self._icms_template = value
+
+    def get_ipi_template(self, branch: Branch):
+        """Returns the ipi template that should be used for this product
+
+        :param branch: the branch that will be selling this product.
+        """
+        override = ProductBranchOverride.find_product(branch, self)
+        if override:
+            return override.ipi_template or self._ipi_template
+        return self._ipi_template
+
+    def set_ipi_template(self, value):
+        """Sets the ipi template for this product"""
+        self._ipi_template = value
+
+    def get_pis_template(self, branch: Branch):
+        """Returns the pis template that should be used for this product
+
+        :param branch: the branch that will be selling this product.
+        """
+        override = ProductBranchOverride.find_product(branch, self)
+        if override:
+            return override.pis_template or self._pis_template
+        return self._pis_template
+
+    def set_pis_template(self, value):
+        """Sets the pis template for this product"""
+        self._pis_template = value
+
+    def get_cofins_template(self, branch: Branch):
+        """Returns the cofins template that should be used for this product
+
+        :param branch: the branch that will be selling this product.
+        """
+        override = ProductBranchOverride.find_product(branch, self)
+        if override:
+            return override.cofins_template or self._cofins_template
+        return self._cofins_template
+
+    def get_cbenef(self, branch):
+        """Returns the cbnef that should be used for this product
+
+        :param branch: the branch that will be selling this product.
+        """
+        override = ProductBranchOverride.find_product(branch, self)
+        if override and override.c_benef:
+            return override.c_benef
+        return self.c_benef
+
+    def set_cofins_template(self, value):
+        """Sets the cofins template for this product"""
+        self._cofins_template = value
+
+    def set_as_storable_product(self, branch: Branch, user: LoginUser, quantity=0, cost=None):
         """ Change a product without storable to a product with stock control.
 
         :param quantity: The current product quantity in stock.
@@ -422,14 +532,13 @@ class Product(Domain):
         assert self.product_type == self.TYPE_WITHOUT_STOCK
         # FIXME: On first time, only creating a common product.
         # After, also choose between create a consigned or a product with batch control
-        from stoqlib.database.runtime import get_current_branch
-        branch = get_current_branch(store=self.store)
         storable = Storable(product=self, store=self.store)
+        self.manage_stock = True
 
         # TODO: Instead of register an initial stock, we must consider the product history.
         # Calculating the current quantity based on stock transaction history.
-        storable.register_initial_stock(quantity, branch, self.sellable.cost)
-        self.manage_stock = True
+        if quantity:
+            storable.register_initial_stock(quantity, branch, cost or self.sellable.cost, user)
 
     def has_quality_tests(self):
         return not self.quality_tests.find().is_empty()
@@ -465,7 +574,11 @@ class Product(Domain):
         production. ``True`` otherwise.
         """
         if self.is_grid:
-            return self.can_remove_children()
+            # We could call self.can_remove_children(), but that triggers *a
+            # lot* of extra queries and we cant afford that when the object has
+            # a lot of children, so only let the user remove a grid products if
+            # all its children are removed first.
+            return self.children.count() == 0
 
         if self.storable and not self.storable.can_remove():
             return False
@@ -500,7 +613,7 @@ class Product(Domain):
         """Closes the product's children
         """
         for child in self.children:
-            child.sellable.close()
+            child.sellable.close(api.get_current_branch(self.store))
 
     def get_manufacture_time(self, quantity, branch):
         """Returns the estimated time in days to manufacture a product
@@ -603,20 +716,84 @@ class Product(Domain):
         """
         return self.get_components().count() > 0
 
+    def get_component(self, sellable):
+        """Returns the ProductComponent of a given sellable
+        """
+        for component in self.get_components():
+            if component.component.sellable == sellable:
+                return component
+
     def get_production_cost(self):
-        """ Return the production cost of one unit of the product.
+        """Return the production cost of one unit of the product.
 
         :returns: the production cost
         """
         return self.sellable.cost
 
-    def is_supplied_by(self, supplier):
-        """If this product is supplied by the given |supplier|, returns the
-        object with the supplier information. Returns ``None`` otherwise
+    def update_product_cost(self, cost=None):
+        if (self.is_package and
+                sysparam.get_bool('UPDATE_PRODUCT_COST_ON_PACKAGE_UPDATE')):
+            # We can't update if the package doesn't have exactly 1 component
+            try:
+                component = self.get_components().one()
+                assert component is not None
+                parent_sellable = component.product.sellable
+                child_sellable = component.component.sellable
+                child_sellable.cost = parent_sellable.cost / component.quantity
+            except (NotOneError, AssertionError):
+                return
+        if sysparam.get_bool('UPDATE_PRODUCT_COST_ON_COMPONENT_UPDATE'):
+            self.update_production_cost(cost)
+
+    def update_production_cost(self, cost=None):
+        """Update the production cost of this product and its parents
+
+        This will update the production cost of this product, and of all the
+        products that use this as a component.
+
+        :param cost: When provided, the components cost will not be calculated.
+        """
+        # First calculate our new cost if it was not provided
+        if not cost:
+            cost = sum(c.component.sellable.cost * c.quantity
+                       for c in self.get_components())
+            cost /= self.yield_quantity
+
+        assert cost > 0
+        if self.sellable.cost != cost:
+            self.sellable.cost = cost
+
+        # Then trigger the changes up to the products that use our self as a
+        # component
+        parents = self.store.find(ProductComponent, component=self)
+        for component in parents:
+            component.product.update_production_cost()
+
+    def is_supplied_by(self, supplier, branch=None, exclude=None):
+        """Checks if this product is supplied by the given supplier in the given branch.
+
+        :param supplier: the supplier to check for
+        :param branch: the branch to be checked for the supplier
+        :param exclude: a ProductSupplierInfo to be disconsidered from the check
         """
         store = self.store
-        return store.find(ProductSupplierInfo, product=self,
-                          supplier=supplier).one() is not None
+        except_id = exclude and exclude.id
+        return store.find(ProductSupplierInfo,
+                          And(ProductSupplierInfo.product == self,
+                              ProductSupplierInfo.supplier == supplier,
+                              ProductSupplierInfo.branch == branch,
+                              ProductSupplierInfo.id != except_id)).one() is not None
+
+    def is_supplied_in_all_branches_by(self, supplier):
+        """Checks if there is a ProductSupplierInfo for each branch
+        """
+        store = self.store
+        active_branches = [branch.id for branch in Branch.get_active_branches(self.store)]
+        infos = store.find(ProductSupplierInfo,
+                           And(ProductSupplierInfo.product == self,
+                               ProductSupplierInfo.supplier == supplier,
+                               In(ProductSupplierInfo.branch_id, active_branches)))
+        return infos.count() == len(active_branches)
 
     def is_composed_by(self, product):
         """Returns if we are composed by a given product or not.
@@ -717,8 +894,8 @@ class Product(Domain):
             self.sellable.copy_sellable(target=target.sellable)
 
         props = ['manufacturer', 'brand', 'family', 'width', 'height', 'depth',
-                 'weight', 'ncm', 'ex_tipi', 'genero', 'icms_template',
-                 'ipi_template', 'pis_template', 'cofins_template']
+                 'weight', 'ncm', 'ex_tipi', 'genero', '_icms_template',
+                 '_ipi_template', '_pis_template', '_cofins_template']
         for prop in props:
             value = getattr(self, prop)
             setattr(target, prop, value)
@@ -729,6 +906,15 @@ class Product(Domain):
 
         return target
 
+    def update_sellable_price(self):
+        """Update the sellable price
+
+        Summarize the |product_component| price to set the package price
+        """
+        if not self.is_package:
+            return
+        self.sellable.price = sum(quantize(child.price * child.quantity)
+                                  for child in self.get_components())
     #
     # Domain
     #
@@ -1086,16 +1272,12 @@ class ProductStockItem(Domain):
     #: The |batch| that the storable is in.
     batch = Reference(batch_id, 'StorableBatch.id')
 
-    def update_cost(self, new_quantity, new_cost):
-        """Update the stock_item according to new quantity and cost.
-
-        :param new_quantity: The new quantity added to stock.
-        :param new_cost: The cost of one unit of the added stock.
-        """
-        total_cost = self.quantity * self.stock_cost
-        total_cost += new_quantity * new_cost
-        total_items = self.quantity + new_quantity
-        self.stock_cost = total_cost / total_items
+    @property
+    def transactions(self):
+        return self.store.find(StockTransactionHistory,
+                               storable=self.storable,
+                               branch=self.branch,
+                               batch=self.batch)
 
 
 class Storable(Domain):
@@ -1161,8 +1343,8 @@ class Storable(Domain):
     #  Public API
     #
 
-    def increase_stock(self, quantity, branch, type, object_id, unit_cost=None,
-                       batch=None):
+    def increase_stock(self, quantity, branch, type, object_id, user: LoginUser,
+                       unit_cost=None, batch=None):
         """When receiving a product, update the stock reference for this new
         item on a specific |branch|.
 
@@ -1181,34 +1363,24 @@ class Storable(Domain):
             raise ValueError(u"branch cannot be None")
 
         stock_item = self.get_stock_item(branch, batch)
-        # If the stock_item is missing create a new one
-        if stock_item is None:
-            store = self.store
-            stock_item = ProductStockItem(store=store, storable=self,
-                                          batch=batch, branch=store.fetch(branch))
+        old_quantity = stock_item.quantity if stock_item else 0
 
-        # Unit cost must be updated here as
-        # 1) we need the stock item which might not exist
-        # 2) it needs to be updated before we change the quantity of the
-        #    stock item
-        if unit_cost is not None:
-            stock_item.update_cost(quantity, unit_cost)
-
-        old_quantity = stock_item.quantity
-        stock_item.quantity += quantity
-
-        StockTransactionHistory(product_stock_item=stock_item,
-                                quantity=quantity,
-                                stock_cost=stock_item.stock_cost,
-                                responsible=get_current_user(self.store),
-                                type=type,
-                                object_id=object_id,
-                                store=self.store)
+        stock_transaction = StockTransactionHistory(
+            store=self.store,
+            storable=self,
+            branch=branch,
+            batch=batch,
+            quantity=quantity,
+            unit_cost=unit_cost,
+            responsible=user,
+            type=type,
+            object_id=object_id)
+        stock_item = stock_transaction.product_stock_item
 
         ProductStockUpdateEvent.emit(self.product, branch, old_quantity,
                                      stock_item.quantity)
 
-    def decrease_stock(self, quantity, branch, type, object_id,
+    def decrease_stock(self, quantity, branch, type, object_id, user: LoginUser,
                        cost_center=None, batch=None):
         """When receiving a product, update the stock reference for the sold item
         this on a specific |branch|. Returns the stock item that was
@@ -1235,19 +1407,19 @@ class Storable(Domain):
         stock_item = self.get_stock_item(branch, batch)
         if stock_item is None or quantity > stock_item.quantity:
             raise StockError(
-                _('Quantity to sell is greater than the available stock.'))
+                _('Quantity to decrease is greater than the available stock.'))
 
         old_quantity = stock_item.quantity
-        stock_item.quantity -= quantity
-
         stock_transaction = StockTransactionHistory(
-            product_stock_item=stock_item,
+            store=self.store,
+            storable=self,
+            branch=branch,
+            batch=batch,
             quantity=-quantity,
-            stock_cost=stock_item.stock_cost,
-            responsible=get_current_user(self.store),
+            unit_cost=stock_item.stock_cost,
+            responsible=user,
             type=type,
-            object_id=object_id,
-            store=self.store)
+            object_id=object_id)
 
         if cost_center is not None:
             cost_center.add_stock_transaction(stock_transaction)
@@ -1258,7 +1430,7 @@ class Storable(Domain):
         return stock_item
 
     def register_initial_stock(self, quantity, branch, unit_cost,
-                               batch_number=None):
+                               user: LoginUser, batch_number=None):
         """Register initial stock, by increasing the amount of this storable,
         for the given quantity and |branch|
 
@@ -1279,9 +1451,27 @@ class Storable(Domain):
         else:
             batch = None
 
-        self.increase_stock(quantity, branch,
-                            StockTransactionHistory.TYPE_INITIAL,
-                            object_id=None, unit_cost=unit_cost, batch=batch)
+        self.increase_stock(quantity, branch, StockTransactionHistory.TYPE_INITIAL, object_id=None,
+                            user=user, unit_cost=unit_cost, batch=batch)
+
+    def update_stock_cost(self, stock_cost, branch, responsible: LoginUser, batch=None):
+        """Update the stock cost
+
+        :param stock_cost: The new stock cost
+        :param branch: The branch where the stock cost will be updated
+        :param batch: The batch of the storable
+            self.is_batch is ``True``
+        """
+        StockTransactionHistory(
+            store=self.store,
+            storable=self,
+            branch=branch,
+            batch=batch,
+            quantity=0,
+            unit_cost=stock_cost,
+            responsible=responsible,
+            type=StockTransactionHistory.TYPE_UPDATE_STOCK_COST,
+            object_id=None)
 
     def get_total_balance(self):
         """Return the stock balance for the |product| in all |branches|
@@ -1417,6 +1607,11 @@ class StorableBatch(Domain):
 
         return store.find(cls, query).is_empty()
 
+    @classmethod
+    def get_max_batch_number(cls, store):
+        attr = SplitPart(cls.batch_number, u'-', 1)
+        return StorableBatch.get_max_value(store, attr, validate_attr=False)
+
     #
     #  Public API
     #
@@ -1454,6 +1649,9 @@ class StockTransactionHistory(Domain):
     #: the transaction is a return of a sale
     TYPE_RETURNED_SALE = u'returned-sale'
 
+    #: the transaction is an undo of a returned sale
+    TYPE_UNDO_RETURNED_SALE = u'undo-returned-sale'
+
     #: the transaction is the cancellation of a sale
     TYPE_CANCELED_SALE = u'cancelled-sale'
 
@@ -1465,6 +1663,9 @@ class StockTransactionHistory(Domain):
 
     #: the transaction is a loan
     TYPE_LOANED = u'loan'
+
+    #: the transaction is the cancellation of a loan
+    TYPE_CANCELLED_LOAN = u'cancelled-loan'
 
     #: the transaction is the allocation of a product to a production
     TYPE_PRODUCTION_ALLOCATED = u'production-allocated'
@@ -1478,14 +1679,22 @@ class StockTransactionHistory(Domain):
     #: the transaction is a stock decrease
     TYPE_STOCK_DECREASE = u'stock-decrease'
 
+    #: the transaction is the cancellation of a stock decrease
+    TYPE_CANCELLED_STOCK_DECREASE = u'cancelled-stock-decrease'
+
     #: the transaction is a transfer from a branch
     TYPE_TRANSFER_FROM = u'transfer-from'
 
     #: the transaction is a transfer to a branch
     TYPE_TRANSFER_TO = u'transfer-to'
 
+    TYPE_CANCELLED_TRANSFER = u'cancelled-transfer'
+
     #: the transaction is the adjustment of an inventory
     TYPE_INVENTORY_ADJUST = u'inventory-adjust'
+
+    #: the transaction is the cancellation of the adjustment of an inventory
+    TYPE_CANCELLED_INVENTORY_ADJUST = u'cancelled-inventory-adjust'
 
     #: the transaction is the production of a product that didn't enter
     #: stock right after its creation
@@ -1510,6 +1719,16 @@ class StockTransactionHistory(Domain):
     #: the transaction is a reserved product from a sale
     TYPE_SALE_RESERVED = u'sale-reserved'
 
+    #: the transaction is a reserved product from a sale
+    TYPE_SALE_RETURN_TO_STOCK = u'sale-return-to-stock'
+
+    #: the transaction is a manual adjust done on the database
+    TYPE_MANUAL_ADJUST = u'manual-adjust'
+
+    #: the transaction is an adjustment on the stock cost with no update
+    #: on the stock itself
+    TYPE_UPDATE_STOCK_COST = u'update-stock-cost'
+
     types = {TYPE_INVENTORY_ADJUST: _(u'Adjustment for inventory %s'),
              TYPE_RETURNED_LOAN: _(u'Returned from loan %s'),
              TYPE_LOANED: _(u'Loaned for loan %s'),
@@ -1520,6 +1739,7 @@ class StockTransactionHistory(Domain):
                                          u'production %s'),
              TYPE_RECEIVED_PURCHASE: _(u'Received for receiving order %s'),
              TYPE_RETURNED_SALE: _(u'Returned sale %s'),
+             TYPE_UNDO_RETURNED_SALE: _(u'Undone the returned sale %s'),
              TYPE_CANCELED_SALE: _(u'Returned from canceled sale %s'),
              TYPE_SELL: _(u'Sold in sale %s'),
              TYPE_STOCK_DECREASE: _(u'Product removal for stock decrease %s'),
@@ -1533,15 +1753,25 @@ class StockTransactionHistory(Domain):
              TYPE_WORK_ORDER_USED: _(u'Used on work order %s.'),
              TYPE_WORK_ORDER_RETURN_TO_STOCK: _(u'Returned to stock on work order %s.'),
              TYPE_SALE_RESERVED: _(u'Reserved for sale %s.'),
+             TYPE_SALE_RETURN_TO_STOCK: _(u'Reserved quantity for sale %s '
+                                          u'returned to stock.'),
+             TYPE_MANUAL_ADJUST: _(u'Quantity manually adjusted'),
+             TYPE_UPDATE_STOCK_COST: _(u'Stock cost updated with no change on the stock'),
              }
 
     #: the date and time the transaction was made
     date = DateTimeCol(default_factory=localnow)
 
-    product_stock_item_id = IdCol()
+    branch_id = IdCol(allow_none=False)
+    branch = Reference(branch_id, 'Branch.id')
 
-    #: the |productstockitem| used in the transaction
-    product_stock_item = Reference(product_stock_item_id, 'ProductStockItem.id')
+    storable_id = IdCol(allow_none=False)
+    storable = Reference(storable_id, 'Storable.id')
+
+    batch_id = IdCol()
+    batch = Reference(batch_id, 'StorableBatch.id')
+
+    unit_cost = PriceCol(default=None)
 
     #: the stock cost of the transaction on the time it was made
     stock_cost = PriceCol()
@@ -1565,14 +1795,41 @@ class StockTransactionHistory(Domain):
     def total(self):
         return currency(abs(self.stock_cost * self.quantity))
 
+    @property
+    def product_stock_item(self):
+        return self.storable.get_stock_item(self.branch, self.batch)
+
+    def __init__(self, **kwargs):
+        # In some situations, storm would create the object without passing the
+        # id of those reference objects, making the trigger fail to execute.
+        # batch is the only one that we check differently because it is
+        # not mandatory
+        if 'branch_id' not in kwargs:
+            kwargs['branch_id'] = kwargs.pop('branch').id
+        if 'storable_id' not in kwargs:
+            kwargs['storable_id'] = kwargs.pop('storable').id
+        if 'batch' in kwargs:
+            batch = kwargs.pop('batch')
+            kwargs['batch_id'] = batch and batch.id
+
+        super(StockTransactionHistory, self).__init__(**kwargs)
+
+        # Flush the store so the trigger that updates the ProductStockItem
+        # will run and reload it after
+        self.store.flush()
+        autoreload_object(self, obj_store=True)
+        autoreload_object(self.product_stock_item, obj_store=True)
+
     def get_object(self):
-        if self.type in [self.TYPE_INITIAL, self.TYPE_IMPORTED]:
+        if self.type in [self.TYPE_INITIAL, self.TYPE_IMPORTED,
+                         self.TYPE_UPDATE_STOCK_COST, self.TYPE_MANUAL_ADJUST]:
             return None
         elif self.type in [self.TYPE_SELL, self.TYPE_CANCELED_SALE,
                            self.TYPE_SALE_RESERVED]:
             from stoqlib.domain.sale import SaleItem
             return self.store.get(SaleItem, self.object_id)
-        elif self.type == self.TYPE_RETURNED_SALE:
+        elif self.type in [self.TYPE_RETURNED_SALE,
+                           self.TYPE_UNDO_RETURNED_SALE]:
             from stoqlib.domain.returnedsale import ReturnedSaleItem
             return self.store.get(ReturnedSaleItem, self.object_id)
         elif self.type == self.TYPE_PRODUCTION_PRODUCED:
@@ -1659,17 +1916,21 @@ class StockTransactionHistory(Domain):
         """ Based on the type of the transaction, returns the string
         description
         """
-        if self.type in [self.TYPE_INITIAL, self.TYPE_IMPORTED]:
+        if self.type in [self.TYPE_INITIAL, self.TYPE_IMPORTED,
+                         self.TYPE_MANUAL_ADJUST, self.TYPE_UPDATE_STOCK_COST]:
             return self.types[self.type]
 
         object_parent = self.get_object_parent()
-        number = unicode(object_parent.identifier)
+        number = str(object_parent.identifier)
 
         return self.types[self.type] % number
 
 
 class ProductComponent(Domain):
     """A |product| and it's related |component| eg other product
+
+    This maps the relationship between products, indicating what product is a component
+    of another product.
 
     See also:
     `schema <http://doc.stoq.com.br/schema/tables/product_component.html>`__
@@ -1678,11 +1939,21 @@ class ProductComponent(Domain):
     __storm_table__ = 'product_component'
 
     quantity = QuantityCol(default=Decimal(1))
+
     product_id = IdCol()
+    #: This is the main product, ie, the one that has components.
     product = Reference(product_id, 'Product.id')
+
     component_id = IdCol()
+    #: This is the product that is a component of the product above
     component = Reference(component_id, 'Product.id')
+
+    #: A design reference
     design_reference = UnicodeCol(default=u'')
+
+    #: The price to be used on |sale_item|. This is only used for package products and
+    #: indicate the price this component has in the final package
+    price = PriceCol()
 
 
 @implementer(IDescribable)
@@ -1698,10 +1969,10 @@ class ProductQualityTest(Domain):
     TYPE_BOOLEAN = u'boolean'
     TYPE_DECIMAL = u'decimal'
 
-    types = {
-        TYPE_BOOLEAN: _(u'Boolean'),
-        TYPE_DECIMAL: _(u'Decimal'),
-    }
+    types = collections.OrderedDict([
+        (TYPE_BOOLEAN, _(u'Boolean')),
+        (TYPE_DECIMAL, _(u'Decimal')),
+    ])
 
     product_id = IdCol()
     product = Reference(product_id, 'Product.id')
@@ -1736,7 +2007,7 @@ class ProductQualityTest(Domain):
         return Decimal(a), Decimal(b)
 
     def set_boolean_value(self, value):
-        self.success_value = unicode(value)
+        self.success_value = str(value)
 
     def set_range_value(self, min_value, max_value):
         self.success_value = u'%s - %s' % (min_value, max_value)

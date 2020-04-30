@@ -37,6 +37,7 @@ _ = stoqlib_gettext
 class TestUserProfile(DomainTest):
     """C{UserProfile} TestCase
     """
+
     def test_add_application_reference(self):
         profile = UserProfile(store=self.store, name=u"foo")
         assert profile.profile_settings.count() == 0
@@ -47,8 +48,8 @@ class TestUserProfile(DomainTest):
 
     def test_get_default(self):
         profile = UserProfile.get_default(self.store)
-        self.failUnless(isinstance(profile, UserProfile))
-        self.assertEquals(profile.name, _(u'Salesperson'))
+        self.assertTrue(isinstance(profile, UserProfile))
+        self.assertEqual(profile.name, _(u'Salesperson'))
 
         # Change Salesperson's profile name so get_default won't find it
         # and it will fallback to any
@@ -57,10 +58,15 @@ class TestUserProfile(DomainTest):
         self.assertTrue(isinstance(profile2, UserProfile))
         self.assertIn(profile2, self.store.find(UserProfile))
 
+    def test_get_description(self):
+        profile = UserProfile(store=self.store, name=u"profile name")
+        self.assertEqual(profile.get_description(), 'profile name')
+
 
 class TestProfileSettings(DomainTest):
     """{ProfileSettings} TestCase
     """
+
     def get_foreign_key_data(self):
         return [UserProfile(store=self.store, name=u'Manager')]
 
@@ -86,8 +92,36 @@ class TestProfileSettings(DomainTest):
         profile.add_application_reference(u'app', False)
         setting = self.store.find(ProfileSettings, user_profile=profile,
                                   app_dir_name=u'app').one()
-        self.failIf(setting.has_permission)
+        self.assertFalse(setting.has_permission)
         ProfileSettings.set_permission(self.store, profile, u'app', True)
-        self.failUnless(setting.has_permission)
+        self.assertTrue(setting.has_permission)
         ProfileSettings.set_permission(self.store, profile, u'app', False)
-        self.failIf(setting.has_permission)
+        self.assertFalse(setting.has_permission)
+
+    def test_get_permissions(self):
+        profile = UserProfile(store=self.store, name=u'boss')
+        profile.add_application_reference(u'app1', False)
+        profile.add_application_reference(u'app2', True)
+        profile.add_application_reference(u'app3', False)
+
+        self.assertEqual(profile.get_permissions(),
+                         {'app1': False,
+                          'app2': True,
+                          'app3': False,
+                          'link': False})
+
+        admin_ps = profile.add_application_reference(u'admin', False)
+        self.assertEqual(profile.get_permissions(),
+                         {'app1': False,
+                          'app2': True,
+                          'app3': False,
+                          'admin': False,
+                          'link': False})
+
+        admin_ps.has_permission = True
+        self.assertEqual(profile.get_permissions(),
+                         {'app1': False,
+                          'app2': True,
+                          'app3': False,
+                          'admin': True,
+                          'link': True})

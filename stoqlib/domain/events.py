@@ -109,6 +109,7 @@ class SellableCheckTaxesEvent(Event):
     sellable.check_tax_validity does.
 
     :param sellable: the |sellable| that will be checked
+    :param branch: the |branch| that will be checked
     """
 
 #
@@ -232,6 +233,25 @@ class SaleIsExternalEvent(Event):
     """
 
 
+class SaleConfirmedRemoteEvent(Event):
+    """Emitted after a remote |sale| was confirmed.
+
+    :param sale: The same that was confirmed
+    :param document: The client document. Can be used for fiscal information
+        in case the client wasn't specified in the sale
+    :param should_print_receipts: if sale receipts should be printed or not
+    """
+
+
+class SaleCancelCouponEvent(Event):
+    """Emitted after we cancel the sale's coupon
+
+    The coupon can be ecf or sat
+
+    :param sale: The sale we are cancelling the coupon
+    """
+
+
 class SaleItemBeforeDecreaseStockEvent(Event):
     """
     This event is emitted when a |saleitem| is about to decrease the stock
@@ -284,8 +304,24 @@ class SaleAvoidCancelEvent(Event):
     in ECF.
 
     :param sale: |sale| that will be compared.
+    :param new_status: Indicates what the new status of the sale would become.
+        This status can be Sale.STATUS_RETURNED and Sale.STATUS_CANCELLED
     :return: ``True`` if the cancellation should be avoided or
         ``False` otherwise
+    """
+
+
+#
+# Work Order events
+#
+
+@public(since="3.0.0")
+class WorkOrderStatusChangedEvent(Event):
+    """
+    This event is emitted when a |work_order| is has it's status changed
+
+    :param order: the |work_order| which had it's status changed
+    :param old_status: the old |work_order| status
     """
 
 #
@@ -372,6 +408,7 @@ class CheckECFStateEvent(Event):
 # Till events
 #
 
+# XXX: This are actually gui events
 @public(since="1.5.0")
 class TillOpenEvent(Event):
     """
@@ -388,6 +425,24 @@ class TillCloseEvent(Event):
 
     :param till: the closed |till|
     :param previous_day: if the |till| wasn't closed previously
+    """
+
+
+@public(since="3.1.0")
+class TillOpenedEvent(Event):
+    """
+    This event is emitted when a |till| is closed
+
+    :param till: the closed |till|
+    """
+
+
+@public(since="3.1.0")
+class TillClosedEvent(Event):
+    """
+    This event is emitted when a |till| is closed
+
+    :param till: the closed |till|
     """
 
 
@@ -436,3 +491,39 @@ class HasOpenCouponEvent(Event):
     """
     This event is emitted to check for opened coupon.
     """
+
+
+#
+# Stock Events
+#
+
+@public(since="1.12.0")
+class StockOperationConfirmedEvent(Event):
+    """
+    This event is emitted when a stock operation is confirmed, such as sales,
+    transfers, stock decreases, loans and sale returns
+
+    :param model: the model whose stock operation was confirmed
+    :param old_status: the old status of the model if the confirmation
+        includes a status change
+    """
+
+
+@public(since="2.0")
+class StockOperationTryFiscalCancelEvent(Event):
+    """
+    This event is emitted to try to cancel a operation with sefaz.
+
+    :param operation: the operation to be tried to cancel
+    :param reason: the reason the model is being cancelled
+    :return: ``True`` if the cancellation is successfull, `False` otherwise.
+    """
+
+
+#
+# ECF Events
+#
+
+@public(since="1.13.0")
+class ECFGetPrinterUserNumberEvent(Event):
+    """ This event is emitted to get the active ECFPrinter user number. """

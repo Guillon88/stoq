@@ -28,18 +28,11 @@ import logging
 import time
 
 from kiwi.python import namedAny
-import pango
 
 from stoqlib.database.runtime import new_store
 
 log = logging.getLogger(__name__)
 create_log = logging.getLogger('stoqlib.importer.create')
-
-# pango is not used, but we're importing it so that
-# python changes it's default encoding to utf-8,
-# we could also call sys.setdefaultencoding, but then
-# we're have to reload(sys) since it's deleted by site
-pango  # pylint: disable=W0104
 
 _available_importers = {
     'account.ofx': 'ofximporter.OFXImporter',
@@ -125,7 +118,7 @@ class Importer(object):
 
         t2 = time.time()
         log.info('%s Imported %d entries in %2.2f sec' % (
-            datetime.datetime.now().strftime('%T'), n_items,
+            datetime.datetime.now().strftime('%H:%M:%S'), n_items,
             t2 - t1))
         create_log.info('IMPORTED-ITEMS:%d' % (imported_items, ))
 

@@ -34,7 +34,7 @@ from kiwi.component import get_utility, provide_utility
 from storm import Undef
 from storm.expr import SQL, Avg
 from storm.info import get_obj_info
-from storm.store import Store, ResultSet
+from storm.store import Store, ResultSet, PENDING_REMOVE, PENDING_ADD
 from storm.tracer import trace
 
 from stoqlib.database.exceptions import InterfaceError, OperationalError
@@ -64,14 +64,20 @@ _default_store = None
 _stores = weakref.WeakSet()
 
 
-def autoreload_object(obj):
+def autoreload_object(obj, obj_store=False):
     """Autoreload object in any other existing store.
 
     This will go through every open store and see if the object is alive in the
     store. If it is, it will be marked for autoreload the next time its used.
+
+    :param obj_store: if we should also autoreload the current store
+        of the object
     """
-    for store in _stores:
-        if Store.of(obj) is store:
+    # Since _stores is a weakref, copy it to a list to avoid it changing size during iteration
+    # (specially when running threaded operations).
+    stores = list(_stores)
+    for store in stores:
+        if not obj_store and Store.of(obj) is store:
             continue
 
         alive = store._alive.get((obj.__class__, (obj.id,)))
@@ -84,7 +90,7 @@ def autoreload_object(obj):
 
 class StoqlibResultSet(ResultSet):
     # FIXME: Remove. See bug 4985
-    def __nonzero__(self):
+    def __bool__(self):
         warnings.warn("use self.is_empty()", DeprecationWarning, stacklevel=2)
         return not self.is_empty()
 
@@ -104,6 +110,8 @@ class StoqlibResultSet(ResultSet):
         self._tables = viewable.tables
         if viewable.group_by:
             self.group_by(*viewable.group_by)
+        if viewable.having:
+            self.having(viewable.having)
 
     def _load_viewable(self, values):
         """Converts the result of this result set into an instance of the
@@ -114,7 +122,7 @@ class StoqlibResultSet(ResultSet):
         instance._store = self._store
         identifiers = []
         for attr, value in zip(self._viewable.cls_attributes, values):
-            if type(value) is Identifier:
+            if isinstance(value, Identifier):
                 identifiers.append(value)
             setattr(instance, attr, value)
         branch = getattr(instance, 'branch', None)
@@ -230,7 +238,9 @@ class StoqlibStore(Store):
         """
         self._committing = False
         self._savepoints = []
-        self._pending_count = [0]
+        # When using savepoints, this stack will hold what objects were changed
+        # (created, deleted or edited) inside that savepoint.
+        self._dirties = [[]]
         self.retval = True
         self.obsolete = False
 
@@ -245,14 +255,14 @@ class StoqlibStore(Store):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is None:
-            self.committed = self.confirm(commit=self.retval)
-            self.close()
+        rv = self.retval if exc_type is None else False
+        self.committed = self.confirm(commit=rv)
+        self.close()
 
     def _set_dirty(self, obj_info):
         # Store calls _set_dirty when any object inside it gets modified.
         # We use this to count if any change happened inside the actual savepoint
-        self._pending_count[-1] += 1
+        self._dirties[-1].append((obj_info, obj_info.get("pending")))
         super(StoqlibStore, self)._set_dirty(obj_info)
 
     def find(self, cls_spec, *args, **kwargs):
@@ -332,7 +342,7 @@ class StoqlibStore(Store):
         res = self.execute(
             SQL("SELECT COUNT(relname) FROM pg_class WHERE relname = ?",
                 # FIXME: Figure out why this is not comming as unicode
-                (unicode(table_name), )))
+                (str(table_name), )))
         return res.get_one()[0]
 
     def list_references(self, column):
@@ -350,8 +360,8 @@ class StoqlibStore(Store):
           for CASCADE
         - delete: The same as update.
         """
-        table_name = unicode(column.cls.__storm_table__)
-        column_name = unicode(column.name)
+        table_name = str(column.cls.__storm_table__)
+        column_name = str(column.name)
         query = """
             SELECT DISTINCT
                 src_pg_class.relname AS srctable,
@@ -395,6 +405,8 @@ class StoqlibStore(Store):
         # mogrify is only available in psycopg2
         stmt = cursor.mogrify(query, args)
         cursor.close()
+        if isinstance(stmt, bytes):
+            stmt = stmt.decode()
         return stmt
 
     def maybe_remove(self, obj):
@@ -420,7 +432,7 @@ class StoqlibStore(Store):
         rolling back to it it will be 10 again. The same applies to a full
         rollback where this will go to 0.
         """
-        return sum(self._pending_count)
+        return sum(len(i) for i in self._dirties)
 
     @public(since="1.5.0")
     def commit(self, close=False):
@@ -443,8 +455,8 @@ class StoqlibStore(Store):
         super(StoqlibStore, self).commit()
         trace('transaction_commit', self)
 
-        self._pending_count = [0]
         self._savepoints = []
+        self._dirties = [[]]
 
         # Reload objects on all other opened stores
         for obj in touched_objs:
@@ -469,8 +481,20 @@ class StoqlibStore(Store):
         if not self._committing:
             return
 
+        # We need to block implicit flushes here since if a lot of objects are
+        # updated at once, and those objects fetch other objects from the
+        # databas during the before-commited hook, the store.get call would
+        # trigger another flush and that would end up in an maximum recursion
+        # depth error.
+        self.block_implicit_flushes()
         for obj_info in self._cache.get_cached():
+            # This is an object that was in the store, but somehow got removed from it,
+            # but not from the cache (issues related with savepoints). Only emit the
+            # event if the object is still in the store.
+            if not obj_info.get('store'):
+                continue
             obj_info.event.emit("before-commited")
+        self.unblock_implicit_flushes()
 
         # If objs got dirty when calling the hooks, flush again
         if self._dirty:
@@ -493,7 +517,7 @@ class StoqlibStore(Store):
             super(StoqlibStore, self).rollback()
             # If we rollback completely, we need to clear all savepoints
             self._savepoints = []
-            self._pending_count = [0]
+            self._dirties = [[]]
 
         # Rolling back resets the application name.
         self._setup_application_name()
@@ -529,10 +553,12 @@ class StoqlibStore(Store):
         if obj is None:
             return None
 
-        if not isinstance(obj, ORMObject):
-            raise TypeError("obj must be a ORMObject, not %r" % (obj, ))
-
-        return self.get(type(obj), obj.id)
+        if isinstance(obj, Viewable):
+            return self.find(type(obj), id=obj.id).one()
+        elif isinstance(obj, ORMObject):
+            return self.get(type(obj), obj.id)
+        else:
+            raise TypeError("obj must be a ORMObject or a Viewable, not %r" % (obj, ))
 
     def remove(self, obj):
         """Remove an objet from the store
@@ -557,7 +583,7 @@ class StoqlibStore(Store):
             raise ValueError("Invalid savepoint name: %r" % name)
         self.execute('SAVEPOINT %s' % name)
         self._savepoints.append(name)
-        self._pending_count.append(0)
+        self._dirties.append([])
 
     def rollback_to_savepoint(self, name):
         """Rollsback the store to a previous savepoint that was saved
@@ -574,8 +600,14 @@ class StoqlibStore(Store):
 
         self.execute('ROLLBACK TO SAVEPOINT %s' % name)
         for savepoint in reversed(self._savepoints[:]):
+            # Do the same thing that Store.rollback does
+            for obj_info, pending in self._dirties.pop():
+                if pending is PENDING_ADD:
+                    del obj_info["store"]
+                elif pending is PENDING_REMOVE:
+                    self._enable_lazy_resolving(obj_info)
+
             self._savepoints.remove(savepoint)
-            self._pending_count.pop()
             if savepoint == name:
                 break
 
@@ -607,6 +639,13 @@ class StoqlibStore(Store):
             self.rollback(close=False)
 
         return commit
+
+    def is_link_server(self):
+        """Checks if the station which we are running on is a POS (it could be a server)
+
+        :param store: a store
+        """
+        return self.table_exists('sync')
 
     #
     #  Private
@@ -671,7 +710,7 @@ def new_store():
     :returns: a transaction
     """
     log.debug('Creating a new transaction in %s()'
-              % sys._getframe(1).f_code.co_name)
+              % sys._getframe(2).f_code.co_name)
 
     return StoqlibStore()
 
@@ -679,8 +718,8 @@ def new_store():
 #
 # User methods
 #
-def _register_branch_station(caller_store, station_name):
-    import gtk
+def _register_branch_station(caller_store, station_name, confirm=True):
+    from gi.repository import Gtk
     from stoqlib.lib.parameters import sysparam
 
     if not sysparam.get_bool('DEMO_MODE'):
@@ -688,13 +727,13 @@ def _register_branch_station(caller_store, station_name):
                 u"server at %s.\n\n"
                 u"Do you want to register it "
                 u"(requires administrator access) ?")
-        if not yesno(fmt % (station_name,
-                            db_settings.address),
-                     gtk.RESPONSE_YES, _(u"Register computer"), _(u"Quit")):
+        if confirm and not yesno(
+                fmt % (station_name, db_settings.address),
+                Gtk.ResponseType.YES, _(u"Register computer"), _(u"Quit")):
             raise SystemExit
 
         from stoqlib.gui.utils.login import LoginHelper
-        h = LoginHelper(username="admin")
+        h = LoginHelper()
         try:
             user = h.validate_user()
         except LoginError as e:
@@ -710,7 +749,7 @@ def _register_branch_station(caller_store, station_name):
     return caller_store.fetch(station)
 
 
-def set_current_branch_station(store, station_name):
+def set_current_branch_station(store, station_name, confirm=True):
     """Registers the current station and the branch of the station
     as the current branch for the system
     :param store: a store
@@ -724,11 +763,11 @@ def set_current_branch_station(store, station_name):
     if station_name is None:
         station_name = get_hostname()
 
-    station_name = unicode(station_name)
+    station_name = str(station_name)
     from stoqlib.domain.station import BranchStation
     station = store.find(BranchStation, name=station_name).one()
     if station is None:
-        station = _register_branch_station(store, station_name)
+        station = _register_branch_station(store, station_name, confirm=confirm)
 
     if not station.is_active:
         error(_("The computer <u>%s</u> is not active in Stoq") %
@@ -768,7 +807,7 @@ def get_current_user(store):
 
 
 @public(since="1.5.0")
-def get_current_branch(store):
+def get_current_branch(store=None):
     """Fetches the current branch company.
 
     :param store: a store
@@ -777,12 +816,13 @@ def get_current_branch(store):
     """
 
     branch = get_utility(ICurrentBranch, None)
-    if branch is not None:
+    if branch is not None and store is not None:
         return store.fetch(branch)
+    return branch
 
 
 @public(since="1.5.0")
-def get_current_station(store):
+def get_current_station(store=None):
     """Fetches the current station (computer) which we are running on
 
     :param store: a store
@@ -790,5 +830,6 @@ def get_current_station(store):
     :rtype: BranchStation or ``None``
     """
     station = get_utility(ICurrentBranchStation, None)
-    if station is not None:
+    if station is not None and store is not None:
         return store.fetch(station)
+    return station

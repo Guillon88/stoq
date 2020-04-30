@@ -29,13 +29,12 @@ import logging
 import os
 import sys
 
-import glib
+from gi.repository import GLib, Gtk
 
 # FIXME: We can import whatever we want here, but don't import anything
 #        significant, it's good to maintain lazy loaded things during startup
 from stoqlib.exceptions import StoqlibError
 from stoqlib.lib.translation import stoqlib_gettext as _
-from twisted.internet.defer import inlineCallbacks, succeed
 
 log = logging.getLogger(__name__)
 _shell = None
@@ -100,14 +99,14 @@ class ShellDatabaseConnection(object):
         if not os.path.exists(filename):
             return
 
-        data = open(filename).read()
-        return binascii.a2b_base64(data)
+        with open(filename, 'rb') as f:
+            return binascii.a2b_base64(f.read()).decode()
 
     def _try_connect(self):
         from stoqlib.lib.message import error
         try:
-            store_dsn = self._config.get_settings().get_store_dsn()
-        except:
+            store_uri = self._config.get_settings().get_store_uri()
+        except Exception:
             type, value, trace = sys.exc_info()
             error(_("Could not open the database config file"),
                   _("Invalid config file settings, got error '%s', "
@@ -132,26 +131,25 @@ class ShellDatabaseConnection(object):
         except (StoqlibError, PostgreSQLError) as e:
             log.debug('Connection failed.')
             error(_('Could not connect to the database'),
-                  'error=%s uri=%s' % (str(e), store_dsn))
+                  'error=%s uri=%s' % (str(e), store_uri))
         except DatabaseError:
             log.debug('Connection failed. Tring to setup .pgpass')
             # This is probably a missing password configuration. Setup the
             # pgpass file and try again.
-            password = self._get_password()
-            if not password:
-                # There is no password stored in data file. Abort
-                raise
-
-            from stoqlib.database.settings import db_settings
-            write_pg_pass(db_settings.dbname, db_settings.address,
-                          db_settings.port, db_settings.username, password)
-            # Now that there is a pg_pass file, try to connect again
             try:
+                password = self._get_password()
+                if not password:
+                    # There is no password stored in data file. Abort
+                    raise
+                from stoqlib.database.settings import db_settings
+                write_pg_pass(db_settings.dbname, db_settings.address,
+                              db_settings.port, db_settings.username, password)
+                # Now that there is a pg_pass file, try to connect again
                 get_default_store()
             except DatabaseError as e:
                 log.debug('Connection failed again.')
                 error(_('Could not connect to the database'),
-                      'error=%s uri=%s' % (str(e), store_dsn))
+                      'error=%s uri=%s' % (str(e), store_uri))
 
     def _post_connect(self):
         self._check_schema_migration()
@@ -190,7 +188,7 @@ class ShellDatabaseConnection(object):
 
         compaines = default_store.find(Company)
         if (compaines.count() == 0 or
-            not sysparam.has_object('MAIN_COMPANY')):
+                not sysparam.has_object('MAIN_COMPANY')):
             from stoqlib.gui.base.dialogs import run_dialog
             from stoqlib.gui.dialogs.branchdialog import BranchDialog
             if self._ran_wizard:
@@ -227,6 +225,7 @@ class Shell(object):
     - handles login
     - runs applications
     """
+
     def __init__(self, bootstrap, options, initial=True):
         global _shell
         _shell = self
@@ -238,6 +237,13 @@ class Shell(object):
         self._login = None
         self._options = options
         self._user = None
+
+        app = Gtk.Application.get_default()
+        if not app:
+            app = Gtk.Application()
+            Gtk.Application.set_default(app)
+        self._app = app
+        self._app.connect('activate', self._on_app__activate)
         self.windows = []
 
     #
@@ -263,7 +269,7 @@ class Shell(object):
     def _check_param_online_services(self):
         from stoqlib.database.runtime import new_store
         from stoqlib.lib.parameters import sysparam
-        import gtk
+        from gi.repository import Gtk
 
         if sysparam.get_bool('ONLINE_SERVICES') is None:
             from kiwi.ui.dialogs import HIGAlertDialog
@@ -273,18 +279,18 @@ class Shell(object):
             #        sent to these dialogs are properly escaped
             dialog = HIGAlertDialog(
                 parent=None,
-                flags=gtk.DIALOG_MODAL,
-                type=gtk.MESSAGE_WARNING)
-            dialog.add_button(_("Not right now"), gtk.RESPONSE_NO)
-            dialog.add_button(_("Enable online services"), gtk.RESPONSE_YES)
+                flags=Gtk.DialogFlags.MODAL,
+                type=Gtk.MessageType.WARNING)
+            dialog.add_button(_("Not right now"), Gtk.ResponseType.NO)
+            dialog.add_button(_("Enable online services"), Gtk.ResponseType.YES)
 
             dialog.set_primary(_('Do you want to enable Stoq online services?'))
             dialog.set_details(PRIVACY_STRING, use_markup=True)
-            dialog.set_default_response(gtk.RESPONSE_YES)
+            dialog.set_default_response(Gtk.ResponseType.YES)
             response = dialog.run()
             dialog.destroy()
             store = new_store()
-            sysparam.set_bool(store, 'ONLINE_SERVICES', response == gtk.RESPONSE_YES)
+            sysparam.set_bool(store, 'ONLINE_SERVICES', response == Gtk.ResponseType.YES)
             store.commit()
             store.close()
 
@@ -305,7 +311,7 @@ class Shell(object):
         from stoqlib.lib.pluginmanager import get_plugin_manager
         manager = get_plugin_manager()
         if (sysparam.get_bool('DEMO_MODE') and
-            manager.is_active(u'ecf')):
+                manager.is_active(u'ecf')):
             pos = shell_window.toplevel.get_position()
             if pos[0] < 220:
                 shell_window.toplevel.move(220, pos[1])
@@ -317,7 +323,7 @@ class Shell(object):
         # If user defined 0 minutes, ignore automatic logout.
         if minutes != 0:
             seconds = minutes * 60
-            glib.timeout_add_seconds(5, self._verify_idle_logout, seconds)
+            GLib.timeout_add_seconds(5, self._verify_idle_logout, seconds)
 
     def _verify_idle_logout(self, seconds):
         # This is called once every 10 seconds
@@ -342,17 +348,17 @@ class Shell(object):
         return True
 
     def _logout(self):
-        from stoqlib.database.runtime import (get_current_user,
+        from stoqlib.database.runtime import (get_current_user, get_current_station,
                                               get_default_store)
         log.debug('Logging out the current user')
         try:
-            user = get_current_user(get_default_store())
+            store = get_default_store()
+            user = get_current_user(store)
             if user:
-                user.logout()
+                user.logout(get_current_station(store))
         except StoqlibError:
             pass
 
-    @inlineCallbacks
     def _terminate(self, restart=False, app=None):
         log.info("Terminating Stoq")
 
@@ -366,7 +372,15 @@ class Shell(object):
         stop_daemon()
 
         # Finally, go out of the reactor and show possible crash reports
-        yield self._quit_reactor_and_maybe_show_crashreports()
+        log.debug("Show some crash reports")
+        self._show_crash_reports()
+
+        # Make sure that no connection is left open (specially on Windows)
+        try:
+            from stoqlib.database.runtime import get_default_store
+            get_default_store().close()
+        except Exception:
+            pass
 
         if restart:
             from stoqlib.lib.process import Process
@@ -388,19 +402,13 @@ class Shell(object):
     def _show_crash_reports(self):
         from stoqlib.lib.crashreport import has_tracebacks
         if not has_tracebacks():
-            return succeed(None)
+            return
         if 'STOQ_DISABLE_CRASHREPORT' in os.environ:
-            return succeed(None)
+            return
+        from gi.repository import Gtk
         from stoqlib.gui.dialogs.crashreportdialog import show_dialog
-        return show_dialog()
-
-    @inlineCallbacks
-    def _quit_reactor_and_maybe_show_crashreports(self):
-        log.debug("Show some crash reports")
-        yield self._show_crash_reports()
-        log.debug("Shutdown reactor")
-        from twisted.internet import reactor
-        reactor.stop()
+        show_dialog(Gtk.main_quit)
+        Gtk.main()
 
     #
     # Public API
@@ -451,7 +459,9 @@ class Shell(object):
         from stoqlib.database.runtime import get_default_store
         shell_window = ShellWindow(self._options,
                                    shell=self,
-                                   store=get_default_store())
+                                   store=get_default_store(),
+                                   app=self._app)
+        self._app.add_window(shell_window.toplevel)
         self.windows.append(shell_window)
 
         self._maybe_correct_demo_position(shell_window)
@@ -482,27 +492,14 @@ class Shell(object):
         :param appname: name of the application to run
         :param action_name: action to activate or ``None``
         """
-        self._dbconn.connect()
-        if not self._do_login():
-            raise SystemExit
-        if appname is None:
-            appname = u'launcher'
-        shell_window = self.create_window()
-        app = shell_window.run_application(unicode(appname))
-        shell_window.show()
+        self._appname = appname
+        self._action_name = action_name
 
-        if action_name is not None:
-            action = getattr(app, action_name, None)
-            if action is not None:
-                action.activate()
-
-        self._maybe_schedule_idle_logout()
-
-        log.debug("Entering reactor")
         self._bootstrap.entered_main = True
-        from twisted.internet import reactor
-        reactor.run()
-        log.info("Leaving reactor")
+
+        log.debug("Entering main loop")
+        self._app.run()
+        log.info("Leaving main loop")
 
     def quit(self, restart=False, app=None):
         """
@@ -522,6 +519,29 @@ class Shell(object):
         api.user_settings.flush()
 
         self._terminate(restart=restart, app=app)
+
+    #
+    # Callbacks
+    #
+
+    def _on_app__activate(self, app):
+        appname = self._appname
+        action_name = self._action_name
+        self._dbconn.connect()
+        if not self._do_login():
+            raise SystemExit
+        if appname is None:
+            appname = u'launcher'
+        shell_window = self.create_window()
+        app = shell_window.run_application(str(appname))
+        shell_window.show()
+
+        if action_name is not None:
+            action = getattr(app, action_name, None)
+            if action is not None:
+                action.activate()
+
+        self._maybe_schedule_idle_logout()
 
 
 def get_shell():

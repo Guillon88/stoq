@@ -54,21 +54,23 @@ class TestPayment(DomainTest):
         with self.assertRaises(TypeError):
             Payment(due_date=localnow(),
                     branch=self.create_branch(),
+                    station=self.current_station,
                     payment_type=Payment.TYPE_OUT,
                     store=self.store)
 
         payment = Payment(value=currency(10), due_date=localnow(),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           method=None,
                           group=None,
                           category=None,
                           payment_type=Payment.TYPE_OUT,
                           store=self.store)
-        self.failUnless(payment.status == Payment.STATUS_PREVIEW)
+        self.assertTrue(payment.status == Payment.STATUS_PREVIEW)
 
     def test_installment_number(self):
         payment = self.create_payment()
-        self.assertEquals(payment.installment_number, 1)
+        self.assertEqual(payment.installment_number, 1)
 
     def _get_relative_day(self, days):
         return localtoday() + datetime.timedelta(days)
@@ -77,6 +79,7 @@ class TestPayment(DomainTest):
         method = PaymentMethod.get_by_name(self.store, u'check')
         payment = Payment(value=currency(100),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           due_date=localnow(),
                           method=method,
                           group=None,
@@ -114,6 +117,7 @@ class TestPayment(DomainTest):
         method = PaymentMethod.get_by_name(self.store, u'check')
         payment = Payment(value=currency(100),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           due_date=localnow(),
                           open_date=localnow(),
                           method=method,
@@ -161,9 +165,9 @@ class TestPayment(DomainTest):
             self.assertTrue(p.has_commission())
             p.value = Decimal(2)
             commission = self.store.find(CommissionView, payment_id=p.id).one()
-            self.assertEquals(commission.quantity_sold, Decimal(1))
+            self.assertEqual(commission.quantity_sold, Decimal(1))
             commission.sale_status = item.sale.STATUS_RETURNED
-            self.assertEquals(commission.quantity_sold, Decimal(0))
+            self.assertEqual(commission.quantity_sold, Decimal(0))
 
     @mock.patch('stoqlib.domain.payment.payment.Event.log')
     def test_pay(self, log):
@@ -180,35 +184,37 @@ class TestPayment(DomainTest):
         method = PaymentMethod.get_by_name(self.store, u'check')
         payment = Payment(value=currency(100),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           due_date=localnow(),
                           method=method,
                           group=None,
                           category=None,
                           payment_type=Payment.TYPE_OUT,
                           store=self.store)
-        self.failIf(payment.is_paid())
+        self.assertFalse(payment.is_paid())
         payment.set_pending()
-        self.failIf(payment.is_paid())
+        self.assertFalse(payment.is_paid())
         payment.pay()
-        self.failUnless(payment.is_paid())
+        self.assertTrue(payment.is_paid())
 
     def test_is_cancelled(self):
         method = PaymentMethod.get_by_name(self.store, u'check')
         payment = Payment(value=currency(100),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           due_date=localnow(),
                           method=method,
                           group=None,
                           category=None,
                           payment_type=Payment.TYPE_OUT,
                           store=self.store)
-        self.failIf(payment.is_cancelled())
+        self.assertFalse(payment.is_cancelled())
         payment.set_pending()
-        self.failIf(payment.is_cancelled())
+        self.assertFalse(payment.is_cancelled())
         payment.pay()
-        self.failIf(payment.is_cancelled())
+        self.assertFalse(payment.is_cancelled())
         payment.cancel()
-        self.failUnless(payment.is_cancelled())
+        self.assertTrue(payment.is_cancelled())
         with self.assertRaises(StoqlibError):
             payment.status = Payment.STATUS_CANCELLED
             payment.cancel()
@@ -217,6 +223,7 @@ class TestPayment(DomainTest):
         method = PaymentMethod.get_by_name(self.store, u'check')
         payment = Payment(value=currency(100),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           due_date=localnow(),
                           method=method,
                           group=None,
@@ -224,15 +231,16 @@ class TestPayment(DomainTest):
                           payment_type=Payment.TYPE_OUT,
                           store=self.store)
         today = localnow().strftime(u'%x')
-        self.failIf(payment.get_paid_date_string() == today)
+        self.assertFalse(payment.get_paid_date_string() == today)
         payment.set_pending()
         payment.pay()
-        self.failUnless(payment.get_paid_date_string() == today)
+        self.assertTrue(payment.get_paid_date_string() == today)
 
     def test_get_open_date_string(self):
         method = PaymentMethod.get_by_name(self.store, u'check')
         payment = Payment(value=currency(100),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           due_date=localnow(),
                           method=method,
                           group=None,
@@ -241,7 +249,7 @@ class TestPayment(DomainTest):
                           store=self.store)
         self.assertNotEqual(payment.get_open_date_string(), u"")
         payment.open_date = None
-        self.assertEquals(payment.get_open_date_string(), u"")
+        self.assertEqual(payment.get_open_date_string(), u"")
 
     def test_is_separate_payment_with_renegotiation(self):
         payment = self.create_payment()
@@ -253,6 +261,7 @@ class TestPayment(DomainTest):
         open_date = due_date = self._get_relative_day(-4)
         payment = Payment(value=currency(100),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           due_date=due_date,
                           open_date=open_date,
                           method=method,
@@ -269,21 +278,22 @@ class TestPayment(DomainTest):
 
     def test_can_cancel(self):
         payment = self.create_payment()
-        self.failUnless(payment.can_cancel())
+        self.assertTrue(payment.can_cancel())
 
         payment.set_pending()
-        self.failUnless(payment.can_cancel())
+        self.assertTrue(payment.can_cancel())
 
         payment.pay()
-        self.failUnless(payment.can_cancel())
+        self.assertTrue(payment.can_cancel())
 
         payment.cancel()
-        self.failIf(payment.can_cancel())
+        self.assertFalse(payment.can_cancel())
 
     def test_cancel(self):
         method = PaymentMethod.get_by_name(self.store, u'check')
         payment = Payment(value=currency(100),
                           branch=self.create_branch(),
+                          station=self.current_station,
                           due_date=localnow(),
                           method=method,
                           group=None,
@@ -297,27 +307,27 @@ class TestPayment(DomainTest):
 
     def test_change_due_date(self):
         payment = self.create_payment()
-        self.assertEquals(payment.due_date, localtoday())
+        self.assertEqual(payment.due_date, localtoday())
         payment.change_due_date(new_due_date=self._get_relative_day(-2))
-        self.assertEquals(payment.due_date, self._get_relative_day(-2))
+        self.assertEqual(payment.due_date, self._get_relative_day(-2))
         payment.status = Payment.STATUS_PAID
         with self.assertRaises(StoqlibError):
             payment.change_due_date(new_due_date=self._get_relative_day(-1))
 
     def test_update_value(self):
         payment = self.create_payment()
-        self.assertEquals(payment.value, 10)
+        self.assertEqual(payment.value, 10)
         payment.update_value(Decimal(101))
-        self.assertEquals(payment.value, 101)
+        self.assertEqual(payment.value, 101)
 
     def test_get_payable_value(self):
         payment = self.create_payment()
-        self.assertEquals(payment.get_payable_value(), 10)
+        self.assertEqual(payment.get_payable_value(), 10)
         payment.status = Payment.STATUS_PAID
         payment.paid_value = 10
-        self.assertEquals(payment.get_payable_value(), 10)
+        self.assertEqual(payment.get_payable_value(), 10)
         payment.status = 9
-        self.assertEquals(payment.get_payable_value(), 10)
+        self.assertEqual(payment.get_payable_value(), 10)
 
     def test_create_repeated_month(self):
         p = self.create_payment()
@@ -332,23 +342,34 @@ class TestPayment(DomainTest):
                                            INTERVALTYPE_MONTH,
                                            localdate(2012, 1, 1).date(),
                                            localdate(2012, 12, 31).date())
-        self.assertEquals(len(payments), 11)
-        self.assertEquals(p.due_date, localdatetime(2012, 1, 1))
-        self.assertEquals(p.description, u'1/12 Rent')
+        self.assertEqual(len(payments), 11)
+        self.assertEqual(p.due_date, localdatetime(2012, 1, 1))
+        self.assertEqual(p.description, u'1/12 Rent')
 
-        self.assertEquals(payments[0].due_date, localdatetime(2012, 2, 1))
-        self.assertEquals(payments[1].due_date, localdatetime(2012, 3, 1))
-        self.assertEquals(payments[10].due_date, localdatetime(2012, 12, 1))
+        self.assertEqual(payments[0].due_date, localdatetime(2012, 2, 1))
+        self.assertEqual(payments[1].due_date, localdatetime(2012, 3, 1))
+        self.assertEqual(payments[10].due_date, localdatetime(2012, 12, 1))
 
-        self.assertEquals(payments[0].description, u'2/12 Rent')
-        self.assertEquals(payments[10].description, u'12/12 Rent')
+        self.assertEqual(payments[0].description, u'2/12 Rent')
+        self.assertEqual(payments[10].description, u'12/12 Rent')
+
+    def test_create_repeated_with_temporary_identifier(self):
+        payment = self.create_payment()
+        payment.description = u'temporary'
+        payments = Payment.create_repeated(self.store, payment,
+                                           INTERVALTYPE_MONTH,
+                                           localdate(2012, 1, 1).date(),
+                                           localdate(2012, 3, 1).date(),
+                                           temporary_identifiers=True)
+        for p in payments:
+            self.assertTrue(p.identifier < 0)
 
     def test_set_not_paid(self):
         sale = self.create_sale()
         self.add_product(sale)
         payment = self.add_payments(sale, method_type=u'check')[0]
-        sale.order()
-        sale.confirm()
+        sale.order(self.current_user)
+        sale.confirm(self.current_user)
 
         account = self.create_account()
         payment.method.destination_account = account
@@ -357,10 +378,10 @@ class TestPayment(DomainTest):
 
         # Verify if payment is referenced on account transaction.
         transactions = self.store.find(AccountTransaction, account=account, payment=payment)
-        self.assertEquals(transactions.count(), 1)
+        self.assertEqual(transactions.count(), 1)
         original_transaction = list(transactions)[0]
-        self.assertEquals(original_transaction.operation_type, AccountTransaction.TYPE_IN)
-        self.assertEquals(original_transaction.value, payment.value)
+        self.assertEqual(original_transaction.operation_type, AccountTransaction.TYPE_IN)
+        self.assertEqual(original_transaction.value, payment.value)
 
         entry = PaymentChangeHistory(payment=payment,
                                      change_reason=u'foo',
@@ -370,24 +391,24 @@ class TestPayment(DomainTest):
         # Now that the payment was reverted, there should also be a reverted operation,
         # and the payment will not be referenced in transactions anymore.
         transactions = self.store.find(AccountTransaction, account=account, payment=payment)
-        self.assertEquals(transactions.count(), 0)
+        self.assertEqual(transactions.count(), 0)
 
         new_transactions = self.store.find(AccountTransaction, source_account=account)
-        self.assertEquals(new_transactions.count(), 1)
+        self.assertEqual(new_transactions.count(), 1)
         reversed_transaction = list(new_transactions)[0]
-        self.assertEquals(reversed_transaction.operation_type, AccountTransaction.TYPE_OUT)
-        self.assertEquals(self.store.find(AccountTransaction, payment=payment).count(), 0)
+        self.assertEqual(reversed_transaction.operation_type, AccountTransaction.TYPE_OUT)
+        self.assertEqual(self.store.find(AccountTransaction, payment=payment).count(), 0)
 
         # Verify all transactions - The created account, will be referenced as source
         # and destination account.
         query = Or(AccountTransaction.source_account == account,
                    AccountTransaction.account == account)
         total_transactions = self.store.find(AccountTransaction, query).count()
-        self.assertEquals(total_transactions, 2)
+        self.assertEqual(total_transactions, 2)
         payment.pay()
-        self.assertEquals(self.store.find(AccountTransaction, payment=payment).count(), 1)
+        self.assertEqual(self.store.find(AccountTransaction, payment=payment).count(), 1)
         total_transactions = self.store.find(AccountTransaction, query).count()
-        self.assertEquals(total_transactions, 3)
+        self.assertEqual(total_transactions, 3)
 
 
 class TestPaymentComment(DomainTest):

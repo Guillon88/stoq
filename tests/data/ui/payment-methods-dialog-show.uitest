@@ -1,30 +1,31 @@
 dialog: PaymentMethodsDialog
 GtkDialog(toplevel): title='Payment Method Settings', hidden
-  GtkVBox(_main_vbox):
-    GtkVBox(vbox, expand=True, fill=True):
+  GtkBox(_main_vbox, orientation=vertical):
+    GtkBox(vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(header):
       GtkEventBox(main, expand=True, fill=True, padding=6):
         ObjectList(klist):
           column: title='Payment Method', expand
           column: title='Active'
-          row: u'Bill', True
-          row: u'Card', True
-          row: u'Check', True
-          row: u'Credit', True
-          row: u'Deposit', True
-          row: u'Money', True
-          row: u'Multiple', True
-          row: u'Store Credit', True
-      GtkHBox(fill=True):
+          row: 'Bill', True
+          row: 'Card', True
+          row: 'Check', True
+          row: 'Credit', True
+          row: 'Deposit', True
+          row: 'Money', True
+          row: 'Multiple', True
+          row: 'Store Credit', True
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(extra_holder, expand=True, fill=True, padding=6): slave SearchEditorToolBar is attached
-          GtkHBox(toplevel):
-            GtkHButtonBox(hbuttonbox1, fill=True):
-              GtkButton(new_button): hidden
-              GtkButton(edit_button): insensitive
+          GtkBox(toplevel, orientation=horizontal):
+            GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+              GtkButton(new_button, expand=True, fill=True): hidden
+              GtkButton(edit_button, expand=True, fill=True): insensitive
             GtkEventBox(toolbar_holder, expand=True, fill=True):
         GtkEventBox(print_holder, expand=True, fill=True):
         GtkEventBox(notice, fill=True):
         GtkEventBox(details_holder, padding=6, pack-end):
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
-      GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
+        GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden

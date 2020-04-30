@@ -1,35 +1,32 @@
 search: ProductSearch
 GtkDialog(toplevel): title='Product Search', hidden
-  GtkVBox(_main_vbox):
-    GtkVBox(vbox, expand=True, fill=True):
+  GtkBox(_main_vbox, orientation=vertical):
+    GtkBox(vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(header): hidden
       GtkEventBox(main, expand=True, fill=True, padding=6): slave SearchSlave is attached
-        GtkVBox(vbox):
-          GtkHBox(fill=True, padding=6):
-            GtkVBox(filters_box, padding=6):
-              GtkHBox(hbox):
+        GtkBox(vbox, orientation=vertical):
+          GtkBox(orientation=horizontal, fill=True, padding=6):
+            GtkBox(filters_box, orientation=vertical, padding=6):
+              GtkBox(hbox, orientation=horizontal):
                 ComboSearchFilter(status_filter):
                   GtkLabel(): 'With status:'
                   ProxyComboBox(padding=6):
                     item: 'Any'
                     item: 'Available', selected
                     item: 'Closed'
-                SearchFilter(_primary_filter):
+                StringSearchFilter(_primary_filter):
                   GtkLabel(): 'Search:'
                   ProxyComboBox(padding=6): hidden
                     item: 'Contains All Words', selected
-                    item: 'Contains Exactly'
-                    item: 'Identical to'
-                    item: 'Does Not Contain'
-                  HintedEntry(search_entry, padding=6): ''
-                GtkButton(search_button): 'gtk-find'
+                  GtkEntry(search_entry, padding=6): ''
+                stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(search_button): 'Find'
               ComboSearchFilter(branch_filter):
                 GtkLabel(): 'In branch:'
                 ProxyComboBox(padding=6):
                   item: 'Any'
                   item: 'Moda Stoq', selected
                   item: 'Stoq Elite Fashion'
-          SearchResultTreeView(result_view, expand=True, fill=True):
+          stoqlib+gui+search+productsearch+_ProductSearchResultTreeView(results, expand=True, fill=True):
             column: title='Code'
             column: title='Barcode'
             column: title='Category'
@@ -38,41 +35,46 @@ GtkDialog(toplevel): title='Product Search', hidden
             column: title='Model', hidden
             column: title='Unit', hidden
             column: title='Location', hidden
+            column: title='Status', hidden
+            column: title='Brand', hidden
+            column: title='Family', hidden
+            column: title='Is internal', hidden
             column: title='Cost'
             column: title='Price'
             column: title='Stock'
             column: title='NCM', hidden
             column: title='NCM'
-            row: u'01', u'2368694135945', u'Bermudas Sarja', u'Bermuda Sarja', None, u'', None, u'', <currency $70>, Decimal('149.00'), Decimal('3.000'), u'12345678', u'12345678'
-            row: u'02', u'6234564656756', u'Bermudas Shorts', u'Shorts com Costuras', None, u'', None, u'', <currency $139>, Decimal('198.00'), Decimal('3.000'), None, None
-            row: u'03', u'6985413595971', u'Tinturada', u'Camiseta Tinturada Xcuba Comp', None, u'', None, u'', <currency $56>, Decimal('89.00'), Decimal('3.000'), None, None
-            row: u'04', u'2692149835416', u'Chinelos', u'Chinelo de Dedo', None, u'', None, u'', <currency $43>, Decimal('79.00'), Decimal('3.000'), None, None
-            row: u'05', u'1595843695465', u'Cal\xe7as Jeans', u'Cal\xe7a Jeans com Bolso Traseiro', None, u'', None, u'', <currency $101>, Decimal('189.00'), Decimal('3.000'), None, None
-            row: u'06', u'8596458216412', u'Cal\xe7as Poliester', u'Cal\xe7a Brigilda', None, u'', None, u'', <currency $325>, Decimal('438.00'), Decimal('3.000'), None, None
-            row: u'07', u'9586249534513', u'Algod\xe3o', u'Casaco Vilan', None, u'', None, u'', <currency $401>, Decimal('503.00'), Decimal('3.000'), None, None
-            row: u'08', u'7826592136954', u'Blusas Algod\xe3o', u'Blusa Frente-\xdanica com Pregas', None, u'', None, u'', <currency $153>, Decimal('220.00'), Decimal('3.000'), None, None
-            row: u'09', u'5892458629421', u'Blusas Poliester', u'Blusa Balon\xea com Bordado nas Costas', None, u'', None, u'', <currency $99>, Decimal('150.00'), Decimal('3.000'), None, None
-            row: u'10', u'1598756984265', u'Viscose', u'Vestido Vadalena', None, u'', None, u'', <currency $199>, Decimal('383.00'), Decimal('4.000'), None, None
-      GtkHBox(fill=True):
+            row: '01', '2368694135945', 'Bermudas Sarja', 'Bermuda Sarja', None, '', None, '', 'available', '', '', False, <currency $70>, Decimal('149.00'), Decimal('3.000'), '12345678', '12345678'
+            row: '02', '6234564656756', 'Bermudas Shorts', 'Shorts com Costuras', None, '', None, '', 'available', '', '', False, <currency $139>, Decimal('198.00'), Decimal('3.000'), '61046300', '61046300'
+            row: '03', '6985413595971', 'Tinturada', 'Camiseta Tinturada Xcuba Comp', None, '', None, '', 'available', '', '', False, <currency $56>, Decimal('89.00'), Decimal('3.000'), '61091000', '61091000'
+            row: '04', '2692149835416', 'Chinelos', 'Chinelo de Dedo', None, '', None, '', 'available', '', '', False, <currency $43>, Decimal('79.00'), Decimal('3.000'), '64042000', '64042000'
+            row: '05', '1595843695465', 'Calças Jeans', 'Calça Jeans com Bolso Traseiro', None, '', None, '', 'available', '', '', False, <currency $101>, Decimal('189.00'), Decimal('3.000'), '61046900', '61046900'
+            row: '06', '8596458216412', 'Calças Poliester', 'Calça Brigilda', None, '', None, '', 'available', '', '', False, <currency $325>, Decimal('438.00'), Decimal('3.000'), '61046900', '61046900'
+            row: '07', '9586249534513', 'Algodão', 'Casaco Vilan', None, '', None, '', 'available', '', '', False, <currency $401>, Decimal('503.00'), Decimal('3.000'), '61022000', '61022000'
+            row: '08', '7826592136954', 'Blusas Algodão', 'Blusa Frente-Única com Pregas', None, '', None, '', 'available', '', '', False, <currency $153>, Decimal('220.00'), Decimal('3.000'), '62063000', '62063000'
+            row: '09', '5892458629421', 'Blusas Poliester', 'Blusa Balonê com Bordado nas Costas', None, '', None, '', 'available', '', '', False, <currency $99>, Decimal('150.00'), Decimal('3.000'), '62064000', '62064000'
+            row: '10', '1598756984265', 'Viscose', 'Vestido Vadalena', None, '', None, '', 'available', '', '', False, <currency $199>, Decimal('383.00'), Decimal('4.000'), '61044300', '61044300'
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(extra_holder, expand=True, fill=True, padding=6): slave SearchEditorToolBar is attached
-          GtkHBox(toplevel):
-            GtkHButtonBox(hbuttonbox1, fill=True):
-              GtkButton(new_button):
-              GtkButton(edit_button): insensitive
+          GtkBox(toplevel, orientation=horizontal):
+            GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+              GtkButton(new_button, expand=True, fill=True):
+              GtkButton(edit_button, expand=True, fill=True): insensitive
             GtkEventBox(toolbar_holder, expand=True, fill=True):
         GtkEventBox(print_holder, expand=True, fill=True): slave SearchDialogPrintSlave is attached
-          GtkHButtonBox(toplevel):
+          GtkButtonBox(toplevel, orientation=horizontal):
             GtkButton(print_price_button): 'gtk-print'
         GtkEventBox(notice, fill=True):
         GtkEventBox(details_holder, padding=6, pack-end): slave _SearchDialogDetailsSlave is attached
-          GtkVBox(toplevel):
-            GtkHBox(hbox1, fill=True):
+          GtkBox(vbox1, orientation=vertical):
+            GtkBox(hbox1, orientation=horizontal, fill=True):
               GtkLabel(label3, expand=True, fill=True):
-              GtkHButtonBox(hbuttonbox1, fill=True):
-                GtkButton(details_button): hidden
-                GtkButton(print_button): 'gtk-print'
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
-      GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden, insensitive
-      GtkButton(branch_stock_button, padding=6): 'Stock details', insensitive
-      GtkButton(csv_button, padding=6): 'Export to spreadsheet...'
+              GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
+                GtkButton(details_button, expand=True, fill=True): hidden
+                GtkButton(print_button, expand=True, fill=True): 'gtk-print'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
+        GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden, insensitive
+        GtkButton(branch_stock_button, padding=6): 'Stock details', insensitive
+        GtkButton(csv_button, padding=6): 'Export to spreadsheet...'

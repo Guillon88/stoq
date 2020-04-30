@@ -31,24 +31,45 @@ from stoqlib.lib.ibpt import IBPTGenerator, generate_ibpt_message
 
 
 class TestCalculateTaxForItem(DomainTest):
-    def test_with_service(self):
-        service = self.create_service()
+    def test_include_service(self):
+        service = self.create_service(price=50)
+        service.service_list_item_code = '1.04'
         sellable = service.sellable
         sale = self.create_sale()
         items = sale.get_items()
-        sale.add_sellable(sellable, quantity=1)
+        item = sale.add_sellable(sellable, quantity=1)
 
-        generator = IBPTGenerator(items)
+        generator = IBPTGenerator(items, include_services=True)
         tax_values = generator._load_tax_values(service)
-        federal = generator._calculate_federal_tax(service, tax_values)
-        self.assertEquals(federal, Decimal("0"))
-        state = generator._calculate_state_tax(service, tax_values)
-        self.assertEquals(state, Decimal("0"))
+        item_total = item.quantity * item.price
+        expected_federal = item_total * Decimal(tax_values.nacionalfederal) / 100
+        federal = generator._calculate_federal_tax(item, tax_values)
+        self.assertEqual(federal, expected_federal)
+        state = generator._calculate_state_tax(item, tax_values)
+        self.assertEqual(state, Decimal("0"))
 
-        msg = generate_ibpt_message(sale.get_items())
-        expected_msg = ("Trib aprox R$: 0.00 Federal e 0.00 Estadual\n"
-                        "Fonte:  0 ")
-        self.assertEquals(msg, expected_msg)
+        msg = generate_ibpt_message(sale.services, include_services=True)
+        expected_msg = ("Tributos aproximados: R$ 6.72 Federal e R$ 0.00 Estadual\n"
+                        "Fonte: IBPT/empresometro.com.br 0C3829")
+        self.assertEqual(msg, expected_msg)
+
+    def test_not_include_service(self):
+        service = self.create_service()
+        sellable = service.sellable
+        sale = self.create_sale()
+        item = sale.add_sellable(sellable, quantity=1)
+        items = sale.get_items()
+        generator = IBPTGenerator(items)
+        tax_values = generator._load_tax_values(item)
+        federal = generator._calculate_federal_tax(item, tax_values)
+        self.assertEqual(federal, Decimal("0"))
+        state = generator._calculate_state_tax(item, tax_values)
+        self.assertEqual(state, Decimal("0"))
+
+        msg = generate_ibpt_message(items)
+        expected_msg = ("Tributos aproximados: R$ 0.00 Federal e R$ 0.00 Estadual\n"
+                        "Fonte:  0")
+        self.assertEqual(msg, expected_msg)
 
     def test_calculate_item_without_ncm(self):
         # Product without NCM
@@ -58,14 +79,14 @@ class TestCalculateTaxForItem(DomainTest):
         generator = IBPTGenerator(items)
         tax_values = generator._load_tax_values(item)
         federal = generator._calculate_federal_tax(item, tax_values)
-        self.assertEquals(federal, Decimal("0"))
+        self.assertEqual(federal, Decimal("0"))
         state = generator._calculate_state_tax(item, tax_values)
-        self.assertEquals(state, Decimal("0"))
+        self.assertEqual(state, Decimal("0"))
 
         msg = generate_ibpt_message(items)
-        expected_msg = ("Trib aprox R$: 0.00 Federal e 0.00 Estadual\n"
-                        "Fonte:  0 ")
-        self.assertEquals(msg, expected_msg)
+        expected_msg = ("Tributos aproximados: R$ 0.00 Federal e R$ 0.00 Estadual\n"
+                        "Fonte:  0")
+        self.assertEqual(msg, expected_msg)
 
     def test_calculate_item_without_icms(self):
         # SP (São Paulo) as default state.
@@ -84,14 +105,14 @@ class TestCalculateTaxForItem(DomainTest):
         # tax.
         tax_values = generator._load_tax_values(item)
         federal = generator._calculate_federal_tax(item, tax_values)
-        self.assertEquals(federal, Decimal("4.20"))
+        self.assertEqual(federal, Decimal("4.20"))
         state = generator._calculate_state_tax(item, tax_values)
-        self.assertEquals(state, Decimal("18"))
+        self.assertEqual(state, Decimal("18"))
 
         msg = generate_ibpt_message(items)
-        expected_msg = ("Trib aprox R$: 4.20 Federal e 18.00 Estadual\n"
-                        "Fonte: IBPT ca7gi3 ")
-        self.assertEquals(msg, expected_msg)
+        expected_msg = ("Tributos aproximados: R$ 4.20 Federal e R$ 18.00 Estadual\n"
+                        "Fonte: IBPT/empresometro.com.br 0C3829")
+        self.assertEqual(msg, expected_msg)
 
     def test_calculate_item(self):
         # SP (São Paulo) as default state.
@@ -116,7 +137,7 @@ class TestCalculateTaxForItem(DomainTest):
         # Values (0, 3, 4, 5, 8) - taxes codes of brazilian origin.
         # Different values represent taxes of international origin.
         icms.orig = 0
-        product.icms_template = icms
+        product.set_icms_template(icms)
 
         # Values used from IBPT table. Change this values when update the taxes.
         # (ncm;ex;tipo;descricao;nacionalfederal;importadosfederal;estadual;
@@ -129,15 +150,15 @@ class TestCalculateTaxForItem(DomainTest):
         # Federal tax
         expected_federal_tax = total_item * (Decimal("4.2") / 100)
         federal = generator._calculate_federal_tax(sale_item, tax_values)
-        self.assertEquals(federal, expected_federal_tax)
+        self.assertEqual(federal, expected_federal_tax)
         # State tax
         expected_state_tax = total_item * (Decimal("18") / 100)
         state_tax = generator._calculate_state_tax(sale_item, tax_values)
-        self.assertEquals(state_tax, expected_state_tax)
+        self.assertEqual(state_tax, expected_state_tax)
 
         # With tax of international origin.
         icms.orig = 1
         # Federal tax
         expected_federal_tax = total_item * (Decimal("21.45") / 100)
         federal = generator._calculate_federal_tax(sale_item, tax_values)
-        self.assertEquals(federal, expected_federal_tax)
+        self.assertEqual(federal, expected_federal_tax)

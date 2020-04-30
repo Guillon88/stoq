@@ -28,16 +28,22 @@ stoq/gui/receivable/receivable.py:
 """
 
 import datetime
+import logging
+import os
+import sys
+import traceback
 
-import pango
-import gtk
+from gi.repository import Gtk, GdkPixbuf, Pango
 from kiwi.currency import currency
 from kiwi.python import all
+from kiwi.ui.dialogs import save
 from kiwi.ui.gadgets import render_pixbuf
 from kiwi.ui.objectlist import Column
 
 from stoqlib.api import api
 from stoqlib.domain.payment.category import PaymentCategory
+from stoqlib.domain.payment.card import CreditCardData
+from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.domain.payment.payment import Payment
 from stoqlib.domain.payment.views import InPaymentView
 from stoqlib.domain.till import Till
@@ -45,21 +51,25 @@ from stoqlib.exceptions import TillError
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.editors.paymenteditor import InPaymentEditor
 from stoqlib.gui.editors.paymentseditor import SalePaymentsEditor
-from stoqlib.gui.search.paymentsearch import InPaymentBillCheckSearch
-from stoqlib.gui.search.paymentsearch import CardPaymentSearch
+from stoqlib.gui.search.paymentsearch import (CardPaymentSearch,
+                                              InPaymentBillCheckSearch)
 from stoqlib.gui.search.searchcolumns import IdentifierColumn, SearchColumn
 from stoqlib.gui.search.searchfilters import DateSearchFilter
 from stoqlib.gui.slaves.paymentconfirmslave import SalePaymentConfirmSlave
 from stoqlib.gui.utils.keybindings import get_accels
 from stoqlib.gui.utils.printing import print_report
 from stoqlib.gui.wizards.renegotiationwizard import PaymentRenegotiationWizard
+from stoqlib.lib.boleto import get_bank_info_by_number
 from stoqlib.lib.dateutils import localtoday
 from stoqlib.lib.message import warning
+from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext as _
 from stoqlib.reporting.payment import ReceivablePaymentReport
 from stoqlib.reporting.paymentsreceipt import InPaymentReceipt
 
 from stoq.gui.accounts import BaseAccountWindow, FilterItem
+
+log = logging.getLogger(__name__)
 
 
 class ReceivableApp(BaseAccountWindow):
@@ -83,28 +93,30 @@ class ReceivableApp(BaseAccountWindow):
         group = get_accels('app.receivable')
         actions = [
             # File
-            ('AddReceiving', gtk.STOCK_ADD, _('Account receivable...'),
+            ('AddReceiving', Gtk.STOCK_ADD, _('Account receivable...'),
              group.get('add_receiving'),
              _('Create a new account receivable')),
             ('PaymentFlowHistory', None,
              _('Payment _flow history...'),
              group.get('payment_flow_history')),
+            ('ExportBills', None, _('Export bills...')),
+
 
             # Payment
             ('PaymentMenu', None, _('Payment')),
-            ('Details', gtk.STOCK_INFO, _('Details...'),
+            ('Details', Gtk.STOCK_INFO, _('Details...'),
              group.get('payment_details'),
              _('Show details for the selected payment'), ),
-            ('Receive', gtk.STOCK_APPLY, _('Receive...'),
+            ('Receive', Gtk.STOCK_APPLY, _('Receive...'),
              group.get('payment_receive'),
              _('Receive the selected payments')),
-            ('CancelPayment', gtk.STOCK_REMOVE, _('Cancel payment...'),
+            ('CancelPayment', Gtk.STOCK_REMOVE, _('Cancel payment...'),
              group.get('payment_cancel'),
              _('Cancel the selected payment')),
-            ('SetNotPaid', gtk.STOCK_UNDO, _('Set as not paid...'),
+            ('SetNotPaid', Gtk.STOCK_UNDO, _('Set as not paid...'),
              group.get('payment_set_not_paid'),
              _('Mark the selected payment as not paid')),
-            ('ChangeDueDate', gtk.STOCK_REFRESH, _('Change due date...'),
+            ('ChangeDueDate', Gtk.STOCK_REFRESH, _('Change due date...'),
              group.get('payment_change_due_date'),
              _('Change the due date of the selected payment')),
             ('Renegotiate', None, _('Renegotiate...'),
@@ -116,7 +128,7 @@ class ReceivableApp(BaseAccountWindow):
             ('Comments', None, _('Comments...'),
              group.get('payment_comments'),
              _('Add comments to the selected payment')),
-            ('PrintDocument', gtk.STOCK_PRINT, _('Print document...'),
+            ('PrintDocument', Gtk.STOCK_PRINT, _('Print document...'),
              group.get('payment_print_bill'),
              _('Print a bill for the selected payment')),
             ('PrintReceipt', None, _('Print _receipt...'),
@@ -134,19 +146,33 @@ class ReceivableApp(BaseAccountWindow):
              group.get('search_card_payments'),
              _('Search for card payments')),
         ]
-        self.receivable_ui = self.add_ui_actions(None, actions,
-                                                 filename='receivable.xml')
+        self.receivable_ui = self.add_ui_actions(actions)
         self.set_help_section(_("Accounts receivable help"), 'app-receivable')
 
-        self.Receive.set_short_label(_('Receive'))
-        self.Details.set_short_label(_('Details'))
-        self.Receive.props.is_important = True
+        self.window.add_print_items([self.PrintDocument, self.PrintReceipt])
+        self.window.add_export_items([self.ExportBills])
         self.window.add_new_items([self.AddReceiving])
         self.window.add_search_items([self.BillCheckSearch,
-                                      self.CardPaymentSearch])
-        self.window.Print.set_tooltip(
-            _("Print a report of this payments"))
-        self.popup = self.uimanager.get_widget('/ReceivableSelection')
+                                      self.CardPaymentSearch,
+                                      self.PaymentCategories,
+                                      self.PaymentFlowHistory])
+
+    def get_domain_options(self):
+        options = [
+            ('fa-info-circle-symbolic', _('Details'), 'receivable.Details', True),
+            ('fa-check-symbolic', _('Receive'), 'receivable.Receive', True),
+            ('fa-edit-symbolic', _('Edit installments'), 'receivable.Edit', True),
+
+            ('', _('Cancel payment'), 'receivable.CancelPayment', False),
+            ('', _('Set as not paid'), 'receivable.SetNotPaid', False),
+            ('', _('Change due date'), 'receivable.ChangeDueDate', False),
+            ('', _('Renegotiate'), 'receivable.Renegotiate', False),
+            ('', _('Comments'), 'receivable.Comments', False),
+            ('', _('Print document'), 'receivable.PrintDocument', False),
+            ('', _('Print receipt'), 'receivable.PrintReceipt', False),
+        ]
+
+        return options
 
     def activate(self, refresh=True):
         self._update_widgets()
@@ -156,31 +182,41 @@ class ReceivableApp(BaseAccountWindow):
 
         self.search.focus_search_entry()
 
-    def deactivate(self):
-        self.uimanager.remove_ui(self.receivable_ui)
-
-    def new_activate(self):
-        self.add_payment()
-
-    def search_activate(self):
-        self._run_bill_check_search()
-
     def create_filters(self):
         self.set_text_field_columns(['description', 'drawee', 'identifier_str'])
         self.create_main_filter()
 
     def get_columns(self):
+        if sysparam.get_bool('SHOW_FULL_DATETIME_ON_RECEIVABLE'):
+            get_date = datetime.datetime
+        else:
+            get_date = datetime.date
         return [IdentifierColumn('identifier', title=_('Payment #')),
                 SearchColumn('description', title=_('Description'),
-                             data_type=str, ellipsize=pango.ELLIPSIZE_END,
+                             data_type=str, ellipsize=Pango.EllipsizeMode.END,
                              expand=True, pack_end=True),
+                SearchColumn('sale_open_date', title=_('Sale date'),
+                             data_type=get_date, width=100),
                 Column('color', title=_('Description'), width=20,
-                       data_type=gtk.gdk.Pixbuf, format_func=render_pixbuf,
+                       data_type=GdkPixbuf.Pixbuf, format_func=render_pixbuf,
                        column='description'),
+                SearchColumn('method_description', title=_('Payment Method'),
+                             data_type=str, search_attribute='method_id',
+                             valid_values=self._get_payment_methods(),
+                             width=100, visible=False),
+                SearchColumn('card_type', title=_('Card Type'),
+                             format_func=self._format_card_type, data_type=str,
+                             valid_values=self._get_card_types(),
+                             width=100, visible=False),
                 Column('comments_number', title=_(u'Comments'),
                        visible=False),
                 SearchColumn('drawee', title=_('Drawee'), data_type=str,
-                             ellipsize=pango.ELLIPSIZE_END, width=140),
+                             ellipsize=Pango.EllipsizeMode.END, width=140),
+                SearchColumn('drawee_fancy_name', title=_('Drawee fancy name'),
+                             visible=False, data_type=str,
+                             ellipsize=Pango.EllipsizeMode.END, width=140),
+                SearchColumn('open_date', title=_('Open date'),
+                             data_type=datetime.date, width=100, visible=False),
                 SearchColumn('due_date', title=_('Due date'),
                              data_type=datetime.date, width=100, sorted=True),
                 SearchColumn('paid_date', title=_('Paid date'),
@@ -215,25 +251,40 @@ class ReceivableApp(BaseAccountWindow):
     # Private
     #
 
+    def _format_card_type(self, card_type):
+        return CreditCardData.short_desc.get(card_type, u'')
+
+    def _get_payment_methods(self):
+        methods = PaymentMethod.get_active_methods(self.store)
+        values = [(i.get_description(), i.id) for i in methods]
+        values.insert(0, (_("Any"), None))
+        return values
+
+    def _get_card_types(self):
+        """Return a list of card types"""
+        values = [(v, k) for k, v in CreditCardData.short_desc.items()]
+        values.insert(0, (_("Any"), None))
+        return values
+
     def _update_widgets(self):
         selected = self.results.get_selected_rows()
         one_item = len(selected) == 1
-        self.Receive.set_sensitive(self._can_receive(selected))
-        self.Details.set_sensitive(
-            one_item and self._can_show_details(selected))
-        self.Comments.set_sensitive(
-            one_item and self._can_show_comments(selected))
-        self.ChangeDueDate.set_sensitive(
-            one_item and self._can_change_due_date(selected))
-        self.CancelPayment.set_sensitive(
-            one_item and self._can_cancel_payment(selected))
-        self.PrintReceipt.set_sensitive(
-            one_item and self._is_paid(selected))
-        self.SetNotPaid.set_sensitive(
-            one_item and self._is_paid(selected) and
-            self._can_set_not_paid(selected))
-        self.Edit.set_sensitive(self._can_edit(selected))
-        self.PrintDocument.set_sensitive(self._can_print(selected))
+        self.set_sensitive([self.Receive], self._can_receive(selected))
+        self.set_sensitive([self.Details],
+                           one_item and self._can_show_details(selected))
+        self.set_sensitive([self.Comments],
+                           one_item and self._can_show_comments(selected))
+        self.set_sensitive([self.ChangeDueDate],
+                           one_item and self._can_change_due_date(selected))
+        self.set_sensitive([self.CancelPayment],
+                           one_item and self._can_cancel_payment(selected))
+        self.set_sensitive([self.PrintReceipt],
+                           one_item and self._is_paid(selected))
+        self.set_sensitive([self.SetNotPaid],
+                           one_item and self._is_paid(selected) and
+                           self._can_set_not_paid(selected))
+        self.set_sensitive([self.Edit], self._can_edit(selected))
+        self.set_sensitive([self.PrintDocument], self._can_print(selected))
 
     def _get_status_values(self):
         values = [(v, k) for k, v in Payment.statuses.items()]
@@ -423,9 +474,6 @@ class ReceivableApp(BaseAccountWindow):
     def on_results__selection_changed(self, receivables, selected):
         self._update_widgets()
 
-    def on_results__right_click(self, results, result, event):
-        self.popup.popup(None, None, None, event.button, event.time)
-
     def on_Details__activate(self, button):
         selected = self.results.get_selected_rows()[0]
         self.show_details(selected)
@@ -469,7 +517,7 @@ class ReceivableApp(BaseAccountWindow):
 
     def on_Renegotiate__activate(self, action):
         try:
-            Till.get_current(self.store)
+            Till.get_current(self.store, api.get_current_station(self.store))
         except TillError as e:
             warning(str(e))
             return
@@ -492,7 +540,7 @@ class ReceivableApp(BaseAccountWindow):
 
     def on_Edit__activate(self, action):
         try:
-            Till.get_current(self.store)
+            Till.get_current(self.store, api.get_current_station(self.store))
         except TillError as e:
             warning(str(e))
             return
@@ -512,3 +560,26 @@ class ReceivableApp(BaseAccountWindow):
         report = view.operation.print_(payments)
         if report is not None:
             print_report(report, payments)
+
+    def on_ExportBills__activate(self, action):
+        payments = [v.payment for v in self.results.get_selected_rows()
+                    if v.method.method_name == 'bill']
+        if not payments:
+            warning(_('No bill payments were selected'))
+            return
+
+        filename = save(current_name='CNAB.txt', folder=os.path.expanduser('~/'))
+        if not filename:
+            return
+
+        bank_number = payments[0].method.destination_account.bank.bank_number
+        info = get_bank_info_by_number(bank_number)
+        try:
+            cnab = info.get_cnab(payments)
+        except Exception as e:
+            log.error(''.join(traceback.format_exception(*sys.exc_info())))
+            warning(_('An error ocurred while generating the CNAB'), str(e))
+            return
+
+        with open(filename, 'w') as fh:
+            fh.write(cnab)

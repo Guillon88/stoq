@@ -26,14 +26,17 @@
 import collections
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
-from kiwi.ui.forms import TextField
+from kiwi.python import Settable
+from kiwi.ui.forms import MultiLineField, NumericField, PriceField, TextField
 
 from stoqdrivers.enum import TaxType
 
 from stoqlib.api import api
+from stoqlib.domain.inventory import Inventory
+from stoqlib.domain.person import Branch
 from stoqlib.domain.product import (ProductSupplierInfo, Product,
                                     ProductComponent,
                                     ProductQualityTest, Storable,
@@ -44,6 +47,7 @@ from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.base.messagebar import MessageBar
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.gui.editors.sellableeditor import SellableEditor
+from stoqlib.gui.slaves.imageslave import ImageGallerySlave
 from stoqlib.lib.decorators import cached_property
 from stoqlib.lib.defaults import quantize, MAX_INT
 from stoqlib.lib.message import info
@@ -58,8 +62,8 @@ _ = stoqlib_gettext
 #
 
 class TemporaryProductComponent(object):
-    def __init__(self, product=None, component=None, quantity=Decimal(1),
-                 design_reference=u''):
+    def __init__(self, store, product=None, component=None, quantity=Decimal(1),
+                 design_reference=u'', price=Decimal(0)):
         self.product = product
         self.component = component
         self.quantity = quantity
@@ -75,6 +79,10 @@ class TemporaryProductComponent(object):
             self.category = sellable.get_category_description()
             self.unit = sellable.unit_description
             self.production_cost = self.component.get_production_cost()
+            product_component = self._get_product_component(store)
+            self.price = product_component.price if product_component else price
+        else:
+            self.price = price
 
     def _get_product_component(self, store):
         return store.find(ProductComponent,
@@ -85,7 +93,8 @@ class TemporaryProductComponent(object):
     #
 
     def get_total_production_cost(self):
-        return quantize(self.production_cost * self.quantity)
+        cost = self.price or self.production_cost
+        return quantize(cost * self.quantity)
 
     def delete_product_component(self, store):
         component = self._get_product_component(store)
@@ -100,13 +109,15 @@ class TemporaryProductComponent(object):
             # updating
             component.quantity = self.quantity
             component.design_reference = self.design_reference
+            component.price = self.price
         else:
             # adding
             ProductComponent(product=self.product,
                              component=self.component,
                              quantity=self.quantity,
                              design_reference=self.design_reference,
-                             store=store)
+                             store=store,
+                             price=self.price)
 
 #
 #   Quality Test Editor & Slave
@@ -177,7 +188,7 @@ class ProductSupplierEditor(BaseEditor):
     gladefile = 'ProductSupplierEditor'
 
     proxy_widgets = ('base_cost', 'icms', 'notes', 'lead_time',
-                     'minimum_purchase', 'supplier_code')
+                     'minimum_purchase', 'supplier_code', 'branch_combo')
     confirm_widgets = ['base_cost', 'icms', 'lead_time', 'minimum_purchase',
                        'supplier_code']
 
@@ -190,9 +201,30 @@ class ProductSupplierEditor(BaseEditor):
         self.unit_label.set_text(description)
         self.base_cost.set_digits(sysparam.get_int('COST_PRECISION_DIGITS'))
         self.base_cost.set_adjustment(
-            gtk.Adjustment(lower=0, upper=MAX_INT, step_incr=1))
+            Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1))
         self.minimum_purchase.set_adjustment(
-            gtk.Adjustment(lower=0, upper=MAX_INT, step_incr=1))
+            Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1))
+        self._setup_branch_combo()
+
+    def _setup_branch_combo(self):
+        current_branch = api.get_current_branch(self.store)
+        branches = [current_branch]
+        user = api.get_current_user(self.store)
+        if user.profile.check_app_permission(u'admin'):
+            branches.extend(list(Branch.get_active_remote_branches(self.store, current_branch)))
+        options = [(branch.get_description(), branch) for branch in branches]
+        self.branch_combo.prefill(options)
+        self.branch_combo.set_sensitive(False)
+
+        has_generic_active = self.model.product.is_supplied_by(
+            self.model.supplier, exclude=self.model, branch=None)
+        if self.model.branch is not None or has_generic_active:
+            self.branch_checkbutton.set_active(True)
+            self.branch_combo.set_sensitive(True)
+            if has_generic_active:
+                # There is already a generical supplier info, so this must have a
+                # specific branch
+                self.branch_checkbutton.set_sensitive(False)
 
     #
     # BaseEditor hooks
@@ -236,6 +268,18 @@ class ProductSupplierEditor(BaseEditor):
                 _("This code already exists for this supplier "
                   "on product '%s'") % (desc, ))
 
+    def on_branch_combo__validate(self, entry, value):
+        if self.model.product.is_supplied_by(self.model.supplier, branch=value,
+                                             exclude=self.model):
+            return ValidationError(
+                _("The product is already supplied in this branch"))
+
+    def on_branch_checkbutton__toggled(self, check):
+        active = check.get_active()
+        self.branch_combo.set_sensitive(active)
+        if active is False:
+            self.model.branch = None
+            self.proxy.update('branch')
 
 #
 # Editors
@@ -244,15 +288,20 @@ class ProductSupplierEditor(BaseEditor):
 
 class ProductComponentEditor(BaseEditor):
     gladefile = 'ProductComponentEditor'
-    proxy_widgets = ['quantity', 'design_reference']
+    proxy_widgets = ['quantity', 'design_reference', 'price']
     title = _(u'Product Component')
     model_type = TemporaryProductComponent
 
     def _setup_widgets(self):
+        self.price.hide()
+        self.price_lbl.hide()
         self.component_description.set_text(self.model.description)
         self.quantity.set_adjustment(
-            gtk.Adjustment(lower=0, upper=MAX_INT, step_incr=1,
-                           page_incr=10))
+            Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1,
+                           page_increment=10))
+        self.price.set_adjustment(
+            Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1,
+                           page_increment=10))
         # set a default quantity value for new components
         if not self.model.quantity:
             self.quantity.set_value(1)
@@ -281,10 +330,22 @@ class ProductComponentEditor(BaseEditor):
 
 
 class ProductPackageComponentEditor(ProductComponentEditor):
+    confirm_widgets = ['price']
+
     def setup_proxies(self):
         super(ProductPackageComponentEditor, self).setup_proxies()
         self.design_reference.hide()
         self.design_reference_lbl.hide()
+        self.price.show()
+        self.price_lbl.show()
+
+    #
+    # Kiwi Callbacks
+    #
+
+    def on_price__validate(self, widget, value):
+        if value <= 0:
+            return ValidationError(_("The price must be greater than zero."))
 
 
 class ProductEditor(SellableEditor):
@@ -366,11 +427,20 @@ class ProductEditor(SellableEditor):
             self._disable_child_widgets()
             msg = (_("Some properties of this product have been disabled for "
                      "editing as that should be done on the parent product."))
-            self._add_infobar(msg, gtk.MESSAGE_INFO)
+            self._add_infobar(msg, Gtk.MessageType.INFO)
         elif self.model.product_type == Product.TYPE_GRID:
             msg = (_("This is just a skeleton product responsible for "
                      "creating grid products. Create those on the 'Grid' tab"))
-            self._add_infobar(msg, gtk.MESSAGE_INFO)
+            self._add_infobar(msg, Gtk.MessageType.INFO)
+        if self.model.product_type == Product.TYPE_PACKAGE:
+            # We are building its sale price on Pack content tab, so disable
+            # this the widget and set a simbolic value
+            self.price.set_property('sensitive', False)
+            # FIXME Disable promotional price for now
+            self.sale_price_button.set_property('sensitive', False)
+            msg = (_("The price of this product consists of the sum of "
+                     "its components price on 'Pack content' tab"))
+            self._add_infobar(msg, Gtk.MessageType.INFO)
 
     def get_extra_tabs(self):
         from stoqlib.gui.slaves.productslave import (ProductTaxSlave,
@@ -440,13 +510,17 @@ class ProductEditor(SellableEditor):
             sellable.category = self._template.sellable.category
             sellable.base_price = self._template.sellable.base_price
             sellable.cost = self._template.sellable.cost
+            sellable.default_sale_cfop = self._template.sellable.default_sale_cfop
 
             model.manufacturer = self._template.manufacturer
             model.brand = self._template.brand
+            model.model = self._template.model
             model.family = self._template.family
             model.ncm = self._template.ncm
-            model.icms_template = self._template.icms_template
-            model.ipi_template = self._template.ipi_template
+            model.set_icms_template(self._template._icms_template)
+            model.set_ipi_template(self._template._ipi_template)
+            model.set_pis_template(self._template._pis_template)
+            model.set_cofins_template(self._template._cofins_template)
 
             for product_attr in self._template.attributes:
                 ProductAttribute(store=self.store,
@@ -458,8 +532,8 @@ class ProductEditor(SellableEditor):
                     product=model,
                     supplier=supplier_info.supplier)
         else:
-            sellable.tax_constant_id = sysparam.get_object_id(
-                'DEFAULT_PRODUCT_TAX_CONSTANT')
+            sellable.tax_constant = sysparam.get_object(self.store,
+                                                        'DEFAULT_PRODUCT_TAX_CONSTANT')
             sellable.unit_id = sysparam.get_object_id('SUGGESTED_UNIT')
 
         return model
@@ -518,11 +592,22 @@ class ProductionProductEditor(ProductEditor):
                 (_(u'Quality'), quality_slave),
                 ]
 
+    def setup_widgets(self):
+        super(ProductionProductEditor, self).setup_widgets()
+        self.cost.set_sensitive(not sysparam.get_bool('UPDATE_PRODUCT_COST_ON_COMPONENT_UPDATE'))
+
     def validate_confirm(self):
         if not self._is_valid_cost(self.cost.read()):
             info(self._cost_msg)
             return False
         return True
+
+    def on_component_slave__cost_updated(self, slave, cost):
+        if sysparam.get_bool('UPDATE_PRODUCT_COST_ON_COMPONENT_UPDATE'):
+            # We have to update the sellable directly since kiwi won't do it for
+            # us, since the widget is insensitive
+            self.model.sellable.cost = cost
+            self.sellable_proxy.update('cost')
 
     def on_cost__validate(self, widget, value):
         if value <= 0:
@@ -532,6 +617,7 @@ class ProductionProductEditor(ProductEditor):
 
 
 class ProductStockEditor(BaseEditor):
+    """This is a product editor limitted to editing physical stock information"""
     model_name = _('Product')
     model_type = Product
     gladefile = 'ProductStockEditor'
@@ -550,6 +636,126 @@ class ProductStockEditor(BaseEditor):
 
         # Make everything aligned by pytting notes_lbl on the same size group
         info_slave.left_labels_group.add_widget(details_slave.notes_lbl)
+
+        event_box = Gtk.EventBox()
+        event_box.show()
+        image_gallery_slave = ImageGallerySlave(
+            self.store, self.model.sellable, self.visual_mode)
+        self.notebook.append_page(event_box, Gtk.Label(label=_("Images")))
+        self.attach_slave('images', image_gallery_slave, event_box)
+
+
+class ProductStockQuantityEditor(BaseEditor):
+    """Editor for adjusting the stock quantity of a product
+
+    This editor will set the quantity of a product for a given branch. If the
+    product does not manage stock yet, a storable will be created first and the
+    initial stock be registred.
+
+    If the product is already a storable, an inventory will be created for just
+    this product (so that the original quantity is registred and can be
+    audited), and the quantity will be adjusted. A reason in this case is
+    mandatory
+    """
+    title = _('Adjust stock quantity')
+    model_name = _('Stock')
+    model_type = Settable
+
+    @cached_property()
+    def fields(self):
+        # Check if sellable's unit allow fraction to use decimal places
+        unit = self._product.sellable.unit
+        if unit and unit.allow_fraction:
+            quantity_digits = 3
+        else:
+            quantity_digits = 0
+
+        fields = collections.OrderedDict(
+            quantity=NumericField(_('Quantity'), proxy=True, mandatory=True,
+                                  digits=quantity_digits),
+        )
+        # When creating an inventory, a reason is necessary
+        if self._stock_item:
+            fields['reason'] = MultiLineField(_('Reason'), proxy=True, mandatory=True)
+        else:
+            # Inventories dont do anything with the cost yet. Maybe we should
+            # fix that
+            fields['cost'] = PriceField(_('Cost'), proxy=True, mandatory=True)
+        return fields
+
+    def __init__(self, store, model, branch):
+        self._branch = branch
+        assert self._branch
+        self._product = model
+        # model here is the product, but we will create a settable later
+        if model.storable:
+            # We dont support editing batch products yet.
+            assert not model.storable.is_batch
+            self._stock_item = model.storable.get_stock_item(branch, batch=None)
+        else:
+            self._stock_item = None
+
+        BaseEditor.__init__(self, store=store)
+
+    def create_model(self, store):
+        if self._stock_item:
+            return Settable(quantity=self._stock_item.quantity,
+                            cost=self._stock_item.stock_cost, reason=u'')
+        else:
+            return Settable(quantity=Decimal(0), cost=self._product.sellable.cost)
+
+    def _register_inventory(self):
+        query = Storable.id == self._product.id
+        inventory = Inventory.create_inventory(self.store, branch=self._branch,
+                                               station=api.get_current_station(self.store),
+                                               responsible=api.get_current_user(self.store),
+                                               query=query)
+        # At this point, the inventory should have only one item.
+        item = inventory.get_items().one()
+        item.counted_quantity = item.actual_quantity = self.model.quantity
+        # item.product_cost = self.model.cost
+        item.reason = self.model.reason
+        item.adjust(user=api.get_current_user(self.store), invoice_number=None)
+        inventory.close()
+
+    def _register_initial_stock(self):
+        if not self._product.storable:
+            self._product.set_as_storable_product(self._branch, api.get_current_user(self.store),
+                                                  self.model.quantity, self.model.cost)
+        elif self.model.quantity:
+            self._product.storable.register_initial_stock(self.model.quantity,
+                                                          self._branch,
+                                                          self.model.cost,
+                                                          api.get_current_user(self.store))
+
+    def on_confirm(self):
+        if not self._stock_item:
+            # If the item does not manage stock, we will make it a managed
+            # storable and register the initial stock
+            return self._register_initial_stock()
+        else:
+            # If the product already manages stock, this will be an easy way for
+            # the user to fix the actual quantity (like a mini inventory).
+            # XXX: Make sure that the user has access to the inventory app
+            # before calling this.
+            return self._register_inventory()
+
+    #
+    # Kiwi Callbacks
+    #
+
+    def on_quantity__validate(self, widget, new_quantity):
+        # Never let the user set negative values
+        if new_quantity < 0:
+            return ValidationError(_("This value cannot be negative"))
+
+        # In Synchronized mode dont let the user decrease the stock from other
+        # branches
+        if (api.sysparam.get_bool('SYNCHRONIZED_MODE')
+                and self._branch != api.get_current_branch(self.store)
+                and new_quantity < self.model.quantity):
+            return ValidationError(_("You cannot decrease stock from other "
+                                     "branches"))
 
 
 class ProductManufacturerEditor(BaseEditor):

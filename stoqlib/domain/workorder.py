@@ -35,25 +35,26 @@ from storm.info import ClassAlias
 from storm.references import Reference, ReferenceSet
 from zope.interface import implementer
 
-from stoqlib.database.expr import Field, NullIf, Concat
+from stoqlib.database.expr import Field, NullIf, Concat, Round
 from stoqlib.database.properties import (IntCol, DateTimeCol, UnicodeCol,
                                          PriceCol, DecimalCol, QuantityCol,
                                          IdentifierCol, IdCol, BoolCol, EnumCol)
-from stoqlib.database.runtime import get_current_branch, get_current_user
 from stoqlib.database.viewable import Viewable
 from stoqlib.exceptions import InvalidStatus, NeedReason
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
 from stoqlib.domain.events import (SaleStatusChangedEvent,
                                    SaleItemBeforeDecreaseStockEvent,
                                    SaleItemBeforeIncreaseStockEvent,
-                                   SaleItemAfterSetBatchesEvent)
-from stoqlib.domain.interfaces import IDescribable, IContainer
+                                   SaleItemAfterSetBatchesEvent,
+                                   WorkOrderStatusChangedEvent)
+from stoqlib.domain.interfaces import IDescribable
 from stoqlib.domain.person import (Branch, Client, Person, SalesPerson,
                                    Company, LoginUser, Employee)
 from stoqlib.domain.product import Product, StockTransactionHistory
 from stoqlib.domain.sale import Sale
 from stoqlib.domain.sellable import Sellable
 from stoqlib.lib.dateutils import localnow, localtoday
+from stoqlib.lib.defaults import DECIMAL_PRECISION
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
@@ -99,7 +100,7 @@ class WorkOrderPackageItem(Domain):
     #  Public API
     #
 
-    def send(self):
+    def send(self, user: LoginUser):
         """Send the item to the :attr:`WorkOrderPackage.destination_branch`
 
         This will mark the package as sent. Note that it's only possible
@@ -112,12 +113,12 @@ class WorkOrderPackageItem(Domain):
             old_execution_branch = self.order.execution_branch
             self.order.execution_branch = self.package.destination_branch
             WorkOrderHistory.add_entry(
-                self.store, self.order, _(u"Execution branch"),
+                self.store, self.order, _(u"Execution branch"), user=user,
                 old_value=(old_execution_branch and
                            old_execution_branch.get_description()),
                 new_value=self.package.destination_branch.get_description())
 
-    def receive(self):
+    def receive(self, user: LoginUser):
         """Receive this item on the :attr:`WorkOrderPackage.destination_branch`
 
         This will mark the package as received in the branch
@@ -137,7 +138,7 @@ class WorkOrderPackageItem(Domain):
         # The order is in destination branch now
         self.order.current_branch = self.package.destination_branch
         WorkOrderHistory.add_entry(
-            self.store, self.order, _(u"Current branch"),
+            self.store, self.order, _(u"Current branch"), user=user,
             old_value=_(u"Package %s") % self.package.identifier,
             new_value=self.package.destination_branch.get_description())
 
@@ -220,7 +221,7 @@ class WorkOrderPackage(Domain):
     #  Public API
     #
 
-    def add_order(self, workorder, notes=None):
+    def add_order(self, workorder, user: LoginUser, notes=None):
         """Add a |workorder| on this package
 
         Note that this will set the :attr:`WorkOrder.current_branch`
@@ -242,7 +243,7 @@ class WorkOrderPackage(Domain):
         # The order is going to leave the current_branch
         workorder.current_branch = None
         WorkOrderHistory.add_entry(
-            self.store, workorder, _(u"Current branch"),
+            self.store, workorder, _(u"Current branch"), user=user,
             old_value=self.source_branch.get_description(),
             new_value=_(u"Package %s") % self.identifier,
             notes=notes)
@@ -258,7 +259,7 @@ class WorkOrderPackage(Domain):
         """If we can receive this package in the :attr:`.destination_branch`"""
         return self.status == self.STATUS_SENT
 
-    def send(self):
+    def send(self, user: LoginUser):
         """Send the package to the :attr:`.destination_branch`
 
         This will mark the package as sent. Note that it's only possible
@@ -269,24 +270,17 @@ class WorkOrderPackage(Domain):
         """
         assert self.can_send()
 
-        if self.source_branch != get_current_branch(self.store):
-            fmt = _("This package's source branch is %s and you are in %s. "
-                    "It's not possible to send a package outside the "
-                    "source branch")
-            raise ValueError(fmt % (self.source_branch,
-                                    get_current_branch(self.store)))
-
         package_items = list(self.package_items)
         if not len(package_items):
             raise ValueError(_("There're no orders to send"))
 
         for package_item in package_items:
-            package_item.send()
+            package_item.send(user)
 
         self.send_date = localnow()
         self.status = self.STATUS_SENT
 
-    def receive(self):
+    def receive(self, user: LoginUser):
         """Receive the package on the :attr:`.destination_branch`
 
         This will mark the package as received in the branch
@@ -298,15 +292,8 @@ class WorkOrderPackage(Domain):
         """
         assert self.can_receive()
 
-        if self.destination_branch != get_current_branch(self.store):
-            fmt = _("This package's destination branch is %s and you are in %s. "
-                    "It's not possible to receive a package outside the "
-                    "destination branch")
-            raise ValueError(fmt % (self.destination_branch,
-                                    get_current_branch(self.store)))
-
         for package_item in self.package_items:
-            package_item.receive()
+            package_item.receive(user)
 
         self.receive_date = localnow()
         self.status = self.STATUS_RECEIVED
@@ -380,6 +367,9 @@ class WorkOrderItem(Domain):
     #: |workorder| this item belongs
     order = Reference(order_id, 'WorkOrder.id')
 
+    purchase_item_id = IdCol()
+    purchase_item = Reference(purchase_item_id, 'PurchaseItem.id')
+
     sale_item_id = IdCol()
     #: the corresponding |saleitem| for this item
     sale_item = Reference(sale_item_id, 'SaleItem.id')
@@ -396,7 +386,7 @@ class WorkOrderItem(Domain):
     #  Public API
     #
 
-    def reserve(self, quantity):
+    def reserve(self, user: LoginUser, quantity):
         """Reserve some quantity of this item
 
         Reserving some quantity of items means decreasing them from
@@ -417,7 +407,7 @@ class WorkOrderItem(Domain):
         if storable:
             storable.decrease_stock(
                 quantity, self.order.branch,
-                StockTransactionHistory.TYPE_WORK_ORDER_USED, self.id,
+                StockTransactionHistory.TYPE_WORK_ORDER_USED, self.id, user,
                 batch=self.batch)
 
         self.quantity_decreased += quantity
@@ -425,7 +415,7 @@ class WorkOrderItem(Domain):
             # Keep the sale_item in sync, so the stock is not increased twice
             self.sale_item.quantity_decreased += quantity
 
-    def return_to_stock(self, quantity):
+    def return_to_stock(self, user: LoginUser, quantity):
         """Return some quantity of this item to stock
 
         Returning some quantity of items to the stock means increasing
@@ -446,7 +436,7 @@ class WorkOrderItem(Domain):
         if storable:
             storable.increase_stock(
                 quantity, self.order.branch,
-                StockTransactionHistory.TYPE_WORK_ORDER_RETURN_TO_STOCK, self.id,
+                StockTransactionHistory.TYPE_WORK_ORDER_RETURN_TO_STOCK, self.id, user,
                 batch=self.batch)
 
         self.quantity_decreased -= quantity
@@ -529,8 +519,9 @@ class WorkOrderItem(Domain):
                 sale_item=sale_item)
 
 
-@implementer(IContainer)
-class WorkOrder(Domain):
+# remove_item takes an extra argument so we cant implement IContainer
+# @implementer(IContainer)
+class WorkOrder(IdentifiableDomain):
     """Represents a work order
 
     Normally, this is a maintenance task, like:
@@ -644,8 +635,20 @@ class WorkOrder(Domain):
     #: date this work was approved (set by :obj:`.approve`)
     approve_date = DateTimeCol(default=None)
 
+    #: date this work was set to waiting
+    wait_date = DateTimeCol(default=None)
+
+    #: date this work was set to in progress
+    in_progress_date = DateTimeCol(default=None)
+
     #: date this work was finished (set by :obj:`.finish`)
     finish_date = DateTimeCol(default=None)
+
+    #: the date the client is informed
+    client_informed_date = DateTimeCol(default=None)
+
+    #: date this work was set to delivered
+    deliver_date = DateTimeCol(default=None)
 
     #: if the order was rejected by the other |branch|, e.g. when one
     #: branch sends the order in a |workorderpackage| to another branch
@@ -655,6 +658,10 @@ class WorkOrder(Domain):
     branch_id = IdCol()
     #: the |branch| where this order was created and responsible for it
     branch = Reference(branch_id, 'Branch.id')
+
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
 
     current_branch_id = IdCol()
     #: the actual branch where the order is. Can differ from
@@ -674,6 +681,10 @@ class WorkOrder(Domain):
     execution_responsible_id = IdCol(default=None)
     #: the |employee| responsible for the execution of the work
     execution_responsible = Reference(execution_responsible_id, 'Employee.id')
+
+    check_responsible_id = IdCol(default=None)
+    #: the |employee| that checked the work order for quality assurance
+    check_responsible = Reference(check_responsible_id, 'Employee.id')
 
     client_id = IdCol(default=None)
     #: the |client|, owner of the equipment
@@ -715,10 +726,10 @@ class WorkOrder(Domain):
     def get_items(self):
         return self.order_items
 
-    def remove_item(self, item):
+    def remove_item(self, item, user: LoginUser):
         assert item.order is self
         if item.quantity_decreased > 0:
-            item.return_to_stock(item.quantity_decreased)
+            item.return_to_stock(user, item.quantity_decreased)
         item.order = None
         self.store.maybe_remove(item)
 
@@ -735,8 +746,9 @@ class WorkOrder(Domain):
 
         """
         items = self.order_items.find()
-        return (items.sum(WorkOrderItem.price * WorkOrderItem.quantity) or
-                currency(0))
+        return (items.sum(Round(WorkOrderItem.price * WorkOrderItem.quantity,
+                                DECIMAL_PRECISION))
+                or currency(0))
 
     def add_sellable(self, sellable, price=None, quantity=1, batch=None):
         """Adds a sellable to this work order
@@ -833,6 +845,9 @@ class WorkOrder(Domain):
         today = localtoday().date()
         return self.estimated_finish.date() < today
 
+    def is_informed(self):
+        return bool(self.client_informed_date)
+
     def can_cancel(self, ignore_sale=False):
         """Checks if this work order can be cancelled
 
@@ -871,7 +886,7 @@ class WorkOrder(Domain):
             return False
         return self.status == self.STATUS_WORK_IN_PROGRESS
 
-    def can_work(self):
+    def can_work(self, current_branch: Branch):
         """Checks if this order's task can be worked
 
         Note that the work needs to be approved before it's task
@@ -881,8 +896,7 @@ class WorkOrder(Domain):
         """
         if self.is_rejected or self.is_in_transport():
             return False
-        # FIXME: We should not be calling get_current_branch on domain
-        if self.current_branch != get_current_branch(self.store):
+        if self.current_branch != current_branch:
             return False
         return self.status == self.STATUS_WORK_WAITING
 
@@ -893,7 +907,7 @@ class WorkOrder(Domain):
         """
         return not self.is_finished()
 
-    def can_finish(self):
+    def can_finish(self, current_branch: Branch):
         """Checks if this work order can finish
 
         Note that the work needs to be started before you can finish.
@@ -902,13 +916,11 @@ class WorkOrder(Domain):
         """
         if self.is_rejected or self.is_in_transport():
             return False
-        # FIXME: We should not be calling get_current_branch on domain
-        if self.current_branch != get_current_branch(self.store):
+        if self.current_branch != current_branch:
             return False
-        return self.status in [self.STATUS_WORK_IN_PROGRESS,
-                               self.STATUS_WORK_WAITING]
+        return self.status in [self.STATUS_WORK_IN_PROGRESS]
 
-    def can_close(self):
+    def can_close(self, current_branch: Branch):
         """Checks if this work order can delivery
 
         Note that the work needs to be finished before you can deliver.
@@ -926,8 +938,7 @@ class WorkOrder(Domain):
             return False
         if self.is_rejected or self.is_in_transport():
             return False
-        # FIXME: We should not be calling get_current_branch on domain
-        if self.current_branch != get_current_branch(self.store):
+        if self.current_branch != current_branch:
             return False
         return self.status == self.STATUS_WORK_FINISHED
 
@@ -948,8 +959,7 @@ class WorkOrder(Domain):
         if self.is_rejected or self.is_in_transport():
             return False
 
-        return self.status in [self.STATUS_WORK_WAITING,
-                               self.STATUS_WORK_IN_PROGRESS,
+        return self.status in [self.STATUS_WORK_IN_PROGRESS,
                                self.STATUS_WORK_FINISHED]
 
     def can_undo_rejection(self):
@@ -959,7 +969,21 @@ class WorkOrder(Domain):
         """
         return self.is_rejected and not self.is_in_transport()
 
-    def reject(self, reason):
+    def can_inform_client(self):
+        """Checks if the object can be set as informed
+
+        :returns: ``True`` if can, ``False``otherwis:
+        """
+        return not self.client_informed_date and self.status == self.STATUS_WORK_FINISHED
+
+    def can_check_order(self):
+        """Check if the object can be set as checked
+
+        :returns: ``True``if can, ``False`` otherwise
+        """
+        return not self.check_responsible and self.status == self.STATUS_WORK_FINISHED
+
+    def reject(self, user: LoginUser, reason):
         """Setter for the :obj:`.is_rejected` flag
 
         When setting the is_rejected flag to ``True``,
@@ -973,10 +997,10 @@ class WorkOrder(Domain):
 
         self.is_rejected = True
         WorkOrderHistory.add_entry(
-            self.store, self, what=_(u"Rejected"),
+            self.store, self, what=_(u"Rejected"), user=user,
             old_value=_(u"No"), new_value=_(u"Yes"), notes=reason)
 
-    def undo_rejection(self, reason):
+    def undo_rejection(self, user: LoginUser, reason):
         """Unsetter for the :obj:`.is_rejected` flag
 
         When setting the is_rejected flag to ``False``,
@@ -991,10 +1015,10 @@ class WorkOrder(Domain):
 
         self.is_rejected = False
         WorkOrderHistory.add_entry(
-            self.store, self, what=_(u"Rejected"),
+            self.store, self, what=_(u"Rejected"), user=user,
             old_value=_(u"Yes"), new_value=_(u"No"), notes=reason)
 
-    def cancel(self, reason=None, ignore_sale=False):
+    def cancel(self, user: LoginUser, reason=None, ignore_sale=False):
         """Cancels this work order
 
         Cancel the work order, probably because the |client|
@@ -1010,11 +1034,11 @@ class WorkOrder(Domain):
 
         for item in self.order_items:
             if item.quantity_decreased > 0:
-                item.return_to_stock(item.quantity_decreased)
+                item.return_to_stock(user, item.quantity_decreased)
 
-        self._change_status(self.STATUS_CANCELLED, notes=reason)
+        self._change_status(self.STATUS_CANCELLED, user=user, notes=reason)
 
-    def approve(self):
+    def approve(self, user: LoginUser):
         """Approves this work order
 
         Approving means that the |client| has accepted the
@@ -1023,11 +1047,12 @@ class WorkOrder(Domain):
         assert self.can_approve()
         self.approve_date = localnow()
         WorkOrderHistory.add_entry(
-            self.store, self, what=_(u"Approved"),
+            self.store, self, what=_(u"Approved"), user=user,
             old_value=_(u"No"), new_value=_(u"Yes"))
-        self._change_status(self.STATUS_WORK_WAITING)
+        self.wait_date = localnow()
+        self._change_status(self.STATUS_WORK_WAITING, user)
 
-    def work(self):
+    def work(self, current_branch: Branch, user: LoginUser):
         """Set this orders state as "work in progress"
 
         The :obj:`.execution_responsible` started working on
@@ -1038,10 +1063,11 @@ class WorkOrder(Domain):
         :meth:`.pause` to set the state properly and then call this
         again when the work can continue.
         """
-        assert self.can_work()
-        self._change_status(self.STATUS_WORK_IN_PROGRESS)
+        assert self.can_work(current_branch)
+        self.in_progress_date = localnow()
+        self._change_status(self.STATUS_WORK_IN_PROGRESS, user)
 
-    def pause(self, reason):
+    def pause(self, user: LoginUser, reason):
         """Set this orders state as "waiting"
 
         This is used to indicate that the work has stopped for a while
@@ -1054,9 +1080,9 @@ class WorkOrder(Domain):
         :param reason: the reason explaining why this order was paused
         """
         assert self.can_pause()
-        self._change_status(self.STATUS_WORK_WAITING, notes=reason)
+        self._change_status(self.STATUS_WORK_WAITING, user, notes=reason)
 
-    def finish(self):
+    def finish(self, current_branch: Branch, user: LoginUser):
         """Finishes this work order's task
 
         The :obj:`.execution_responsible` has finished working on
@@ -1064,16 +1090,34 @@ class WorkOrder(Domain):
         back to the |client| and create a |sale| so we are able
         to :meth:`deliver <.deliver>` this order.
         """
-        assert self.can_finish()
+        assert self.can_finish(current_branch)
         self.finish_date = localnow()
         # Make sure we are not overwriting this value, since we can reopen the
         # order and finish again
         if not self.execution_branch:
-            branch = get_current_branch(self.store)
-            self.execution_branch = branch
-        self._change_status(self.STATUS_WORK_FINISHED)
+            self.execution_branch = current_branch
+        self._change_status(self.STATUS_WORK_FINISHED, user)
 
-    def reopen(self, reason):
+    def inform_client(self, user: LoginUser, notes=''):
+        assert self.is_finished()
+        self.client_informed_date = localnow()
+        WorkOrderHistory.add_entry(self.store, self, what=_("Client informed"), user=user,
+                                   old_value=_("No"), new_value=_("Yes"), notes=notes)
+
+    def unset_client_informed(self, user: LoginUser, reason):
+        informed_date = self.client_informed_date
+        assert informed_date, informed_date
+        self.client_informed_date = None
+        WorkOrderHistory.add_entry(self.store, self, what=_("Client informed"), user=user,
+                                   old_value=_("Yes"), new_value=_("No"), notes=reason)
+
+    def check_order(self, user: LoginUser, responsible: Employee, notes=""):
+        assert responsible
+        self.check_responsible = responsible
+        WorkOrderHistory.add_entry(self.store, self, what=_("Order checked"), user=user,
+                                   old_value=_("No"), new_value=_("Yes"), notes=notes)
+
+    def reopen(self, user: LoginUser, reason):
         """Reopens the work order
 
         This is useful if the order was finished but needs to be reopened
@@ -1084,19 +1128,20 @@ class WorkOrder(Domain):
         """
         assert self.can_reopen()
         self.finish_date = None
-        self._change_status(self.STATUS_WORK_IN_PROGRESS, notes=reason)
+        self._change_status(self.STATUS_WORK_IN_PROGRESS, user, notes=reason)
 
-    def close(self):
+    def close(self, current_branch: Branch, user: LoginUser):
         """Delivers this work order
 
         This order's task is done, the |client| got the equipment
         back and a |sale| was created for the |workorderitems|
         Nothing more needs to be done.
         """
-        assert self.can_close()
-        self._change_status(self.STATUS_DELIVERED)
+        assert self.can_close(current_branch)
+        self.deliver_date = localnow()
+        self._change_status(self.STATUS_DELIVERED, user)
 
-    def change_status(self, new_status, reason=None):
+    def change_status(self, new_status, current_branch: Branch, user: LoginUser, reason=None):
         """
         Change the status of this work order
 
@@ -1119,7 +1164,12 @@ class WorkOrder(Domain):
 
         old_index = status_order.index(self.status)
         new_index = status_order.index(new_status)
-        direction = cmp(new_index, old_index)
+        if new_index == old_index:
+            direction = 0
+        elif new_index < old_index:
+            direction = -1
+        elif new_index > old_index:
+            direction = 1
 
         next_status = self.status
         while True:
@@ -1130,28 +1180,28 @@ class WorkOrder(Domain):
             if next_status == WorkOrder.STATUS_WORK_IN_PROGRESS:
                 if self.can_reopen():
                     if reason is not None:
-                        self.reopen(reason=reason)
+                        self.reopen(user, reason=reason)
                     else:
                         raise NeedReason(_("A reason is needed to reopen "
                                            "the work order"))
-                elif self.can_work():
-                    self.work()
+                elif self.can_work(current_branch):
+                    self.work(current_branch, user)
                 else:
                     raise InvalidStatus(
                         _("This work order cannot be worked on"))
 
             if next_status == WorkOrder.STATUS_WORK_FINISHED:
-                if not self.can_finish():
+                if not self.can_finish(current_branch):
                     raise InvalidStatus(
                         _('This work order cannot be finished'))
-                self.finish()
+                self.finish(current_branch, user)
 
             if next_status == WorkOrder.STATUS_WORK_WAITING:
                 if self.can_approve():
-                    self.approve()
+                    self.approve(user)
                 elif self.can_pause():
                     if reason is not None:
-                        self.pause(reason=reason)
+                        self.pause(user, reason=reason)
                     else:
                         raise NeedReason(_("A reason is needed to pause "
                                            "the work order"))
@@ -1170,10 +1220,15 @@ class WorkOrder(Domain):
     #  Private
     #
 
-    def _change_status(self, new_status, notes=None):
+    def _change_status(self, new_status, user: LoginUser, notes=None):
+        self.store.savepoint('before_change_status')
         old_status = self.status
         self.status = new_status
-        WorkOrderHistory.add_entry(self.store, self, what=_(u"Status"),
+        if WorkOrderStatusChangedEvent.emit(self, old_status) is False:
+            self.store.rollback_to_savepoint('before_change_status')
+            return
+
+        WorkOrderHistory.add_entry(self.store, self, what=_(u"Status"), user=user,
                                    old_value=self.statuses[old_status],
                                    new_value=self.statuses[new_status],
                                    notes=notes)
@@ -1198,7 +1253,7 @@ class WorkOrder(Domain):
 
     @SaleStatusChangedEvent.connect
     @classmethod
-    def _on_sale_status_changed(cls, sale, old_status):
+    def _on_sale_status_changed(cls, sale, old_status, user: LoginUser):
         if sale.status == Sale.STATUS_CANCELLED:
             for self in cls.find_by_sale(sale.store, sale):
                 #FIXME: this is sort of hack, currently can not cancel a
@@ -1206,7 +1261,7 @@ class WorkOrder(Domain):
                 if self.is_finished():
                     self.reopen(reason=_(u"Reopening work order to "
                                          "cancel the sale"))
-                self.cancel(reason=_(u"The sale was cancelled"),
+                self.cancel(user, reason=_(u"The sale was cancelled"),
                             ignore_sale=True)
 
 
@@ -1251,7 +1306,7 @@ class WorkOrderHistory(Domain):
     #
 
     @classmethod
-    def add_entry(cls, store, workorder, what,
+    def add_entry(cls, store, workorder, what, user: LoginUser,
                   old_value=None, new_value=None, notes=None):
         """Add an entry to the history
 
@@ -1265,7 +1320,6 @@ class WorkOrderHistory(Domain):
             :attr:`.new_value` for more information
         :returns: the newly created :class:`WorkOrderHistory`
         """
-        user = get_current_user(store)
         return cls(store=store, work_order=workorder, user=user, what=what,
                    old_value=old_value, new_value=new_value, notes=notes)
 
@@ -1274,7 +1328,9 @@ _WorkOrderItemsSummary = Alias(Select(
     columns=[
         WorkOrderItem.order_id,
         Alias(Sum(WorkOrderItem.quantity), 'quantity'),
-        Alias(Sum(WorkOrderItem.quantity * WorkOrderItem.price), 'total')],
+        Alias(Sum(Round(WorkOrderItem.quantity * WorkOrderItem.price,
+                        DECIMAL_PRECISION)),
+              'total')],
     tables=[WorkOrderItem],
     group_by=[WorkOrderItem.order_id]),
     '_work_order_items')

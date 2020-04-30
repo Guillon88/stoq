@@ -24,7 +24,7 @@
 
 import mock
 
-from stoq.gui.launcher import LauncherApp, COL_APP
+from stoq.gui.launcher import LauncherApp
 from stoq.gui.test.baseguitest import BaseGUITest
 
 
@@ -32,6 +32,12 @@ class TestLauncher(BaseGUITest):
     def test_initial(self):
         app = self.create_app(LauncherApp, u'launcher')
         self.check_app(app, u'launcher')
+
+    def test_initial_work_orders(self):
+        with self.user_setting({'launcher-screen': 'my-work-orders'}):
+            app = self.create_app(LauncherApp, u'launcher')
+            self.check_app(app, u'launcher-work-orders')
+        self.window.hide_app(empty=True)
 
     def test_open_admin(self):
         self._test_open_app('admin')
@@ -78,14 +84,20 @@ class TestLauncher(BaseGUITest):
     def _test_open_app(self, app_name):
         app = self.create_app(LauncherApp, u'launcher')
         emitname = 'stoq.gui.shell.shellwindow.StartApplicationEvent.emit'
-        for row in app.model:
-            if row[COL_APP].name == app_name:
-                with mock.patch(emitname) as emit:
-                    app.iconview.item_activated(row.path)
-                    self.check_app(app, u'launcher-app-' + app_name)
-                break
-        else:
-            raise AssertionError
+        found = False
+        for section in app.app_grid.get_children():
+            for child in section.grid.get_children():
+                if child.app.name == app_name:
+                    with mock.patch(emitname) as emit:
+                        child.activate()
+                        self.check_app(app, u'launcher-app-' + app_name)
+                    found = True
+                    break
 
+        assert found, 'App %s not found' % app_name
         emit.assert_called_once_with(self.window.current_app.app_name,
                                      self.window.current_app)
+
+        # Deactivate the app to let it clean up what's necessary
+        self.window.hide_app(empty=True)
+        self.window.close()

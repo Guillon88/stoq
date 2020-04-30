@@ -29,9 +29,6 @@ import json
 import logging
 import os
 
-from kiwi.component import get_utility
-
-from stoqlib.lib.interfaces import IStoqConfig
 from stoqlib.lib.osutils import get_application_dir
 
 log = logging.getLogger(__name__)
@@ -40,9 +37,7 @@ log = logging.getLogger(__name__)
 def _decode_list(data):
     rv = []
     for item in data:
-        if isinstance(item, unicode):
-            item = item.encode('utf-8')
-        elif isinstance(item, list):
+        if isinstance(item, list):
             item = _decode_list(item)
         elif isinstance(item, dict):
             item = _decode_dict(item)
@@ -53,11 +48,7 @@ def _decode_list(data):
 def _decode_dict(data):
     rv = {}
     for key, value in data.items():
-        if isinstance(key, unicode):
-            key = key.encode('utf-8')
-        if isinstance(value, unicode):
-            value = value.encode('utf-8')
-        elif isinstance(value, list):
+        if isinstance(value, list):
             value = _decode_list(value)
         elif isinstance(value, dict):
             value = _decode_dict(value)
@@ -76,24 +67,29 @@ def _encode_object(obj):
         'is not JSON serializable' % (type(obj), obj))
 
 
+def _fix_name(name):
+    return name.replace('_', '-')
+
+
 class UserSettings(object):
     domain = 'stoq'
 
-    def __init__(self):
+    def __init__(self, filename=None):
         self._root = {}
-        self._migrated = False
-        self._read()
+        self._read(filename)
 
     def set(self, name, value):
-        name = name.replace('_', '-')
-        self._root[name.encode('utf-8')] = value
+        self._root[_fix_name(name)] = value
 
     def get(self, name, default=None):
+        name = _fix_name(name)
         if not name in self._root:
             self.set(name, default)
-        return self._root[name]
+        value = self._root[name]
+        return value
 
     def remove(self, name):
+        name = _fix_name(name)
         if name in self._root:
             del self._root[name]
 
@@ -106,7 +102,9 @@ class UserSettings(object):
     def flush(self):
         data = json.dumps(self._root,
                           indent=2,
-                          sort_keys=True,
+                          # FIXME python3: Sorting is failing because we
+                          # have some None values in the dict
+                          # sort_keys=True,
                           default=_encode_object)
         self._write(data)
 
@@ -116,8 +114,8 @@ class UserSettings(object):
 
     # Private
 
-    def _read(self):
-        filename = self.get_filename()
+    def _read(self, filename):
+        filename = filename or self.get_filename()
         try:
             fd = open(filename)
         except IOError as e:
@@ -131,9 +129,6 @@ class UserSettings(object):
             self._root = json.loads(data, object_hook=_decode_dict)
         except ValueError:
             self._root = {}
-
-        # FIXME: should be loaded
-        self._migrated = True
 
     def _write(self, data):
         filename = self.get_filename()
@@ -150,42 +145,6 @@ class UserSettings(object):
                 return
         fd.close()
 
-    def migrate(self):
-        if self._migrated:
-            return
-        log.info("Migrating settings from Stoq.conf")
-
-        # Migrate from old configuration settings
-        try:
-            config = get_utility(IStoqConfig)
-        except NotImplementedError:
-            # For unittests, migrating jenkins from old to new settings
-            return
-
-        self.set('hide-demo-warning',
-                 config.get('UI', 'hide_demo_warning') == 'True')
-
-        width = int(config.get('Launcher', 'window_width') or -1)
-        height = int(config.get('Launcher', 'window_height') or -1)
-        x = int(config.get('Launcher', 'window_x') or -1)
-        y = int(config.get('Launcher', 'window_y') or -1)
-        self.set('launcher-geometry',
-                 dict(width=width, height=height, x=x, y=y))
-
-        self.set('last-version-check',
-                 config.get('General', 'last-version-check'))
-
-        self.set('latest-version',
-                 config.get('General', 'latest-version'))
-
-        self.set('show-welcome-dialog',
-                 config.get('General', 'show_welcome_dialog') != 'False')
-
-        d = {}
-        for k, v in config.items('Shortcuts'):
-            d[k] = v
-        self.set('shortcuts', d)
-        self._migrated = True
 
 _settings = None
 
@@ -195,6 +154,7 @@ def get_settings():
     if _settings is None:
         _settings = UserSettings()
     return _settings
+
 
 if __name__ == '__main__':  # pragma nocover
     s = UserSettings()

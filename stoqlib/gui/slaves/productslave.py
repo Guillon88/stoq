@@ -23,16 +23,18 @@
 ##
 """ Slaves for products """
 
-import collections
 from decimal import Decimal
+import collections
+import re
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
 from kiwi.enums import ListType
 from kiwi.ui.objectlist import Column, SummaryLabel
 from kiwi.ui.widgets.combo import ProxyComboBox
-from storm.expr import Eq, And
+from kiwi.utils import gsignal
+from storm.expr import Eq, And, Or
 
 from stoqlib.api import api
 from stoqlib.domain.person import Supplier
@@ -88,9 +90,9 @@ class ProductAttributeSlave(BaseEditorSlave):
         if not attr.is_active:
             # Do not attach the widget if the attribute is inactive
             return
-        widget = gtk.CheckButton(label=attr.description)
+        widget = Gtk.CheckButton(label=attr.description)
         widget.set_sensitive(attr.has_active_options())
-        self.main_box.pack_start(widget, expand=False)
+        self.main_box.pack_start(widget, False, True, 0)
         widget.show()
         self._widgets[widget] = attr
 
@@ -99,14 +101,16 @@ class ProductAttributeSlave(BaseEditorSlave):
 
     def get_selected_attributes(self):
         active_check_box = []
-        for widget, value in self._widgets.iteritems():
+        for widget, value in self._widgets.items():
             if widget.get_active():
                 active_check_box.append(value)
         return active_check_box
 
     def _refresh_attributes(self):
         if self._create_attribute_box is not None:
-            self.main_box.remove(self._create_attribute_box)
+            parent = self._create_attribute_box.get_parent()
+            if parent is not None:
+                parent.remove(self._create_attribute_box)
             self._create_attribute_box.destroy()
 
         for check_box in self._widgets.keys():
@@ -122,13 +126,14 @@ class ProductAttributeSlave(BaseEditorSlave):
         for attr in group.attributes:
             self._add_attribute(attr)
 
-        self._create_attribute_box = gtk.HBox()
-        btn = gtk.Button(_("Add a new attribute"))
+        self._create_attribute_box = Gtk.HBox()
+        btn = Gtk.Button.new_with_label(_("Add a new attribute"))
         btn.connect('clicked', self._on_add_new_attribute_btn__clicked)
-        self._create_attribute_box.pack_start(btn, expand=False)
-        self._create_attribute_box.pack_start(gtk.Label(), expand=True)
+        self._create_attribute_box.pack_start(btn, False, True, 0)
+        label = Gtk.Label()
+        self._create_attribute_box.pack_start(label, True, True, 0)
         self._create_attribute_box.show_all()
-        self.main_box.pack_start(self._create_attribute_box, expand=False)
+        self.main_box.pack_start(self._create_attribute_box, False, True, 0)
 
     #
     # Kiwi Callbacks
@@ -159,7 +164,7 @@ class ProductGridSlave(BaseEditorSlave):
         BaseEditorSlave.__init__(self, store, model, visual_mode)
 
     def _setup_widgets(self):
-        self.attr_table.resize(len(self._attr_list), 2)
+        self.attr_table.resize((len(self._attr_list) / 3) + 1, 6)
         for pos, attribute in enumerate(self._attr_list):
             self._add_options(attribute, pos)
         self.add_product_button.set_sensitive(False)
@@ -168,12 +173,18 @@ class ProductGridSlave(BaseEditorSlave):
 
     def _add_options(self, attr, pos):
         combo = ProxyComboBox()
-        label = gtk.Label(attr.attribute.description)
+        label = Gtk.Label(label=attr.attribute.description + u':')
+        label.set_alignment(xalign=1, yalign=0.5)
 
         # This dictionary is populated with the purpose of tests
         self._widgets[attr.attribute.description] = combo
-        self.attr_table.attach(label, 0, 1, pos, pos + 1, 0, 0, 0, 0)
-        self.attr_table.attach(combo, 1, 2, pos, pos + 1, 0, gtk.EXPAND | gtk.FILL, 0, 0)
+        # Use 3 labels per row
+        row_pos = pos / 3
+        col_pos = 2 * (pos % 3)
+        self.attr_table.attach(label, col_pos, col_pos + 1, row_pos, row_pos + 1,
+                               Gtk.AttachOptions.EXPAND | Gtk.AttachOptions.FILL, 0, 0, 0)
+        self.attr_table.attach(combo, col_pos + 1, col_pos + 2, row_pos, row_pos + 1,
+                               Gtk.AttachOptions.EXPAND | Gtk.AttachOptions.FILL, 0, 0, 0)
         self.attr_table.show_all()
         self._fill_options(combo, attr)
         combo.connect('changed', self._on_combo_selection__changed)
@@ -189,7 +200,7 @@ class ProductGridSlave(BaseEditorSlave):
                 Column('sellable.code', title=_('Code'), data_type=str)]
 
     def can_add(self):
-        selected_option = self._option_list.values()
+        selected_option = list(self._option_list.values())
         # In order to add a new product...
         # ...The user should select all options...
         if len(selected_option) != len(self._attr_list):
@@ -221,7 +232,7 @@ class ProductGridSlave(BaseEditorSlave):
         if not self.model.description:
             warning(_('You should fill the description first'))
             return False
-        self.model.add_grid_child(self._option_list.values())
+        self.model.add_grid_child(list(self._option_list.values()))
         self.product_list.add_list(self.model.children)
         self.add_product_button.set_sensitive(False)
 
@@ -231,7 +242,8 @@ class ProductInformationSlave(BaseEditorSlave):
     model_type = Product
     proxy_widgets = ['location', 'part_number', 'manufacturer', 'width',
                      'height', 'depth', 'weight', 'ncm', 'ex_tipi', 'genero',
-                     'product_model', 'brand', 'family', 'internal_use']
+                     'cest', 'product_model', 'brand', 'family', 'internal_use',
+                     'c_benef']
     storable_widgets = ['minimum_quantity', 'maximum_quantity']
 
     def __init__(self, store, model, db_form=None, visual_mode=False):
@@ -259,7 +271,7 @@ class ProductInformationSlave(BaseEditorSlave):
         for widget in [self.minimum_quantity, self.maximum_quantity,
                        self.width, self.height, self.depth, self.weight]:
             widget.set_adjustment(
-                gtk.Adjustment(lower=0, upper=MAX_INT, step_incr=1))
+                Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1))
 
         if not self.db_form:
             return
@@ -362,6 +374,10 @@ class ProductInformationSlave(BaseEditorSlave):
     def on_weight__validate(self, widget, value):
         return self._positive_validator(value)
 
+    def on_c_benef__validate(self, widget, value):
+        if not re.fullmatch('([aA-zZ]{2}[0-9]{6}|SEM CBENEF)?', value):
+            return ValidationError(_("This field must have 8 digits or 'SEM CBENEF'"))
+
     def on_ncm__validate(self, widget, value):
         if len(value) not in (0, 8):
             return ValidationError(_(u'NCM must have 8 digits.'))
@@ -435,13 +451,17 @@ class ProductTaxSlave(BaseEditorSlave):
 class ProductComponentSlave(BaseEditorSlave):
     gladefile = 'ProductComponentSlave'
     model_type = TemporaryProductComponent
-    proxy_widgets = ['production_time']
+    proxy_widgets = ['production_time', 'yield_quantity']
+    gsignal('cost-updated', object)
 
     def __init__(self, store, product=None, visual_mode=False):
+        self._setting_proxies = False
         self._product = product
         self._remove_component_list = []
+        # Temporary component value to prevent emmiting the signal when not
+        # necessary
+        self._previous_value = product.sellable.cost if product else 0
         BaseEditorSlave.__init__(self, store, model=None, visual_mode=visual_mode)
-        self._setup_widgets()
 
     def _get_columns(self):
         return [Column('code', title=_(u'Code'), data_type=int,
@@ -468,6 +488,9 @@ class ProductComponentSlave(BaseEditorSlave):
         else:
             self.sort_components_check.set_sensitive(False)
 
+        self.yield_quantity.set_adjustment(
+            Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1))
+
         self.component_tree.set_columns(self._get_columns())
         self._populate_component_tree()
         self.component_label = SummaryLabel(
@@ -476,7 +499,7 @@ class ProductComponentSlave(BaseEditorSlave):
             label='<b>%s</b>' % api.escape(_(u'Total:')),
             value_format='<b>%s</b>')
         self.component_label.show()
-        self.component_tree_vbox.pack_start(self.component_label, False)
+        self.component_tree_vbox.pack_start(self.component_label, False, True, 0)
         self.info_label.set_bold(True)
         self._update_widgets()
         if self.visual_mode:
@@ -498,7 +521,8 @@ class ProductComponentSlave(BaseEditorSlave):
         if additional_query:
             # XXX For now, we are not allowing package_product to have another
             # package_product or batch_product as component
-            query = And(query, Eq(Storable.is_batch, False))
+            exclude_batch = Or(Eq(Storable.is_batch, False), Eq(Storable.is_batch, None))
+            query = And(query, exclude_batch)
         for product_view in self.store.find(ProductFullStockView, query).order_by(attr):
             if product_view.product is self._product:
                 continue
@@ -515,9 +539,10 @@ class ProductComponentSlave(BaseEditorSlave):
         self.edit_button.set_sensitive(has_selected)
         self.remove_button.set_sensitive(has_selected)
 
-        # FIXME: This is wrong. Summary label already calculates the total. We
-        # are duplicating this.
         value = self.get_component_cost()
+        if self._previous_value != value:
+            self._previous_value = value
+            self.emit('cost-updated', value)
         self.component_label.set_value(get_formatted_cost(value))
 
         if not self._validate_components():
@@ -533,10 +558,13 @@ class ProductComponentSlave(BaseEditorSlave):
 
     def _get_components(self, product):
         for component in self.store.find(ProductComponent, product=product):
-            yield TemporaryProductComponent(product=component.product,
-                                            component=component.component,
-                                            quantity=component.quantity,
-                                            design_reference=component.design_reference)
+            yield TemporaryProductComponent(
+                self.store,
+                product=component.product,
+                component=component.component,
+                quantity=component.quantity,
+                design_reference=component.design_reference,
+                price=component.price)
 
     def _add_to_component_tree(self, component=None):
         parent = None
@@ -565,6 +593,7 @@ class ProductComponentSlave(BaseEditorSlave):
             update = False
             component = self.component_combo.get_selected_data()
             product_component = TemporaryProductComponent(
+                self.store,
                 product=self._product, component=component)
             # If we try to add a component which is already in tree,
             # just edit it
@@ -623,7 +652,7 @@ class ProductComponentSlave(BaseEditorSlave):
 
         msg = _("This will remove the component \"%s\". Are you sure?") % (
             root_component.description)
-        if not yesno(msg, gtk.RESPONSE_NO,
+        if not yesno(msg, Gtk.ResponseType.NO,
                      _("Remove component"),
                      _("Keep component")):
             return
@@ -641,10 +670,13 @@ class ProductComponentSlave(BaseEditorSlave):
     #
 
     def setup_proxies(self):
+        self._setting_proxies = True
+        self._setup_widgets()
         self.proxy = self.add_proxy(self._product, self.proxy_widgets)
+        self._setting_proxies = False
 
     def create_model(self, store):
-        return TemporaryProductComponent(product=self._product)
+        return TemporaryProductComponent(self.store, product=self._product)
 
     def on_confirm(self):
         for component in self._remove_component_list:
@@ -652,6 +684,7 @@ class ProductComponentSlave(BaseEditorSlave):
 
         for component in self.component_tree:
             component.add_or_update_product_component(self.store)
+        self._product.update_sellable_price()
 
     def validate_confirm(self):
         if not len(self.component_tree) > 0:
@@ -665,11 +698,21 @@ class ProductComponentSlave(BaseEditorSlave):
             if self.component_tree.get_parent(component):
                 continue
             value += component.get_total_production_cost()
-        return quantize(value)
+        value = value / self._product.yield_quantity
+        return quantize(value, precision=sysparam.get_int('COST_PRECISION_DIGITS'))
 
     #
     # Kiwi Callbacks
     #
+
+    def on_yield_quantity__validate(self, widget, value):
+        if value <= 0:
+            return ValidationError(_(u'The value must be positive.'))
+
+    def after_yield_quantity__changed(self, widget):
+        if self._setting_proxies:
+            return
+        self._update_widgets()
 
     def on_component_combo__content_changed(self, widget):
         self._update_widgets()
@@ -727,6 +770,8 @@ class ProductPackageSlave(ProductComponentSlave):
                            data_type=str, expand=True),
                     Column('category', title=_(u'Category'), data_type=str),
                     Column('total_production_cost', title=_(u'Total'),
+                           format_func=get_formatted_cost, data_type=currency),
+                    Column('price', title=_(u'Price'),
                            format_func=get_formatted_cost, data_type=currency)]
 
 
@@ -802,6 +847,7 @@ class ProductSupplierSlave(BaseRelationshipEditorSlave):
                        data_type=str, expand=True, sorted=True),
                 Column('supplier_code', title=_(u'Product Code'),
                        data_type=str),
+                Column('branch_str', title=_(u'Branch'), data_type=str),
                 Column('lead_time_str', title=_(u'Lead time'), data_type=str),
                 Column('minimum_purchase', title=_(u'Minimum Purchase'),
                        data_type=Decimal),
@@ -812,10 +858,10 @@ class ProductSupplierSlave(BaseRelationshipEditorSlave):
         product = self._product
         supplier = self.target_combo.get_selected_data()
 
-        if product.is_supplied_by(supplier):
+        if product.is_supplied_in_all_branches_by(supplier):
             product_desc = self._product.sellable.get_description()
-            info(_(u'%s is already supplied by %s') % (product_desc,
-                                                       supplier.person.name))
+            info(_(u'%s is already supplied by %s in all branches') %
+                 (product_desc, supplier.person.name))
             return
 
         model = ProductSupplierInfo(product=product,

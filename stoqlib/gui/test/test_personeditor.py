@@ -79,25 +79,26 @@ class TestClientEditor(_BasePersonEditorTest):
 
         # FIXME: The list bellow is broken. It's documenting 26 queries but
         # only 21 are being executed. Maybe we should compare the queries
-        # (with something like assertRaisesRegexp for parts like uuids)
+        # (with something like assertRaisesRegex for parts like uuids)
         # instead of counting them. It will be easier to maintain.
         # NOTE: Document increases/decreases
         # 1: select user/branch/station (normally cached)
         # 4: transaction_entry
         # 4: insert person/individual/client/address
-        # 1: select individual
+        # 2: select individual
         # 2: select company
         # 1: select address
         # 1: select client
         # 1: select client category
         # 1: select ui form
+        # 1: select ui field
         # 1: select address
         # 4: select city location
         # 1: update individual
         # 2: select payment
         # 1: select current user
         # 1: select app permissions for the user
-        self.assertEquals(tracer.count, 21)
+        self.assertEqual(tracer.count, 22)
 
     def test_create_individual(self):
         editor = ClientEditor(self.store, role_type=Person.ROLE_INDIVIDUAL)
@@ -162,6 +163,33 @@ class TestClientEditor(_BasePersonEditorTest):
         self.check_editor(editor, 'client-editor-salesperson-user')
         provide_utility(ICurrentUser, admin_user, replace=True)
 
+    def test_validate_email(self):
+        client = self.create_client()
+        editor = ClientEditor(self.store, client,
+                              role_type=Person.ROLE_INDIVIDUAL)
+
+        slave = editor._person_slave
+        # Without symbol @
+        slave.email.update('stoq.com.br')
+        self.assertInvalid(slave, ['email'])
+
+        # Without a dot afer @
+        slave.email.update('stoq@com')
+        self.assertInvalid(slave, ['email'])
+
+        slave.email.update('stoq@stoq.com.br')
+        self.assertValid(slave, ['email'])
+
+    def test_individual_responsible(self):
+        client = self.create_client()
+        client2 = self.create_client()
+        editor = ClientEditor(self.store, client, role_type=Person.ROLE_INDIVIDUAL)
+
+        slave = editor.individual_slave
+        slave.details_slave.person_gadget.set_value(client2.person.individual)
+
+        self.check_editor(editor, 'client-editor-with-responsible')
+
 
 class TestUserEditor(_BasePersonEditorTest):
     editor = UserEditor
@@ -208,7 +236,9 @@ class TestEmployeeEditor(_BasePersonEditorTest):
         self.check_editor(editor, 'editor-employee-company-create')
 
     def test_update_status(self):
-        employee = self.create_employee()
+        employee = self.create_employee(
+            role=api.sysparam.get_object(self.store,
+                                         'DEFAULT_SALESPERSON_ROLE'))
         sales_person = self.create_sales_person()
         employee.person.sales_person = sales_person
         sales_person.is_active = False

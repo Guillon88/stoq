@@ -27,7 +27,7 @@ import logging
 import os
 import time
 
-import gtk
+from gi.repository import Gtk
 from serial import SerialException
 
 from kiwi.python import Settable
@@ -44,22 +44,24 @@ from stoqlib.domain.events import (SaleStatusChangedEvent, TillAddCashEvent,
                                    GerencialReportCancelEvent,
                                    CheckECFStateEvent,
                                    HasPendingReduceZ, SaleAvoidCancelEvent,
-                                   HasOpenCouponEvent)
+                                   HasOpenCouponEvent,
+                                   ECFGetPrinterUserNumberEvent)
 from stoqlib.domain.person import Individual, Company
-from stoqlib.domain.sale import Sale, SaleComment
+from stoqlib.domain.sale import Sale
 from stoqlib.domain.till import Till
 from stoqlib.exceptions import DeviceError
 from stoqlib.gui.base.dialogs import run_dialog
-from stoqlib.gui.events import (StartApplicationEvent, StopApplicationEvent,
+from stoqlib.gui.events import (StartApplicationEvent,
                                 CouponCreatedEvent, EditorCreateEvent)
 from stoqlib.gui.utils.keybindings import add_bindings, get_accels
 from stoqlib.lib.message import info, warning, yesno
-from stoqlib.lib.parameters import sysparam
+from stoqlib.lib.parameters import sysparam, ParameterDetails
 from stoqlib.lib.pluginmanager import get_plugin_manager
 from stoqlib.lib.translation import stoqlib_gettext
 
 from ecf.cat52 import MODEL_CODES
 from ecf.catgenerator import StoqlibCATGenerator
+from ecf.couponnumberslave import CouponNumberSlave
 from ecf.couponprinter import CouponPrinter
 from ecf.ecfdomain import ECFPrinter, FiscalSaleHistory
 from ecf.ecfprinterdialog import ECFListDialog
@@ -68,6 +70,45 @@ from ecf.paulistainvoicedialog import PaulistaInvoiceDialog
 
 _ = stoqlib_gettext
 log = logging.getLogger(__name__)
+
+params = [
+    # Some fiscal printers can print up to 8 rows and 70 characters each row.
+    # But we want to write an documentation to make sure it will work
+    # on every fiscal printer
+    ParameterDetails(
+        u'ADDITIONAL_INFORMATION_ON_COUPON',
+        _(u'ECF'),
+        _(u'Additional information on fiscal coupon'),
+        _(u'This will be printed in the promotional message area of the fiscal coupon\n'
+          u'IMPORTANT NOTE:\n'
+          u'This template cannot have more than 2 line, and each line more '
+          u'than 50 characters, and you have to break it manually using the characters '
+          u'"\\n" or (enter key) or the fiscal printer may not print it correctly.'),
+        str, multiline=True, initial=u'', wrap=False),
+
+    ParameterDetails(
+        u'ENABLE_DOCUMENT_ON_INVOICE',
+        _(u'ECF'),
+        _(u'Enable document on invoice'),
+        _(u'Once this parameter is set, we will confirm the client document '
+          u'when  registering a fiscal coupon.'),
+        bool, initial=False),
+
+    ParameterDetails(
+        u'ALLOW_CANCEL_LAST_COUPON',
+        _(u'ECF'),
+        _(u'Allow to cancel the last fiscal coupon'),
+        _(u'When set to false, the user will not be able to cancel the last coupon, '
+          u'only return it.'),
+        bool, initial=True),
+
+    ParameterDetails(
+        u'CAT52_DEST_DIR',
+        _(u'ECF'),
+        _(u'Cat 52 destination directory'),
+        _(u'Where the file generated after a Z-reduction should be saved.'),
+        str, initial=u'~/.stoq/cat52', editor='directory-chooser'),
+]
 
 
 class ECFUI(object):
@@ -79,27 +120,8 @@ class ECFUI(object):
         # applications should still be accessible without a printer
         self._printer = None
 
-        SaleStatusChangedEvent.connect(self._on_SaleStatusChanged)
-        SaleAvoidCancelEvent.connect(self._on_SaleAvoidCancel)
-        TillOpenEvent.connect(self._on_TillOpen)
-        TillCloseEvent.connect(self._on_TillClose)
-        TillAddCashEvent.connect(self._on_TillAddCash)
-        TillAddTillEntryEvent.connect(self._on_AddTillEntry)
-        TillRemoveCashEvent.connect(self._on_TillRemoveCash)
-        StartApplicationEvent.connect(self._on_StartApplicationEvent)
-        StopApplicationEvent.connect(self._on_StopApplicationEvent)
-        CouponCreatedEvent.connect(self._on_CouponCreatedEvent)
-        GerencialReportPrintEvent.connect(self._on_GerencialReportPrintEvent)
-        GerencialReportCancelEvent.connect(self._on_GerencialReportCancelEvent)
-        CheckECFStateEvent.connect(self._on_CheckECFStateEvent)
-        HasPendingReduceZ.connect(self._on_HasPendingReduceZ)
-        HasOpenCouponEvent.connect(self._on_HasOpenCouponEvent)
-        EditorCreateEvent.connect(self._on_EditorCreateEvent)
-
-        self._till_summarize_action = gtk.Action(
-            'Summary', _('Summary'), None, None)
-        self._till_summarize_action.connect(
-            'activate', self._on_TillSummary__activate)
+        self._setup_params()
+        self._setup_events()
 
         add_bindings([
             ('plugin.ecf.read_memory', '<Primary>F9'),
@@ -109,6 +131,28 @@ class ECFUI(object):
     #
     # Private
     #
+
+    def _setup_params(self):
+        for detail in params:
+            sysparam.register_param(detail)
+
+    def _setup_events(self):
+        SaleStatusChangedEvent.connect(self._on_SaleStatusChanged)
+        SaleAvoidCancelEvent.connect(self._on_SaleAvoidCancel)
+        TillOpenEvent.connect(self._on_TillOpen)
+        TillCloseEvent.connect(self._on_TillClose)
+        TillAddCashEvent.connect(self._on_TillAddCash)
+        TillAddTillEntryEvent.connect(self._on_AddTillEntry)
+        TillRemoveCashEvent.connect(self._on_TillRemoveCash)
+        StartApplicationEvent.connect(self._on_StartApplicationEvent)
+        CouponCreatedEvent.connect(self._on_CouponCreatedEvent)
+        GerencialReportPrintEvent.connect(self._on_GerencialReportPrintEvent)
+        GerencialReportCancelEvent.connect(self._on_GerencialReportCancelEvent)
+        CheckECFStateEvent.connect(self._on_CheckECFStateEvent)
+        HasPendingReduceZ.connect(self._on_HasPendingReduceZ)
+        HasOpenCouponEvent.connect(self._on_HasOpenCouponEvent)
+        EditorCreateEvent.connect(self._on_EditorCreateEvent)
+        ECFGetPrinterUserNumberEvent.connect(self._on_ECFGetPrinterUserNumberEvent)
 
     def _create_printer(self):
         if self._printer:
@@ -145,92 +189,59 @@ class ECFUI(object):
 
             self._printer_verified = True
 
-    def _add_ui_menus(self, appname, app, uimanager):
+    def _add_ui_menus(self, appname, app):
         self._current_app = app
         if appname == 'pos':
             self._create_printer()
-            self._add_pos_menus(uimanager)
+            self._add_pos_menus(app)
         elif appname == 'till':
             self._create_printer()
-            self._add_till_menus(uimanager)
+            self._add_till_menus(app)
         elif appname == 'sales':
             # The sales app needs the printer to check if the
             # sale being returned is the last sale on the ECF.
             self._create_printer()
         elif appname == 'admin':
-            self._add_admin_menus(uimanager)
+            self._add_admin_menus(app)
             app.tasks.add_item(
                 _('Fiscal Printers'), 'fiscal-printer', 'printer',
                 self._on_ConfigurePrinter__activate)
 
-    def _remove_ui_menus(self, uimanager):
-        if not self._ui:
-            return
-        uimanager.remove_ui(self._ui)
-        self._ui = None
-
-    def _add_admin_menus(self, uimanager):
-        ui_string = """<ui>
-          <menubar name="menubar">
-            <placeholder action="AppMenubarPH">
-              <menu action="ConfigureMenu">
-              <placeholder name="ConfigurePH">
-                <menuitem action="ConfigurePrinter"/>
-              </placeholder>
-              </menu>
-            </placeholder>
-          </menubar>
-        </ui>"""
-
-        ag = gtk.ActionGroup('ECFMenuActions')
-        ag.add_actions([
+    def _add_admin_menus(self, app):
+        actions = [
             ('ECFMenu', None, _('ECF')),
             ('ConfigurePrinter', None, _('Configure fiscal printer...'),
              None, None, self._on_ConfigurePrinter__activate),
-        ])
-        uimanager.insert_action_group(ag, 0)
-        self._ui = uimanager.add_ui_from_string(ui_string)
+        ]
+        app.add_ui_actions(actions)
+        app.window.add_extra_items([app.ConfigurePrinter], _('ECF'))
 
-    def _add_ecf_menu(self, uimanager):
-        ui_string = """<ui>
-          <menubar name="menubar">
-            <placeholder name="ExtraMenubarPH">
-              <menu action="ECFMenu">
-                <menuitem action="CancelLastDocument"/>
-                <menuitem action="Summary"/>
-                <menuitem action="ReadMemory"/>
-              </menu>
-            </placeholder>
-          </menubar>
-        </ui>"""
-
+    def _add_ecf_menu(self, app):
         group = get_accels('plugin.ecf')
-
-        ag = gtk.ActionGroup('ECFMenuActions')
-        ag.add_actions([
-            ('ECFMenu', None, _('ECF')),
+        actions = [
             ('ReadMemory', None, _('Read Memory'),
              group.get('read_memory'), None, self._on_ReadMemory__activate),
             ('CancelLastDocument', None, _('Cancel Last Document'),
              None, None, self._on_CancelLastDocument__activate),
-        ])
-        ag.add_action_with_accel(self._till_summarize_action,
-                                 group.get('summarize'))
+            ('Summary', None, _('Summary'),
+             group.get('read_memory'), None, self._on_TillSummary__activate),
+        ]
+        app.add_ui_actions(actions)
+        items = [
+            app.Summary,
+            app.ReadMemory,
+        ]
+        if sysparam.get_bool('ALLOW_CANCEL_LAST_COUPON'):
+            items.insert(0, app.CancelLastDocument)
+        app.window.add_extra_items(items, _('ECF'))
 
-        can_cancel = sysparam.get_bool('ALLOW_CANCEL_LAST_COUPON')
-        cancel_coupon_menu = ag.get_action('CancelLastDocument')
-        cancel_coupon_menu.set_visible(can_cancel)
-
-        uimanager.insert_action_group(ag, 0)
-        self._ui = uimanager.add_ui_from_string(ui_string)
-
-    def _add_pos_menus(self, uimanager):
+    def _add_pos_menus(self, app):
         if sysparam.get_bool('POS_SEPARATE_CASHIER'):
             return
-        self._add_ecf_menu(uimanager)
+        self._add_ecf_menu(app)
 
-    def _add_till_menus(self, uimanager):
-        self._add_ecf_menu(uimanager)
+    def _add_till_menus(self, app):
+        self._add_ecf_menu(app)
 
     def _check_ecf_state(self):
         log.info('ecfui._check_printer')
@@ -266,12 +277,12 @@ class ECFUI(object):
                     _(u"It's not possible to emit a read X for the "
                       "configured printer.\nWould you like to ignore "
                       "this error and continue?"),
-                    buttons=((_(u"Cancel"), gtk.RESPONSE_CANCEL),
-                             (_(u"Ignore"), gtk.RESPONSE_YES),
-                             (_(u"Try Again"), gtk.RESPONSE_NONE)))
-                if response == gtk.RESPONSE_NONE:
+                    buttons=((_(u"Cancel"), Gtk.ResponseType.CANCEL),
+                             (_(u"Ignore"), Gtk.ResponseType.YES),
+                             (_(u"Try Again"), Gtk.ResponseType.NONE)))
+                if response == Gtk.ResponseType.NONE:
                     continue
-                elif response == gtk.RESPONSE_CANCEL:
+                elif response == Gtk.ResponseType.CANCEL:
                     retval = False
 
             break
@@ -304,7 +315,7 @@ class ECFUI(object):
                         "if you want to save the paulista invoice file. "
                         "Go to the admin application and fill the "
                         "required information for the ECF."),
-                buttons=((_(u"Cancel Close Till"), gtk.RESPONSE_CANCEL), ))
+                buttons=((_(u"Cancel Close Till"), Gtk.ResponseType.CANCEL), ))
             return False
 
         retval = True
@@ -319,12 +330,12 @@ class ECFUI(object):
                     short=_(u"It's not possible to emit a reduce Z for the "
                             "configured printer.\nWould you like to ignore "
                             "this error and continue?"),
-                    buttons=((_(u"Cancel"), gtk.RESPONSE_CANCEL),
-                             (_(u"Ignore"), gtk.RESPONSE_YES),
-                             (_(u"Try Again"), gtk.RESPONSE_NONE)))
-                if response == gtk.RESPONSE_NONE:
+                    buttons=((_(u"Cancel"), Gtk.ResponseType.CANCEL),
+                             (_(u"Ignore"), Gtk.ResponseType.YES),
+                             (_(u"Try Again"), Gtk.ResponseType.NONE)))
+                if response == Gtk.ResponseType.NONE:
                     continue
-                elif response == gtk.RESPONSE_CANCEL:
+                elif response == Gtk.ResponseType.CANCEL:
                     retval = False
 
             break
@@ -421,18 +432,18 @@ class ECFUI(object):
         coupon = self._printer.create_coupon(fiscalcoupon)
         assert coupon
         for signal, callback in [
-            ('open', self._on_coupon__open),
-            ('identify-customer', self._on_coupon__identify_customer),
-            ('customer-identified', self._on_coupon__customer_identified),
-            ('add-item', self._on_coupon__add_item),
-            ('remove-item', self._on_coupon__remove_item),
-            ('add-payments', self._on_coupon__add_payments),
-            ('totalize', self._on_coupon__totalize),
-            ('close', self._on_coupon__close),
-            ('cancel', self._on_coupon__cancel),
-            ('get-coo', self._on_coupon__get_coo),
-            ('get-supports-duplicate-receipt', self._on_coupon__get_supports_duplicate),
-            ('print-payment-receipt', self._on_coupon__print_payment_receipt)]:
+                ('open', self._on_coupon__open),
+                ('identify-customer', self._on_coupon__identify_customer),
+                ('customer-identified', self._on_coupon__customer_identified),
+                ('add-item', self._on_coupon__add_item),
+                ('remove-item', self._on_coupon__remove_item),
+                ('add-payments', self._on_coupon__add_payments),
+                ('totalize', self._on_coupon__totalize),
+                ('close', self._on_coupon__close),
+                ('cancel', self._on_coupon__cancel),
+                ('get-coo', self._on_coupon__get_coo),
+                ('get-supports-duplicate-receipt', self._on_coupon__get_supports_duplicate),
+                ('print-payment-receipt', self._on_coupon__print_payment_receipt)]:
             fiscalcoupon.connect_object(signal, callback, coupon)
         return coupon
 
@@ -464,7 +475,7 @@ class ECFUI(object):
                     "number %d and value %.2f ?") % (
                 last_doc.last_till_entry.identifier,
                 last_doc.last_till_entry.value)
-        return yesno(msg, gtk.RESPONSE_NO, _("Cancel Last Document"),
+        return yesno(msg, Gtk.ResponseType.NO, _("Cancel Last Document"),
                      _("Not now"))
 
     def _cancel_last_till_entry(self, last_doc, store):
@@ -484,7 +495,7 @@ class ECFUI(object):
                     -value, _(u"Cash in: last cash out cancelled"))
                 self._set_last_till_entry(till_entry, store)
             info(_("Document was cancelled"))
-        except:
+        except Exception:
             info(_("Cancelling failed, nothing to cancel"))
             return
 
@@ -493,10 +504,8 @@ class ECFUI(object):
             return
         sale = store.fetch(last_doc.last_sale)
         value = sale.total_amount
-        sale.cancel(force=True)
-        comment = _(u"Cancelling last document on ECF")
-        SaleComment(store=store, sale=sale, comment=comment,
-                    author=api.get_current_user(store))
+        reason = _(u"Cancelling last document on ECF")
+        sale.cancel(reason, force=True)
         till = Till.get_current(store)
         # TRANSLATORS: cash out = sangria
         till.add_debit_entry(value, _(u"Cash out: last sale cancelled"))
@@ -607,12 +616,9 @@ class ECFUI(object):
     #
 
     def _on_StartApplicationEvent(self, appname, app):
-        self._add_ui_menus(appname, app, app.window.uimanager)
+        self._add_ui_menus(appname, app)
 
-    def _on_StopApplicationEvent(self, appname, app):
-        self._remove_ui_menus(app.window.uimanager)
-
-    def _on_SaleStatusChanged(self, sale, old_status):
+    def _on_SaleStatusChanged(self, sale, old_status, user):
         if sale.status == Sale.STATUS_CONFIRMED:
             if old_status == Sale.STATUS_RETURNED:
                 self._undo_returned_sale(sale)
@@ -620,7 +626,9 @@ class ECFUI(object):
                 self._confirm_sale(sale)
                 self._set_last_sale(sale, sale.store)
 
-    def _on_SaleAvoidCancel(self, sale):
+    def _on_SaleAvoidCancel(self, sale, new_status):
+        if not sysparam.get_bool('ALLOW_CANCEL_LAST_COUPON'):
+            return False
         if self._is_ecf_last_sale(sale):
             info(_("That is last sale in ECF. Return using the menu "
                    "ECF - Cancel Last Document"))
@@ -650,6 +658,9 @@ class ECFUI(object):
 
     def _on_HasOpenCouponEvent(self):
         self._has_open_coupon()
+
+    def _on_ECFGetPrinterUserNumberEvent(self):
+        return self._get_last_document(self.default_store).user_number
 
     #
     # Callbacks
@@ -720,16 +731,16 @@ class ECFUI(object):
     def _on_coupon__print_payment_receipt(self, coupon, coo, payment, value, receipt):
         coupon.print_payment_receipt(coo, payment, value, receipt)
 
-    def _on_TillSummary__activate(self, action):
+    def _on_TillSummary__activate(self, action, parameter):
         self._till_summarize()
 
-    def _on_ReadMemory__activate(self, action):
+    def _on_ReadMemory__activate(self, action, parameter):
         self._fiscal_memory_dialog()
 
-    def _on_CancelLastDocument__activate(self, action):
+    def _on_CancelLastDocument__activate(self, action, parameter):
         self._cancel_last_document()
 
-    def _on_ConfigurePrinter__activate(self, action=None):
+    def _on_ConfigurePrinter__activate(self, *args):
         run_dialog(ECFListDialog, None)
 
     def _on_GerencialReportCancelEvent(self):
@@ -756,8 +767,8 @@ class ECFUI(object):
     def _on_EditorCreateEvent(self, editor, model, store, *args):
         from stoqlib.gui.dialogs.saledetails import SaleDetailsDialog
         manager = get_plugin_manager()
-        nfe_active = manager.is_active('nfe')
+        nfe_active = any(manager.is_active(plugin) for plugin in ['nfe', 'nfce'])
         if not nfe_active and isinstance(editor, SaleDetailsDialog):
             # Only display the coupon number if the nfe is not active.
-            editor.invoice_label.set_text(_('Coupon Number'))
-            editor.invoice_number.update(model.coupon_id)
+            editor.attach_slave('coupon_number_holder',
+                                CouponNumberSlave(editor.store, model))

@@ -33,6 +33,14 @@ editors Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`backupsettings` Module
+----------------------------
+
+.. automodule:: stoqlib.gui.editors.backupsettings
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 :mod:`baseeditor` Module
 ------------------------
 
@@ -53,6 +61,14 @@ editors Package
 ----------------------------
 
 .. automodule:: stoqlib.gui.editors.categoryeditor
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`certificateeditor` Module
+-------------------------------
+
+.. automodule:: stoqlib.gui.editors.certificateeditor
     :members:
     :undoc-members:
     :show-inheritance:

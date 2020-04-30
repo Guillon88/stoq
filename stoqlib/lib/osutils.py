@@ -56,7 +56,7 @@ def get_application_dir(appname="stoq"):
     if _system == 'Linux':
         appdir = os.path.join(os.environ['HOME'], '.' + appname)
     elif _system == 'Windows':
-        appdir = os.path.join(os.environ['APPDATA'], appname)
+        appdir = os.path.join(os.environ['ALLUSERSPROFILE'], appname)
     elif _system == 'Darwin':
         appdir = os.path.join(os.environ['HOME'], 'Library',
                               'Application Support', 'Stoq')
@@ -72,11 +72,17 @@ def get_documents_dir():
     if _system == 'Linux':
         return _get_xdg_dir("XDG_DOCUMENTS_DIR", "~/Documents")
     elif _system == 'Windows':
-        from win32com.shell import shell
-        MY_DOCUMENTS = "::{450d8fba-ad25-11d0-98a8-0800361b1103}"
-        folder = shell.SHGetDesktopFolder()
-        pidl = folder.ParseDisplayName(0, None, MY_DOCUMENTS)[1]
-        return shell.SHGetPathFromIDList(pidl)
+        import ctypes.wintypes
+        # See the url for the constants definition
+        # https://installmate.com/support/im9/using/symbols/functions/csidls.htm
+        CSIDL_PERSONAL = 5  # My Documents
+        SHGFP_TYPE_CURRENT = 0  # Get current, not default value
+
+        buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+        ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_PERSONAL, None,
+                                               SHGFP_TYPE_CURRENT, buf)
+
+        return buf.value
     elif _system == 'Darwin':
         return os.path.join(os.environ['HOME'], 'Documents')
     else:
@@ -99,20 +105,19 @@ def read_registry_key(root, key, value):
     """
     if platform.system() != 'Windows':
         return None
-    import exceptions
-    import _winreg
+    import winreg
 
     if root == 'HKCC':
-        root = _winreg.HKEY_CURRENT_USER
+        root = winreg.HKEY_CURRENT_USER
     elif root == 'HKLM':
-        root = _winreg.HKEY_LOCAL_MACHINE
+        root = winreg.HKEY_LOCAL_MACHINE
     else:
         raise ValueError(root)
 
     try:
-        k = _winreg.OpenKey(root, key)
-        reg_value, key_type = _winreg.QueryValueEx(k, value)
-    except exceptions.WindowsError:
+        k = winreg.OpenKey(root, key)
+        reg_value, key_type = winreg.QueryValueEx(k, value)
+    except WindowsError:
         # log.info('Error while reading %s/%s/%s: %r' % (root, k, value, e))
         return None
     return reg_value

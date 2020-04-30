@@ -25,10 +25,9 @@
 import datetime
 import decimal
 import logging
-import os
 import warnings
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import SummaryLabel
 from kiwi.ui.delegates import SlaveDelegate
@@ -51,7 +50,6 @@ from stoqlib.gui.search.searchresultview import (SearchResultListView,
                                                  SearchResultTreeView)
 from stoqlib.gui.widgets.lazyobjectlist import LazySummaryLabel
 from stoqlib.gui.widgets.searchfilterbutton import SearchFilterButton
-from stoqlib.lib.osutils import get_application_dir
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -80,7 +78,7 @@ class SearchSlave(SlaveDelegate):
 
     gsignal("search-completed", object, object)
     gsignal("result-item-activated", object)
-    gsignal("result-item-popup-menu", object, object)
+    gsignal("result-item-popup-menu", object, object, object)
     gsignal("result-selection-changed")
 
     def __init__(self, columns=None,
@@ -124,7 +122,7 @@ class SearchSlave(SlaveDelegate):
             api.get_current_user(self.store).username, )
         self.columns = self.restore_columns(columns)
 
-        self.vbox = gtk.VBox()
+        self.vbox = Gtk.VBox()
         SlaveDelegate.__init__(self, toplevel=self.vbox)
         self.vbox.show()
 
@@ -149,44 +147,31 @@ class SearchSlave(SlaveDelegate):
     def _create_basic_search(self):
         # This hbox is here so we can have a padding on the filters
         # from the left window edge
-        filters_container = gtk.HBox()
+        filters_container = Gtk.HBox()
         filters_container.show()
 
-        filters_box = gtk.VBox(spacing=6)
+        filters_box = Gtk.VBox(spacing=6)
         filters_container.pack_start(filters_box, False, False, 6)
         filters_box.show()
 
         self.vbox.pack_start(filters_container, False, True, 6)
 
-        hbox = gtk.HBox()
-        filters_box.pack_start(hbox, False, False)
+        hbox = Gtk.HBox()
+        filters_box.pack_start(hbox, False, False, 0)
         hbox.show()
         self.hbox = hbox
 
         widget = self._primary_filter
-        self.hbox.pack_start(widget, False, False)
+        self.hbox.pack_start(widget, False, False, 0)
         widget.show()
 
         self.search_entry = self._primary_filter.entry
 
-        self.search_button = SearchFilterButton(stock=gtk.STOCK_FIND)
-        hbox.pack_start(self.search_button, False, False)
+        self.search_button = SearchFilterButton(_('Find'), icon='edit-find-symbolic')
+        hbox.pack_start(self.search_button, False, False, 0)
         self.search_button.show()
 
         self.filters_box = filters_box
-
-    def _migrate_from_pickle(self):
-        username = api.get_current_user(self.store).username
-        filename = os.path.join(get_application_dir(), 'columns-%s' % username,
-                                self._restore_name + '.pickle')
-        log.info("Migrating columns from pickle: %s" % (filename, ))
-        try:
-            with open(filename) as fd:
-                import cPickle
-                return cPickle.load(fd)
-        except Exception, e:
-            log.info("Exception while migrating: %r" % (e, ))
-            return {}
 
     def _set_filter_position(self, search_filter, position):
         """
@@ -198,10 +183,10 @@ class SearchSlave(SlaveDelegate):
             search_filter.get_parent().remove(search_filter)
 
         if position == SearchFilterPosition.TOP:
-            self.hbox.pack_start(search_filter, False, False)
+            self.hbox.pack_start(search_filter, False, False, 0)
             self.hbox.reorder_child(search_filter, 0)
         elif position == SearchFilterPosition.BOTTOM:
-            self.filters_box.pack_start(search_filter, False, False)
+            self.filters_box.pack_start(search_filter, False, False, 0)
         search_filter.show()
 
     #
@@ -282,10 +267,10 @@ class SearchSlave(SlaveDelegate):
         """
         Enables an advanced search
         """
-        self.label_group = gtk.SizeGroup(gtk.SIZE_GROUP_HORIZONTAL)
-        self.combo_group = gtk.SizeGroup(gtk.SIZE_GROUP_HORIZONTAL)
+        self.label_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self.combo_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
-        self.menu = gtk.Menu()
+        self.menu = Gtk.Menu()
         for column in self.columns:
             if not isinstance(column, SearchColumn):
                 continue
@@ -313,7 +298,7 @@ class SearchSlave(SlaveDelegate):
         """
         assert data_type in (datetime.date, decimal.Decimal, int, currency, str,
                              bool)
-        menu_item = gtk.MenuItem(title)
+        menu_item = Gtk.MenuItem(label=title)
         menu_item.show()
         menu_item.connect('activate', self._on_menu_item__activate, attr, title,
                           data_type, valid_values, callback, use_having,
@@ -440,7 +425,6 @@ class SearchSlave(SlaveDelegate):
                 filter.set_digits(2)
         elif data_type == str:
             if multiple_selection:
-                assert valid_values, "need valid_values for multiple_selection"
                 filter = MultiSearchFilter(title, valid_values)
             elif valid_values:
                 filter = ComboSearchFilter(title, valid_values)
@@ -570,7 +554,7 @@ class SearchSlave(SlaveDelegate):
 
         if not parent:
             parent = self.vbox
-        elif not isinstance(parent, gtk.Box):
+        elif not isinstance(parent, Gtk.Box):
             raise TypeError("parent %r must be a GtkBox subclass" % (
                 parent))
 
@@ -584,7 +568,7 @@ class SearchSlave(SlaveDelegate):
                                                   column=column,
                                                   label=label,
                                                   value_format=format)
-        parent.pack_start(self._summary_label, False, False)
+        parent.pack_start(self._summary_label, False, False, 0)
         self._summary_label.show()
 
     def get_summary_label(self):
@@ -642,10 +626,7 @@ class SearchSlave(SlaveDelegate):
             return cols
 
         columns = api.user_settings.get(self._settings_key, {})
-        if columns:
-            saved = columns.get(self._restore_name, {})
-        else:
-            saved = self._migrate_from_pickle()
+        saved = columns.get(self._restore_name, {})
 
         cols_dict = {}
         for original_pos, col in enumerate(cols):
@@ -714,7 +695,11 @@ class SearchSlave(SlaveDelegate):
             # Disable auto search to avoid an extra query when restoring the
             # state
             self.set_auto_search(False)
-            self.set_filter_states(filter_states)
+            try:
+                self.set_filter_states(filter_states)
+            except KeyError:
+                # Sometimes when reseting the database, saved filters will have invalid defaults
+                pass
             self.set_auto_search(True)
         self._loading_filters = False
 
@@ -748,8 +733,8 @@ class SearchSlave(SlaveDelegate):
     def on_result_view__item_activated(self, result_view, item):
         self.emit('result-item-activated', item)
 
-    def on_result_view__item_popup_menu(self, result_view, results, event):
-        self.emit('result-item-popup-menu', results, event)
+    def on_result_view__item_popup_menu(self, result_view, objectlist, results, event):
+        self.emit('result-item-popup-menu', objectlist, results, event)
 
     def on_result_view__selection_changed(self, result_view, selected):
         self.emit('result-selection-changed')

@@ -26,7 +26,7 @@
 
 import datetime
 from decimal import Decimal
-import gtk
+from gi.repository import Gtk
 
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column, SummaryLabel
@@ -73,26 +73,26 @@ class CostCenterDialog(BaseEditor):
                        expand=True),
                 Column('due_date', _("Due date"), visible=False,
                        data_type=datetime.date, width=90,
-                       justify=gtk.JUSTIFY_RIGHT),
+                       justify=Gtk.Justification.RIGHT),
                 Column('paid_date', _("Paid date"),
                        data_type=datetime.date, width=90),
                 Column('status_str', _("Status"), data_type=str, width=80),
                 Column('value', _("Value"), data_type=currency,
-                       justify=gtk.JUSTIFY_RIGHT, visible=False),
+                       justify=Gtk.Justification.RIGHT, visible=False),
                 Column('paid_value', _("Paid value"), data_type=currency,
-                       justify=gtk.JUSTIFY_RIGHT)]
+                       justify=Gtk.Justification.RIGHT)]
 
     def _get_sales_columns(self):
         return [IdentifierColumn('identifier', title=_('Sale #'), sorted=True),
                 Column('client_name', title=_('Client'),
-                       data_type=unicode, expand=True),
+                       data_type=str, expand=True),
                 Column('branch_name', title=_('Branch'),
-                       data_type=unicode, visible=False),
+                       data_type=str, visible=False),
                 Column('open_date', title=_('Open date'), width=120,
-                       data_type=datetime.date, justify=gtk.JUSTIFY_RIGHT,
+                       data_type=datetime.date, justify=Gtk.Justification.RIGHT,
                        visible=False),
                 Column('confirm_date', title=_('Confirm date'),
-                       data_type=datetime.date, justify=gtk.JUSTIFY_RIGHT,
+                       data_type=datetime.date, justify=Gtk.Justification.RIGHT,
                        width=120),
                 Column('total', title=_('Total'), data_type=currency,
                        width=120)]
@@ -102,9 +102,9 @@ class CostCenterDialog(BaseEditor):
                 Column('confirm_date', _('Date'),
                        data_type=datetime.date, width=100),
                 Column('branch_name', _('Branch'),
-                       data_type=unicode, expand=True),
+                       data_type=str, expand=True),
                 Column('removed_by_name', _('Removed By'),
-                       data_type=unicode, width=120)]
+                       data_type=str, width=120)]
 
     def _setup_columns(self):
         self.payments_list.set_columns(self._get_payments_columns())
@@ -121,7 +121,7 @@ class CostCenterDialog(BaseEditor):
                                            label=total_label,
                                            value_format=value_format)
         total_summary_label.show()
-        self.payments_vbox.pack_start(total_summary_label, False)
+        self.payments_vbox.pack_start(total_summary_label, False, True, 0)
 
         total_label = "<b>%s</b>" % api.escape(_("Total paid:"))
         total_paid_summary_label = SummaryLabel(klist=self.payments_list,
@@ -129,7 +129,7 @@ class CostCenterDialog(BaseEditor):
                                                 label=total_label,
                                                 value_format=value_format)
         total_paid_summary_label.show()
-        self.payments_vbox.pack_start(total_paid_summary_label, False)
+        self.payments_vbox.pack_start(total_paid_summary_label, False, True, 0)
 
         total_label = "<b>%s</b>" % api.escape(_("Total:"))
         transaction_summary_label = SummaryLabel(
@@ -138,7 +138,7 @@ class CostCenterDialog(BaseEditor):
             label=total_label,
             value_format=value_format)
         transaction_summary_label.show()
-        self.stock_transactions_vbox.pack_start(transaction_summary_label, False)
+        self.stock_transactions_vbox.pack_start(transaction_summary_label, False, True, 0)
 
         total_label = "<b>%s</b>" % api.escape(_("Total:"))
         sale_summary_label = SummaryLabel(klist=self.sales_list,
@@ -146,7 +146,7 @@ class CostCenterDialog(BaseEditor):
                                           label=total_label,
                                           value_format=value_format)
         sale_summary_label.show()
-        self.sales_vbox.pack_start(sale_summary_label, False)
+        self.sales_vbox.pack_start(sale_summary_label, False, True, 0)
 
     def _setup_widgets(self):
         self._setup_columns()

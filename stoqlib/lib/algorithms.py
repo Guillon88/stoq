@@ -26,7 +26,7 @@
 # http://en.wikipedia.org/wiki/Luhn algorithm
 # Also known as mod 10
 def luhn(value):
-    if not isinstance(value, basestring):
+    if not isinstance(value, str):
         raise TypeError("value must be a string, not %s" % (
             value, ))
     total = 0
@@ -146,6 +146,41 @@ def calculeRestoMod11(somaMod11):
         return somaMod11
     else:
         return somaMod11 % 11
+
+
+class PasswordObfuscator(object):
+    """Password obfuscator
+
+    Holds a password obfuscated in-memory to avoid any accidental leak.
+    """
+
+    _key_mask = [ord(c) for c in '44NLGVlI4q3kHUqBq2RCKU09hVD9USGm']
+
+    def __init__(self, password=None):
+        self.hashed_password = None
+        self.password = password
+
+    @property
+    def password(self):
+        if self.hashed_password is None:
+            return None
+
+        return self._obfuscate(self.hashed_password).decode('utf-8')
+
+    @password.setter
+    def password(self, password):
+        if password is None:
+            self.hashed_password = None
+            return
+
+        self.hashed_password = self._obfuscate(password)
+
+    def _obfuscate(self, s):
+        # Based on http://stackoverflow.com/a/7489718/6476179
+        mask = self._key_mask
+        lmask = len(self._key_mask)
+        return bytes((ord(c) if isinstance(c, str) else c) ^ mask[i % lmask]
+                     for i, c in enumerate(s))
 
 
 if __name__ == '__main__':  # pragma nocover

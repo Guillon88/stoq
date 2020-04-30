@@ -26,9 +26,11 @@
 import datetime
 from dateutil.relativedelta import relativedelta
 
-import gtk
+from gi.repository import Gtk
 
 from kiwi.datatypes import ValidationError
+from kiwi.ui.widgets.combo import ProxyComboBox
+from kiwi.ui.widgets.spinbutton import ProxySpinButton
 
 from stoqlib.api import api
 from stoqlib.domain.taxes import (InvoiceItemCofins, InvoiceItemIcms,
@@ -63,14 +65,22 @@ class BaseTaxSlave(BaseEditorSlave):
     def _setup_widgets(self):
         for name, options in self.field_options.items():
             widget = getattr(self, name)
-            widget.prefill(options)
+            # set_size_request is not working, so as a workaround, lets truncate
+            # the length of the options...
+            new_options = []
+            for (key, value) in options:
+                if isinstance(key, str) and len(key) > 70:
+                    new_options.append((key[:70] + '...', value))
+                else:
+                    new_options.append((key, value))
+            widget.prefill(new_options)
             widget.set_size_request(220, -1)
 
         for name in self.percentage_widgets:
             widget = getattr(self, name)
             widget.set_digits(2)
             widget.set_adjustment(
-                gtk.Adjustment(lower=0, upper=100, step_incr=1))
+                Gtk.Adjustment(lower=0, upper=100, step_increment=1))
 
         for w in self.hide_widgets:
             getattr(self, w).hide()
@@ -78,8 +88,8 @@ class BaseTaxSlave(BaseEditorSlave):
 
         for name, tooltip in self.tooltips.items():
             widget = getattr(self, name)
-            if isinstance(widget, gtk.Entry):
-                widget.set_property('primary-icon-stock', gtk.STOCK_INFO)
+            if isinstance(widget, Gtk.Entry):
+                widget.set_property('primary-icon-stock', Gtk.STOCK_INFO)
                 widget.set_property('primary-icon-tooltip-text', tooltip)
                 widget.set_property('primary-icon-sensitive', True)
                 widget.set_property('primary-icon-activatable', False)
@@ -105,6 +115,28 @@ class BaseTaxSlave(BaseEditorSlave):
                 lbl = getattr(self, widget + '_label', None)
                 if lbl:
                     lbl.set_sensitive(True)
+
+    def unset_values(self, valid_widgets):
+        """Unset the values of all the unnecessary widgets
+
+        :param valid_widgets: a list of valid widget name
+        """
+        for widget_name in self.proxy_widgets:
+            if widget_name in valid_widgets:
+                # Do not unset valid widgets
+                continue
+
+            widget = getattr(self, widget_name)
+            if isinstance(widget, ProxySpinButton):
+                # Updating all invalid ProxySpinButtons.
+                widget.update(0)
+                if widget == self.p_cred_sn:
+                    # Only unset the expiration date if the aliquot is
+                    # is also unset.
+                    self.p_cred_sn_valid_until.update(None)
+
+            if isinstance(widget, ProxyComboBox):
+                widget.select_item_by_position(0)
 
 
 class InvoiceItemMixin(object):
@@ -132,11 +164,12 @@ class InvoiceItemMixin(object):
 class BaseICMSSlave(BaseTaxSlave):
     gladefile = 'TaxICMSSlave'
 
-    combo_widgets = ['cst', 'csosn', 'orig', 'mod_bc', 'mod_bc_st']
+    combo_widgets = ['cst', 'csosn', 'orig', 'mod_bc', 'mod_bc_st', 'mot_des_icms']
     percentage_widgets = ['p_icms', 'p_mva_st', 'p_red_bc_st', 'p_icms_st',
-                          'p_red_bc', 'p_cred_sn']
+                          'p_red_bc', 'p_cred_sn', 'p_fcp', 'p_fcp_st']
     value_widgets = ['v_bc', 'v_icms', 'v_bc_st', 'v_icms_st',
-                     'v_cred_icms_sn', 'v_bc_st_ret', 'v_icms_st_ret']
+                     'v_cred_icms_sn', 'v_bc_st_ret', 'v_icms_st_ret', 'v_fcp',
+                     'v_fcp_st', 'v_fcp_st_ret']
     bool_widgets = ['bc_include_ipi', 'bc_st_include_ipi']
     date_widgets = ['p_cred_sn_valid_until']
     all_widgets = (combo_widgets + percentage_widgets + value_widgets +
@@ -145,12 +178,13 @@ class BaseICMSSlave(BaseTaxSlave):
     simples_widgets = ['orig', 'csosn', 'mod_bc_st', 'p_mva_st', 'p_red_bc_st',
                        'p_icms_st', 'v_bc_st', 'v_icms_st', 'p_cred_sn',
                        'p_cred_sn_valid_until' 'v_cred_icms_sn', 'v_bc_st_ret',
-                       'v_icms_st_ret'],
+                       'v_icms_st_ret', 'v_fcp_st_ret'],
 
     normal_widgets = ['orig', 'cst', 'mod_bc_st', 'p_mva_st', 'p_red_bc_st',
-                      'p_icms_st', 'v_bc_st', 'v_icms_st', 'bc_st_include_ipi',
+                      'p_icms_st', 'p_fcp', 'p_fcp_st', 'v_fcp', 'v_fcp_st',
+                      'v_bc_st', 'v_icms_st', 'bc_st_include_ipi',
                       'mod_bc', 'p_icms', 'v_bc', 'v_icms', 'p_red_bc',
-                      'bc_include_ipi', 'bc_st_include_ipi']
+                      'bc_include_ipi', 'bc_st_include_ipi', 'mot_des_icms']
 
     tooltips = {
         'p_icms': u'Aliquota do imposto',
@@ -229,24 +263,33 @@ class BaseICMSSlave(BaseTaxSlave):
             (u'4 - Margem Valor Agregado (%)', 4),
             (u'5 - Pauta (valor)', 5),
         ),
+        'mot_des_icms': (
+            (None, None),
+            ('3 - Uso na agropecuária', ProductIcmsTemplate.REASON_LIVESTOCK),
+            ('9 - Outros', ProductIcmsTemplate.REASON_OTHERS),
+            ('12 - Órgão de fomento de desenvolvimento agropecuário',
+             ProductIcmsTemplate.REASON_AGRICULTURAL_AGENCY)
+        )
     }
 
     MAP_VALID_WIDGETS = {
         0: ['orig', 'cst', 'mod_bc', 'p_icms', 'v_bc', 'v_icms',
-            'bc_include_ipi'],
+            'bc_include_ipi', 'p_fcp', 'v_fcp'],
         10: ['orig', 'cst', 'mod_bc', 'p_icms', 'mod_bc_st', 'p_mva_st',
              'p_red_bc_st', 'p_icms_st', 'v_bc', 'v_icms', 'v_bc_st',
-             'v_icms_st', 'bc_include_ipi', 'bc_st_include_ipi'],
+             'v_icms_st', 'bc_include_ipi', 'bc_st_include_ipi', 'p_fcp',
+             'p_fcp_st', 'v_fcp', 'v_fcp_st'],
         20: ['orig', 'cst', 'mod_bc', 'p_icms', 'p_red_bc', 'v_bc',
-             'v_icms', 'bc_include_ipi'],
+             'v_icms', 'bc_include_ipi', 'p_fcp', 'v_fcp', 'mot_des_icms'],
         30: ['orig', 'cst', 'mod_bc_st', 'p_mva_st', 'p_red_bc_st',
-             'p_icms_st', 'v_bc_st', 'v_icms_st', 'bc_st_include_ipi'],
-        40: ['orig', 'cst'],
-        41: ['orig', 'cst'],  # Same tag
-        50: ['orig', 'cst'],
+             'p_icms_st', 'v_bc_st', 'v_icms_st', 'bc_st_include_ipi',
+             'p_fcp_st', 'v_fcp_st', 'mot_des_icms'],
+        40: ['orig', 'cst', 'mot_des_icms'],
+        41: ['orig', 'cst', 'mot_des_icms'],  # Same tag
+        50: ['orig', 'cst', 'mot_des_icms'],
         51: ['orig', 'cst', 'mod_bc', 'p_red_bc', 'p_icms', 'v_bc',
-             'v_icms', 'bc_st_include_ipi'],
-        60: ['orig', 'cst', 'v_bc_st', 'v_icms_st'],
+             'v_icms', 'bc_st_include_ipi', 'p_fcp', 'v_fcp'],
+        60: ['orig', 'cst', 'v_bc_st', 'v_icms_st', 'v_fcp_st'],
         70: normal_widgets,
         90: normal_widgets,
         # Simples Nacional
@@ -255,18 +298,18 @@ class BaseICMSSlave(BaseTaxSlave):
         102: ['orig', 'csosn'],
         103: ['orig', 'csosn'],
         201: ['orig', 'csosn', 'mod_bc_st', 'p_mva_st', 'p_red_bc_st',
-              'p_icms_st', 'v_bc_st', 'v_icms_st', 'p_cred_sn',
-              'p_cred_sn_valid_until', 'v_cred_icms_sn'],
+              'p_icms_st', 'v_bc_st', 'v_icms_st', 'p_cred_sn', 'p_fcp_st',
+              'v_fcp_st', 'p_cred_sn_valid_until', 'v_cred_icms_sn'],
         202: ['orig', 'csosn', 'mod_bc_st', 'p_mva_st', 'p_red_bc_st',
-              'p_icms_st', 'v_bc_st', 'v_icms_st'],
+              'p_icms_st', 'v_bc_st', 'v_icms_st', 'p_fcp_st', 'v_fcp_st'],
         203: ['orig', 'csosn', 'mod_bc_st', 'p_mva_st', 'p_red_bc_st',
-              'p_icms_st', 'v_bc_st', 'v_icms_st'],
+              'p_icms_st', 'v_bc_st', 'v_icms_st', 'p_fcp_st', 'v_fcp_st'],
         300: ['orig', 'csosn'],
         400: ['orig', 'csosn'],
-        500: ['orig', 'csosn', 'v_bc_st_ret', 'v_icms_st_ret'],
+        500: ['orig', 'csosn', 'v_bc_st_ret', 'v_icms_st_ret', 'v_fcp_st_ret'],
         900: ['orig', 'csosn', 'mod_bc', 'v_bc', 'p_red_bc', 'p_icms', 'v_icms',
               'mod_bc_st', 'p_mva_st', 'p_red_bc_st', 'v_bc_st', 'p_icms_st',
-              'v_icms_st', 'p_cred_sn', 'v_cred_icms_sn']
+              'v_icms_st', 'p_cred_sn', 'v_cred_icms_sn', 'p_fcp_st', 'v_fcp_st']
     }
 
     def setup_proxies(self):
@@ -279,6 +322,10 @@ class BaseICMSSlave(BaseTaxSlave):
             self._update_selected_csosn()
         else:
             self._update_selected_cst()
+
+    #
+    # Private API
+    #
 
     def _update_widgets(self):
         has_p_cred_sn = (self.p_cred_sn.get_sensitive()
@@ -296,17 +343,29 @@ class BaseICMSSlave(BaseTaxSlave):
     def _update_selected_cst(self):
         cst = self.cst.get_selected_data()
         valid_widgets = self.MAP_VALID_WIDGETS.get(cst, ('cst', ))
+        self.unset_values(valid_widgets)
         self.set_valid_widgets(valid_widgets)
 
     def _update_selected_csosn(self):
         csosn = self.csosn.get_selected_data()
         valid_widgets = self.MAP_VALID_WIDGETS.get(csosn, ('csosn', ))
+        self.unset_values(valid_widgets)
         self.set_valid_widgets(valid_widgets)
 
+    #
+    # Kiwi Callbacks
+    #
+
     def on_cst__changed(self, widget):
+        if not self.proxy:
+            return
+
         self._update_selected_cst()
 
     def on_csosn__changed(self, widget):
+        if not self.proxy:
+            return
+
         self._update_selected_csosn()
         self._update_widgets()
 
@@ -572,7 +631,7 @@ class BasePISSlave(BaseTaxSlave):
             (u'49 - Outras Operações de Saída', 49),
             (u'50 - Com Direito a Crédito - Vinculada Exclusivamente a Receita'
              u'Tributada no Mercado Interno', 50),
-            (u'51 - Operação com Direito a Crédito – Vinculada Exclusivamente a'
+            (u'51 - Operação com Direito a Crédito - Vinculada Exclusivamente a'
              u'Receita Não Tributada no Mercado Interno', 51),
             (u'52 - Operação com Direito a Crédito - Vinculada Exclusivamente a'
              u'Receita de Exportação', 52),
@@ -709,6 +768,11 @@ class InvoiceItemPisSlave(BasePISSlave, InvoiceItemMixin):
         self.invoice_item = invoice_item
         BasePISSlave.__init__(self, store, model)
 
+    def create_model(self, store):
+        model = InvoiceItemPis(store=store)
+        self.invoice_item.pis_info = model
+        return model
+
     #
     # Public API
     #
@@ -768,7 +832,7 @@ class BaseCOFINSSlave(BaseTaxSlave):
             (u'49 - Outras Operações de Saída', 49),
             (u'50 - Com Direito a Crédito - Vinculada Exclusivamente a Receita'
              u'Tributada no Mercado Interno', 50),
-            (u'51 - Operação com Direito a Crédito – Vinculada Exclusivamente a'
+            (u'51 - Operação com Direito a Crédito - Vinculada Exclusivamente a'
              u'Receita Não Tributada no Mercado Interno', 51),
             (u'52 - Operação com Direito a Crédito - Vinculada Exclusivamente a'
              u'Receita de Exportação', 52),
@@ -897,6 +961,11 @@ class InvoiceItemCofinsSlave(BaseCOFINSSlave, InvoiceItemMixin):
     def __init__(self, store, model, invoice_item):
         self.invoice_item = invoice_item
         BaseCOFINSSlave.__init__(self, store, model)
+
+    def create_model(self, store):
+        model = InvoiceItemCofins(store=store)
+        self.invoice_item.cofins_info = model
+        return model
 
     #
     # Public API

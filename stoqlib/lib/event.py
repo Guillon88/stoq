@@ -61,9 +61,9 @@ class _WeakRef(object):
     def __init__(self, func):
         try:
             # bound method
-            self.obj = weakref.ref(func.im_self)
-            self.meth = weakref.ref(func.im_func)
-            self.id = id(func.im_func)
+            self.obj = weakref.ref(func.__self__)
+            self.meth = weakref.ref(func.__func__)
+            self.id = id(func.__func__)
         except AttributeError:
             # normal callable
             self.obj = None
@@ -71,7 +71,7 @@ class _WeakRef(object):
             self.id = id(func)
 
     def __eq__(self, other):
-        if type(self) is not type(other):
+        if not isinstance(self, type(other)):
             return False
 
         if self.id != other.id:
@@ -134,7 +134,7 @@ class Event(ClassInittableObject):
         """
         for retval in values:
             if retval is not None:
-                if (cls.returnclass and type(retval) != cls.returnclass
+                if (cls.returnclass and not isinstance(retval, cls.returnclass)
                         and not isinstance(retval, cls.returnclass)):
                     raise TypeError('Expected return value to be %s, got %s'
                                     % (cls.returnclass, type(retval)))

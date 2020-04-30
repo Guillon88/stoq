@@ -29,8 +29,7 @@ stoq/gui/payable/payable.py:
 
 import datetime
 
-import pango
-import gtk
+from gi.repository import Pango, Gtk, GdkPixbuf
 from kiwi.currency import currency
 from kiwi.python import all
 from kiwi.ui.objectlist import Column
@@ -61,8 +60,6 @@ from stoq.gui.accounts import BaseAccountWindow, FilterItem
 
 class PayableApp(BaseAccountWindow):
 
-    # TODO: Change all widget.set_sensitive to self.set_sensitive([widget])
-
     app_title = _('Accounts payable')
     gladefile = 'payable'
     search_spec = OutPaymentView
@@ -81,7 +78,7 @@ class PayableApp(BaseAccountWindow):
 
         actions = [
             # File
-            ('AddPayment', gtk.STOCK_ADD, _('Account payable...'),
+            ('AddPayment', Gtk.STOCK_ADD, _('Account payable...'),
              group.get('add_payable'),
              _('Create a new account payable')),
             ('PaymentFlowHistory', None, _('Payment _flow history...'),
@@ -90,22 +87,22 @@ class PayableApp(BaseAccountWindow):
 
             # Payment
             ('PaymentMenu', None, _('Payment')),
-            ('Details', gtk.STOCK_INFO, _('Details...'),
+            ('Details', Gtk.STOCK_INFO, _('Details...'),
              group.get('payment_details'),
              _('Show details for the selected payment')),
-            ('Pay', gtk.STOCK_APPLY, _('Pay...'),
+            ('Pay', Gtk.STOCK_APPLY, _('Pay...'),
              group.get('payment_pay'),
              _('Pay the order associated with the selected payment')),
-            ('Edit', gtk.STOCK_EDIT, _('Edit installments...'),
+            ('Edit', Gtk.STOCK_EDIT, _('Edit installments...'),
              group.get('payment_edit'),
              _('Edit the selected payment installments')),
-            ('CancelPayment', gtk.STOCK_REMOVE, _('Cancel...'),
+            ('CancelPayment', Gtk.STOCK_REMOVE, _('Cancel...'),
              group.get('payment_cancel'),
              _('Cancel the selected payment')),
-            ('SetNotPaid', gtk.STOCK_UNDO, _('Set as not paid...'),
+            ('SetNotPaid', Gtk.STOCK_UNDO, _('Set as not paid...'),
              group.get('payment_set_not_paid'),
              _('Mark the selected payment as not paid')),
-            ('ChangeDueDate', gtk.STOCK_REFRESH, _('Change due date...'),
+            ('ChangeDueDate', Gtk.STOCK_REFRESH, _('Change due date...'),
              group.get('payment_change_due_date'),
              _('Change the due date of the selected payment')),
             ('Comments', None, _('Comments...'),
@@ -124,23 +121,31 @@ class PayableApp(BaseAccountWindow):
              _('Search for bills and checks')),
         ]
 
-        self.payable_ui = self.add_ui_actions(None, actions,
-                                              filename='payable.xml')
+        self.payable_ui = self.add_ui_actions(actions)
         self.set_help_section(_("Accounts payable help"), 'app-payable')
-        self.Pay.set_short_label(_('Pay'))
-        self.Edit.set_short_label(_('Edit'))
-        self.Details.set_short_label(_('Details'))
-        self.Pay.props.is_important = True
-        self.Pay.set_sensitive(False)
-        self.PrintReceipt.set_sensitive(False)
-        self.popup = self.uimanager.get_widget('/PayableSelection')
+        self.set_sensitive([self.Pay], False)
+        self.set_sensitive([self.PrintReceipt], False)
+
+        self.window.add_print_items()
         self.window.add_new_items([self.AddPayment])
-        self.window.NewToolItem.set_tooltip(self.AddPayment.get_tooltip())
-        self.window.add_search_items([self.BillCheckSearch])
-        self.window.SearchToolItem.set_tooltip(
-            self.BillCheckSearch.get_tooltip())
-        self.window.Print.set_tooltip(
-            _("Print a report of these payments"))
+        self.window.add_search_items([self.BillCheckSearch,
+                                      self.PaymentCategories,
+                                      self.PaymentFlowHistory])
+
+    def get_domain_options(self):
+        options = [
+            ('fa-info-circle-symbolic', _('Details'), 'payable.Details', True),
+            ('fa-check-symbolic', _('Pay'), 'payable.Pay', True),
+            ('fa-edit-symbolic', _('Edit installments'), 'payable.Edit', True),
+
+            ('', _('Cancel payment'), 'payable.CancelPayment', False),
+            ('', _('Set as not paid'), 'payable.SetNotPaid', False),
+            ('', _('Change due date'), 'payable.ChangeDueDate', False),
+            ('', _('Comments'), 'payable.Comments', False),
+            ('', _('Print receipt'), 'payable.PrintReceipt', False),
+        ]
+
+        return options
 
     def activate(self, refresh=True):
         if refresh:
@@ -149,33 +154,27 @@ class PayableApp(BaseAccountWindow):
 
         self.search.focus_search_entry()
 
-    def deactivate(self):
-        self.uimanager.remove_ui(self.payable_ui)
-
-    def new_activate(self):
-        self.add_payment()
-
-    def search_activate(self):
-        run_dialog(OutPaymentBillCheckSearch, self, self.store)
-
     def create_filters(self):
         self.set_text_field_columns(['description', 'supplier_name',
-                                     'identifier_str'])
+                                     'identifier_str', 'invoice_numbers'])
         self.create_main_filter()
 
     def get_columns(self):
         return [IdentifierColumn('identifier', title=_('Payment #')),
                 SearchColumn('description', title=_('Description'),
-                             data_type=str, ellipsize=pango.ELLIPSIZE_END,
+                             data_type=str, ellipsize=Pango.EllipsizeMode.END,
                              expand=True, pack_end=True),
                 Column('color', title=_('Description'), width=20,
-                       data_type=gtk.gdk.Pixbuf, format_func=render_pixbuf,
+                       data_type=GdkPixbuf.Pixbuf, format_func=render_pixbuf,
                        column='description'),
+                SearchColumn('invoice_numbers', title=_('Invoice Numbers'), data_type=str),
                 Column('comments_number', title=_(u'Comments'),
                        visible=False),
                 SearchColumn('supplier_name', title=_('Supplier'),
                              data_type=str, width=140,
-                             ellipsize=pango.ELLIPSIZE_END),
+                             ellipsize=Pango.EllipsizeMode.END),
+                SearchColumn('open_date', title=_('Open date'),
+                             data_type=datetime.date, width=100, visible=False),
                 SearchColumn('due_date', title=_('Due date'),
                              data_type=datetime.date, width=100,
                              sorted=True),
@@ -234,7 +233,7 @@ class PayableApp(BaseAccountWindow):
         status = purchase and purchase.status
 
         if (status == PurchaseOrder.ORDER_CANCELLED or
-            status == PurchaseOrder.ORDER_PENDING):
+                status == PurchaseOrder.ORDER_PENDING):
             return False
 
         return True
@@ -287,8 +286,8 @@ class PayableApp(BaseAccountWindow):
         purchase_order = payable_views[0].purchase
 
         if (purchase_order and
-            api.sysparam.get_bool('BLOCK_INCOMPLETE_PURCHASE_PAYMENTS') and
-            not purchase_order.status == PurchaseOrder.ORDER_CLOSED):
+                api.sysparam.get_bool('BLOCK_INCOMPLETE_PURCHASE_PAYMENTS') and
+                not purchase_order.status == PurchaseOrder.ORDER_CLOSED):
 
             return warning(_("Can't confirm the payment if the purchase "
                              "is not completely received yet."))
@@ -374,15 +373,15 @@ class PayableApp(BaseAccountWindow):
 
     def _update_widgets(self):
         selected = self.results.get_selected_rows()
-        self.Details.set_sensitive(self._can_show_details(selected))
-        self.Comments.set_sensitive(self._can_show_comments(selected))
-        self.ChangeDueDate.set_sensitive(self._can_change_due_date(selected))
-        self.CancelPayment.set_sensitive(self._can_cancel_payment(selected))
-        self.Edit.set_sensitive(self._can_edit(selected))
-        self.Pay.set_sensitive(self._can_pay(selected))
-        self.PrintReceipt.set_sensitive(self._are_paid(selected,
-                                                       respect_purchase=True))
-        self.SetNotPaid.set_sensitive(self._are_paid(
+        self.set_sensitive([self.Details], self._can_show_details(selected))
+        self.set_sensitive([self.Comments], self._can_show_comments(selected))
+        self.set_sensitive([self.ChangeDueDate], self._can_change_due_date(selected))
+        self.set_sensitive([self.CancelPayment], self._can_cancel_payment(selected))
+        self.set_sensitive([self.Edit], self._can_edit(selected))
+        self.set_sensitive([self.Pay], self._can_pay(selected))
+        self.set_sensitive([self.PrintReceipt], self._are_paid(selected,
+                                                               respect_purchase=True))
+        self.set_sensitive([self.SetNotPaid], self._are_paid(
             selected, respect_purchase=False) and
             self._can_set_not_paid(selected))
 
@@ -410,9 +409,6 @@ class PayableApp(BaseAccountWindow):
     def on_results__row_activated(self, klist, payable_view):
         if self._can_show_details([payable_view]):
             self.show_details(payable_view)
-
-    def on_results__right_click(self, results, result, event):
-        self.popup.popup(None, None, None, event.button, event.time)
 
     def on_results__selection_changed(self, results, selected):
         self._update_widgets()

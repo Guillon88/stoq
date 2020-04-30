@@ -24,8 +24,7 @@
 
 """Editors for user preferences"""
 
-import gio
-import gtk
+from gi.repository import Gtk, Gio
 
 from stoqlib.api import api
 from stoqlib.gui.editors.baseeditor import BaseEditor, BaseEditorSlave
@@ -57,6 +56,7 @@ class _PreferencesModel(object):
     language = _PrefField('user-locale')
     toolbar_style = _PrefField('toolbar-style')
     spreadsheet = _PrefField('spreadsheet-action')
+    launcher_screen = _PrefField('launcher-screen')
 
     #
     #  Private
@@ -78,7 +78,8 @@ class PreferencesEditor(BaseEditor):
     size = (600, 400)
     proxy_widgets = ['toolbar_style',
                      'language',
-                     'spreadsheet']
+                     'spreadsheet',
+                     'launcher_screen']
 
     def __init__(self, store, *args, **kwargs):
         BaseEditor.__init__(self, store, *args, **kwargs)
@@ -96,10 +97,10 @@ class PreferencesEditor(BaseEditor):
         :param args: additional args to slave
         :param kwargs: additional kwargs to slave
         """
-        event_box = gtk.EventBox()
+        event_box = Gtk.EventBox()
         event_box.set_border_width(6)
         self.preferences_notebook.append_page(event_box,
-                                              gtk.Label(tab_name))
+                                              Gtk.Label(label=tab_name))
 
         slave = slave_class(*args, **kwargs)
         if isinstance(slave, BaseEditorSlave):
@@ -125,6 +126,7 @@ class PreferencesEditor(BaseEditor):
         self._prefill_toolbar_style_combo()
         self._prefill_language_combo()
         self._prefill_spreadsheet()
+        self._prefill_launcher_screen()
         self.proxy = self.add_proxy(self.model, self.proxy_widgets)
 
     def setup_slaves(self):
@@ -138,7 +140,7 @@ class PreferencesEditor(BaseEditor):
         self.preferences_notebook.set_show_tabs(True)
         self.preferences_notebook.set_show_border(True)
         self.preferences_notebook.set_tab_label(self.general_tab,
-                                                gtk.Label(_('General')))
+                                                Gtk.Label(label=_('General')))
         # Hide cancel button as the model isn't on a db store and
         # therefore there's nothing to rollback.
         self.main_dialog.cancel_button.hide()
@@ -168,8 +170,14 @@ class PreferencesEditor(BaseEditor):
             (_("Portuguese (Brazil)"), 'pt_BR'),
         ])
 
+    def _prefill_launcher_screen(self):
+        self.launcher_screen.prefill([
+            (_("Applications"), None),
+            (_("My Work Orders"), 'my-work-orders'),
+        ])
+
     def _prefill_spreadsheet(self):
-        app_info = gio.app_info_get_default_for_type(
+        app_info = Gio.app_info_get_default_for_type(
             'application/vnd.ms-excel', False)
 
         options = [(_("Ask (default)"), None)]

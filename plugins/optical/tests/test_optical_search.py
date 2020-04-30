@@ -67,8 +67,8 @@ class TestMedicSalesSearch(GUITest, OpticalDomainTest):
         wo_item = self.create_work_order_item(order=workorder)
         wo_item.sale_item = sale_item
         self.add_payments(sale)
-        sale.order()
-        sale.confirm()
+        sale.order(self.current_user)
+        sale.confirm(self.current_user)
         sale.open_date = localtoday()
         sale.confirm_date = localtoday()
 
@@ -80,8 +80,8 @@ class TestMedicSalesSearch(GUITest, OpticalDomainTest):
         search.results.select(search.results[0])
         self.click(search.sale_details_button)
 
-        self.assertEquals(run_dialog.call_count, 1)
-        self.assertEquals(run_dialog.call_args[0][0], SaleDetailsDialog)
-        self.assertEquals(run_dialog.call_args[0][1], search)
-        self.assertEquals(run_dialog.call_args[0][2], self.store)
-        self.assertEquals(run_dialog.call_args[0][3].id, sale.id)
+        self.assertEqual(run_dialog.call_count, 1)
+        self.assertEqual(run_dialog.call_args[0][0], SaleDetailsDialog)
+        self.assertEqual(run_dialog.call_args[0][1], search)
+        self.assertEqual(run_dialog.call_args[0][2], self.store)
+        self.assertEqual(run_dialog.call_args[0][3].id, sale.id)

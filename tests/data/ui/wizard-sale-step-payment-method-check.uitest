@@ -1,15 +1,15 @@
 wizard: ConfirmSaleWizard
 GtkDialog(toplevel): title='Sale Checkout', hidden
-  GtkVBox(PluggableWizard-vbox):
-    GtkVBox(vbox1, expand=True, fill=True):
+  GtkBox(PluggableWizard-vbox, orientation=vertical):
+    GtkBox(vbox1, orientation=vertical, expand=True, fill=True):
       ProxyLabel(header_lbl, fill=True): hidden
       GtkEventBox(slave_area, expand=True, fill=True): slave PaymentMethodStep is attached
-        GtkVBox(step.toplevel):
+        GtkBox(step.vbox1, orientation=vertical):
           GtkEventBox(step.place_holder, expand=True, fill=True): slave CheckMethodSlave is attached
-            GtkFrame(frame1):
-              GtkVBox(vbox1):
+            GtkFrame(toplevel):
+              GtkBox(vbox1, orientation=vertical):
                 GtkTable(table1, fill=True):
-                  GtkHBox(hbox1):
+                  GtkBox(hbox1, orientation=horizontal):
                     ProxyLabel(installments_number_lbl, fill=True, padding=6): 'Installments:'
                     ProxySpinButton(installments_number): '1'
                     ProxyLabel(first_duedate_lbl, fill=True): 'Start at:'
@@ -21,7 +21,7 @@ GtkDialog(toplevel): title='Sale Checkout', hidden
                       item: 'weeks'
                       item: 'months', selected
                       item: 'years'
-                  GtkHBox(bank_info_box):
+                  GtkBox(bank_info_box, orientation=horizontal):
                     GtkLabel(bank_label, fill=True, padding=6): 'Bank ID:'
                     ProxyEntry(bank_id, fill=True): ''
                     GtkLabel(bank_branch_label, fill=True): 'Bank Branch:'
@@ -31,7 +31,7 @@ GtkDialog(toplevel): title='Sale Checkout', hidden
                     GtkLabel(bank_label1, expand=True, fill=True, padding=6): 'First Number:'
                     ProxyEntry(bank_first_check_number, expand=True, padding=6): ''
                 GtkEventBox(slave_holder, expand=True, fill=True): slave PaymentListSlave is attached
-                  GtkVBox(toplevel):
+                  GtkBox(vbox1, orientation=vertical):
                     ObjectList(payment_list, expand=True, fill=True):
                       column: title='Description', expand
                       column: title='Bank ID'
@@ -40,80 +40,97 @@ GtkDialog(toplevel): title='Sale Checkout', hidden
                       column: title='Number'
                       column: title='Due date'
                       column: title='Value'
-                      row: u'1/1 Check for sale 12345', None, None, None, None, date.today(), <currency $10>
-                    GtkHBox(hbox1):
+                      row: '1/1 Check for sale 12345', None, None, None, None, date.today(), <currency $10>
+                    GtkBox(hbox1, orientation=horizontal):
                       ProxyLabel(difference_status_label, expand=True, fill=True): '<span >Difference</span>'
-                      ProxyLabel(difference_label, fill=True): '<span >$ 0.00</span>'
-                    GtkHBox(hbox2):
+                      ProxyLabel(difference_label, fill=True): '<span >$0.00</span>'
+                    GtkBox(hbox2, orientation=horizontal):
                       ProxyLabel(total_status_label, expand=True, fill=True): 'Total:'
                       ProxyLabel(total_label, fill=True): '<span >$10.00</span>'
       ProxyLabel(notification_lbl, fill=True):
-      GtkHBox(hbox1, fill=True, pack-end):
-        GtkHButtonBox(buttonbox, expand=True, fill=True, pack-end):
+      GtkBox(hbox1, orientation=horizontal, fill=True, pack-end):
+        GtkButtonBox(buttonbox, orientation=horizontal, expand=True, fill=True, pack-end):
           GtkButton(cancel_button): 'gtk-cancel'
           GtkButton(previous_button): 'gtk-go-back'
           GtkButton(next_button): '_Finish'
           GtkButton(ok_button): 'gtk-ok', hidden
-          GtkButton(help_button): 'gtk-help'
-    GtkHButtonBox(dialog-action_area1, fill=True, pack-end):
+          GtkButton(help_button, expand=True, fill=True): 'gtk-help'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(dialog-action_area1, orientation=horizontal, fill=True, pack-end):
 
 model: Sale<1>
   cancel_date: None
+  cancel_reason: None
   close_date: None
   confirm_date: None
-  discount_value: <currency $ 0>
+  discount_value: <currency $0>
   expire_date: None
   group_id: PaymentGroup<2>
-  invoice_number: 1004
+  invoice_id: Invoice<3>
   open_date: datetime.today()
-  operation_nature: u''
   paid: False
   return_date: None
   service_invoice_number: None
-  status: u'ordered'
-  surcharge_value: <currency $ 0>
-  total_amount: <currency $ 0>
+  status: 'ordered'
+  surcharge_value: <currency $0>
+  total_amount: <currency $0>
 
 model: PaymentGroup<2>
 
-model: Payment<3>
+model: Invoice<3>
+  cnf: None
+  invoice_number: None
+  invoice_type: 'out'
+  key: None
+  mode: None
+  operation_nature: None
+  series: None
+
+model: Payment<4>
   base_value: <currency $10>
   bill_received: False
   cancel_date: None
-  description: u'1/1 Check for sale'
-  discount: <currency $ 0>
+  description: '1/1 Check for sale'
+  discount: <currency $0>
   due_date: datetime.today()
   group_id: PaymentGroup<2>
-  interest: <currency $ 0>
+  interest: <currency $0>
   open_date: datetime.today()
   paid_date: None
   paid_value: None
   payment_number: None
-  payment_type: u'in'
-  penalty: <currency $ 0>
-  status: u'preview'
+  payment_type: 'in'
+  penalty: <currency $0>
+  status: 'preview'
   value: <currency $10>
 
-model: Sellable<4>
-  barcode: u''
+model: Sellable<5>
+  barcode: ''
   base_price: <currency $10>
-  code: u''
-  commission: <currency $ 0>
+  code: ''
+  commission: <currency $0>
   cost: <currency $125>
-  description: u'Description'
+  cost_last_updated: datetime.today()
+  description: 'Description'
+  favorite: False
+  keywords: None
   max_discount: Decimal('0')
-  notes: u''
+  notes: ''
   on_sale_end_date: None
-  on_sale_price: <currency $ 0>
+  on_sale_price: <currency $0>
   on_sale_start_date: None
-  status: u'available'
+  price_last_updated: datetime.today()
+  requires_kitchen_production: False
+  short_description: ''
+  sort_order: 0
+  status: 'available'
 
-model: ProductStockItem<5>
+model: ProductStockItem<6>
   quantity: Decimal('100.000')
-  stock_cost: <currency $ 0>
+  stock_cost: <currency $0>
 
-model: SaleItem<6>
-  average_cost: <currency $ 0>
+model: SaleItem<7>
+  average_cost: <currency $0>
   base_price: <currency $10>
   completion_date: None
   estimated_fix_date: datetime.today()
@@ -122,5 +139,5 @@ model: SaleItem<6>
   quantity: Decimal('1.000')
   quantity_decreased: Decimal('0.000')
   sale_id: Sale<1>
-  sellable_id: Sellable<4>
+  sellable_id: Sellable<5>
 

@@ -34,6 +34,7 @@ Certain changes to a payment is saved in :class:`PaymentChangeHistory`
 
 # pylint: enable=E1101
 
+import collections
 import logging
 
 from kiwi.currency import currency
@@ -44,7 +45,7 @@ from stoqlib.database.properties import (DateTimeCol, BoolCol,
                                          PriceCol, UnicodeCol, IdentifierCol,
                                          IdCol, EnumCol)
 from stoqlib.domain.account import AccountTransaction
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
 from stoqlib.domain.event import Event
 from stoqlib.exceptions import DatabaseInconsistency, StoqlibError
 from stoqlib.lib.dateutils import create_date_interval, localnow, localtoday
@@ -54,7 +55,7 @@ _ = stoqlib_gettext
 log = logging.getLogger(__name__)
 
 
-class Payment(Domain):
+class Payment(IdentifiableDomain):
     """Payment, a transfer of money between a |branch| and |client| or a
     |supplier|.
 
@@ -134,12 +135,14 @@ class Payment(Domain):
     #: the group was cancelled.
     STATUS_CANCELLED = u'cancelled'
 
-    statuses = {STATUS_PREVIEW: _(u'Preview'),
-                STATUS_PENDING: _(u'To Pay'),
-                STATUS_PAID: _(u'Paid'),
-                STATUS_REVIEWING: _(u'Reviewing'),
-                STATUS_CONFIRMED: _(u'Confirmed'),
-                STATUS_CANCELLED: _(u'Cancelled')}
+    statuses = collections.OrderedDict([
+        (STATUS_PREVIEW, _(u'Preview')),
+        (STATUS_PENDING, _(u'To Pay')),
+        (STATUS_PAID, _(u'Paid')),
+        (STATUS_REVIEWING, _(u'Reviewing')),
+        (STATUS_CONFIRMED, _(u'Confirmed')),
+        (STATUS_CANCELLED, _(u'Cancelled')),
+    ])
 
     #: type of payment :obj:`.TYPE_IN` or :obj:`.TYPE_OUT`
     payment_type = EnumCol(allow_none=False, default=TYPE_IN)
@@ -202,6 +205,10 @@ class Payment(Domain):
     #: will make the payment
     branch = Reference(branch_id, 'Branch.id')
 
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
+
     method_id = IdCol()
 
     #: |paymentmethod| for this payment
@@ -229,6 +236,8 @@ class Payment(Domain):
     #: |accounttransaction| for this payment
     transaction = Reference('id', 'AccountTransaction.payment_id', on_remote=True)
 
+    card_data = Reference('id', 'CreditCardData.payment_id', on_remote=True)
+
     #: indicates if a bill has been received. They are usually delivered by
     #: mail before the due date. This is not indicating whether the payment has
     #: been paid, just that the receiver has notified the payer somehow.
@@ -239,12 +248,14 @@ class Payment(Domain):
     #: |attachment| for this payment
     attachment = Reference(attachment_id, 'Attachment.id')
 
-    def __init__(self, store=None, **kw):
+    def __init__(self, store, branch, **kw):
+        from stoqlib.domain.person import Branch
+        assert isinstance(branch, Branch)
         if not 'value' in kw:
             raise TypeError('You must provide a value argument')
         if not 'base_value' in kw or not kw['base_value']:
             kw['base_value'] = kw['value']
-        Domain.__init__(self, store=store, **kw)
+        super(Payment, self).__init__(store=store, branch=branch, **kw)
 
     def _check_status(self, status, operation_name):
         fmt = 'Invalid status for %s operation: %s'
@@ -265,7 +276,8 @@ class Payment(Domain):
         self.store.remove(self)
 
     @classmethod
-    def create_repeated(cls, store, payment, repeat_type, start_date, end_date):
+    def create_repeated(cls, store, payment, repeat_type, start_date, end_date,
+                        temporary_identifiers=False):
         """Create a set of repeated payments.
         Given a type of interval (*repeat_type*), a start date and an end_date,
         this creates a list of payments for that interval.
@@ -277,6 +289,8 @@ class Payment(Domain):
         :param repeat_type: the kind of repetition (weekly, monthly etc)
         :param start_date: the date to start this repetition
         :param end_date: the date to end this repetition
+        :param temporary_identifiers: If the payments should be created with temporary
+          identifiers
         :returns: a list of repeated payments
         """
         dates = create_date_interval(interval_type=repeat_type,
@@ -291,8 +305,13 @@ class Payment(Domain):
 
         payments = []
         for i, date in enumerate(dates[1:]):
+            temporary_identifier = None
+            if temporary_identifiers:
+                temporary_identifier = Payment.get_temporary_identifier(store)
             p = Payment(open_date=payment.open_date,
+                        identifier=temporary_identifier,
                         branch=payment.branch,
+                        station=payment.station,
                         payment_type=payment.payment_type,
                         status=payment.status,
                         description=u'%d/%d %s' % (i + 2, n_dates,
@@ -408,7 +427,7 @@ class Payment(Domain):
         self.status = self.STATUS_PAID
 
         if (self.is_separate_payment() or
-            self.method.operation.create_transaction()):
+                self.method.operation.create_transaction()):
             AccountTransaction.create_from_payment(
                 self,
                 code=account_transaction_number,

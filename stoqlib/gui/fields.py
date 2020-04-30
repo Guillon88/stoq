@@ -23,16 +23,14 @@
 ##
 ##
 
+import datetime
 import os
 import tempfile
 
-import gio
-import gobject
-import gtk
+from gi.repository import Gtk, GObject, Gio, Pango
 from kiwi.ui.dialogs import selectfile
 from kiwi.ui.entry import ENTRY_MODE_DATA
 from kiwi.ui.forms import TextField, ChoiceField, Field
-import pango
 
 from stoqlib.api import api
 from stoqlib.domain.attachment import Attachment
@@ -78,14 +76,14 @@ class DomainChoiceField(ChoiceField):
     default_overrides = dict(has_add_button=True, has_edit_button=True)
 
     #: If we have the permission to add new object of this kind
-    can_add = gobject.property(type=bool, default=True)
+    can_add = GObject.Property(type=bool, default=True)
 
     #: If we have the permission to edit the currently selected object
-    can_edit = gobject.property(type=bool, default=True)
+    can_edit = GObject.Property(type=bool, default=True)
 
     #: If we have the permission to view the details of the currently
     #: selected object
-    can_view = gobject.property(type=bool, default=True)
+    can_view = GObject.Property(type=bool, default=True)
 
     #: If we are using the ids to pupulate the field instead of domain
     #: objects. This changes what gets send as argument on :meth:`.populate`
@@ -168,7 +166,7 @@ class AddressField(DomainChoiceField):
     default_overrides.update(use_entry=True)
 
     #: The person the address belongs to, must be a :py:class:`stoqlib.domain.person.Person`
-    person = gobject.property(type=object, default=None)
+    person = GObject.Property(type=object, default=None)
 
     # Field
 
@@ -196,8 +194,8 @@ class AddressField(DomainChoiceField):
 
     # Public
 
-    def set_from_client(self, client):
-        self.person = client.person
+    def set_from_person(self, person):
+        self.person = person
         self.populate(self.person.get_main_address())
 
     # Private
@@ -211,12 +209,12 @@ class PaymentMethodField(ChoiceField):
     #: The type of the payment used to get creatable methods.
     #: See :meth:`stoqlib.lib.interfaces.IPaymentOperation.creatable`
     #: for more information
-    payment_type = gobject.property(type=object, default=None)
+    payment_type = GObject.Property(type=object, default=None)
 
     #: If this is being created separated from a |sale| / |purchase|
     #: See :meth:`stoqlib.lib.interfaces.IPaymentOperation.creatable`
     #: for more information
-    separate = gobject.property(type=bool, default=True)
+    separate = GObject.Property(type=bool, default=True)
 
     # Field
 
@@ -238,7 +236,7 @@ class PaymentCategoryField(DomainChoiceField):
     #: This is the type of payment category we will display in this field, it
     #: it should either be PaymentCategory.TYPE_PAYABLE or
     #: PaymentCategory.TYPE_RECEIVABLE
-    category_type = gobject.property(type=object, default=None)
+    category_type = GObject.Property(type=object, default=None)
 
     # Field
 
@@ -267,13 +265,13 @@ class PersonField(DomainChoiceField):
 
     #: This is the type of person we will display in this field, it
     #: must be a class referencing a :py:class:`stoqlib.domain.person.Person`
-    person_type = gobject.property(type=object)
+    person_type = GObject.Property(type=object)
 
     # Field
 
     def populate(self, person_id):
         from stoqlib.domain.person import (Client, Supplier, Transporter,
-                                           SalesPerson, Branch)
+                                           SalesPerson, Branch, LoginUser)
         store = get_store_for_field(self)
         person_type = self.person_type
         if person_type == Supplier:
@@ -291,16 +289,24 @@ class PersonField(DomainChoiceField):
         elif person_type == Branch:
             self.add_button.set_tooltip_text(_("Add a new branch"))
             self.edit_button.set_tooltip_text(_("Edit the selected branch"))
+        elif person_type == LoginUser:
+            self.add_button.set_tooltip_text(_("Add a new user"))
+            self.edit_button.set_tooltip_text(_("Edit the selected user"))
         else:
             raise AssertionError(self.person_type)
 
-        items = person_type.get_active_items(store)
+        if person_type == SalesPerson:
+            items = person_type.get_active_items(store, api.get_current_branch(store))
+        else:
+            items = person_type.get_active_items(store)
         self.prefill(items, person_id)
 
     def run_dialog(self, store, person):
-        from stoqlib.domain.person import Branch, Client, Supplier, Transporter
+        from stoqlib.domain.person import (Branch, Client, Supplier,
+                                           Transporter, SalesPerson)
         from stoqlib.gui.editors.personeditor import (BranchEditor,
                                                       ClientEditor,
+                                                      EmployeeEditor,
                                                       SupplierEditor,
                                                       TransporterEditor)
         editors = {
@@ -308,10 +314,16 @@ class PersonField(DomainChoiceField):
             Client: ClientEditor,
             Supplier: SupplierEditor,
             Transporter: TransporterEditor,
+            SalesPerson: EmployeeEditor,
         }
         editor = editors.get(self.person_type)
         if editor is None:  # pragma no cover
             raise NotImplementedError(self.person_type)
+
+        # FIXME: Salesperson is edited on EmployeeEditor, so we need to get
+        # that facet for the editor
+        if isinstance(person, SalesPerson):
+            person = person.person.employee
 
         from stoqlib.gui.wizards.personwizard import run_person_role_dialog
         return run_person_role_dialog(editor, self.toplevel, store, person,
@@ -326,23 +338,28 @@ class PersonField(DomainChoiceField):
 
 class PersonQueryField(TextField):
 
-    default_overrides = dict(has_add_button=True)
+    default_overrides = dict(
+        has_add_button=True,
+        has_edit_button=True,
+    )
 
     #: This is the type of person we will display in this field, it
     #: must be a class referencing a :py:class:`stoqlib.domain.person.Person`
-    person_type = gobject.property(type=object)
+    person_type = GObject.Property(type=object)
 
     widget_data_type = object
 
     def attach(self):
         assert self.editable
 
-        from stoqlib.domain.person import Client, Supplier
+        from stoqlib.domain.person import Client, Supplier, Person
         from stoqlib.gui.widgets.queryentry import (ClientEntryGadget,
-                                                    SupplierEntryGadget)
+                                                    SupplierEntryGadget,
+                                                    PersonEntryGadget)
         gadgets = {
             Client: ClientEntryGadget,
             Supplier: SupplierEntryGadget,
+            Person: PersonEntryGadget,
         }
         gadget = gadgets.get(self.person_type)
         if gadgets is None:  # pragma no cover
@@ -352,7 +369,12 @@ class PersonQueryField(TextField):
             entry=self.widget,
             store=get_store_for_field(self),
             parent=self.toplevel,
-            edit_button=self.add_button)
+            edit_button=self.add_button,
+            info_button=self.edit_button)
+
+        # Update edit button to be a info button
+        self.edit_button.set_image(
+            Gtk.Image.new_from_stock(Gtk.STOCK_INFO, Gtk.IconSize.MENU))
 
     def populate(self, obj):
         self.set_value(obj)
@@ -361,6 +383,11 @@ class PersonQueryField(TextField):
         self.gadget.set_value(obj)
 
     def add_button_clicked(self, button):
+        # The gadget will take care of the callback. We just need to override
+        # this to avoid a NotImplementedError
+        pass
+
+    def edit_button_clicked(self, button):
         # The gadget will take care of the callback. We just need to override
         # this to avoid a NotImplementedError
         pass
@@ -416,6 +443,21 @@ class GridGroupField(DomainChoiceField):
                           visual_mode=not self.can_edit)
 
 
+class UserProfileField(DomainChoiceField):
+    """A domain choice field for selecting a |gridgroup|
+
+    More information about this class on :class:`DomainChoiceField`
+    """
+
+    default_overrides = DomainChoiceField.default_overrides.copy()
+    default_overrides.update(use_entry=True, can_add=False, can_edit=False)
+
+    def populate(self, profile):
+        from stoqlib.domain.profile import UserProfile
+        store = get_store_for_field(self)
+        self.prefill(api.for_combo(store.find(UserProfile)), profile)
+
+
 class AttachmentField(Field):
     """This field allows attaching files to models.
 
@@ -441,22 +483,24 @@ class AttachmentField(Field):
 
     no_attachment_lbl = _('No attachment.')
 
+    attachment = GObject.Property(type=object, default=None)
+
     def build_widget(self):
-        button = gtk.Button()
+        button = Gtk.Button()
         button.connect('clicked', self._on_open_button__clicked)
 
-        box = gtk.HBox(False, 4)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         button.add(box)
 
-        self._label = gtk.Label(self.no_attachment_lbl)
-        self._label.set_ellipsize(pango.ELLIPSIZE_END)
+        self._label = Gtk.Label(label=self.no_attachment_lbl)
+        self._label.set_ellipsize(Pango.EllipsizeMode.END)
         self._label.set_alignment(0.5, 0.5)
         box.pack_start(self._label, True, True, 0)
 
-        self.image = gtk.Image()
+        self.image = Gtk.Image()
         box.pack_end(self.image, False, False, 0)
 
-        self.sep = gtk.VSeparator()
+        self.sep = Gtk.VSeparator()
         box.pack_start(self.sep, False, False, 0)
 
         button.show_all()
@@ -473,12 +517,12 @@ class AttachmentField(Field):
 
         if has_attachment:
             self._label.set_label(self.attachment.get_description())
-            app_info = gio.app_info_get_default_for_type(
+            app_info = Gio.app_info_get_default_for_type(
                 self.attachment.mimetype,
                 must_support_uris=False)
             if app_info:
                 gicon = app_info.get_icon()
-                self.image.set_from_gicon(gicon, gtk.ICON_SIZE_SMALL_TOOLBAR)
+                self.image.set_from_gicon(gicon, Gtk.IconSize.SMALL_TOOLBAR)
         else:
             self._label.set_label(self.no_attachment_lbl)
 
@@ -496,7 +540,7 @@ class AttachmentField(Field):
 
     def delete_button_clicked(self, button):
         if not yesno(_("Are you sure you want to remove the attachment?"),
-                     gtk.RESPONSE_NO, _("Remove"), _("Don't remove")):
+                     Gtk.ResponseType.NO, _("Remove"), _("Don't remove")):
             return
 
         self.attachment.blob = None
@@ -513,15 +557,15 @@ class AttachmentField(Field):
         with selectfile(_("Select attachment"), filters=filters) as sf:
             rv = sf.run()
             filename = sf.get_filename()
-            if rv != gtk.RESPONSE_OK or not filename:
+            if rv != Gtk.ResponseType.OK or not filename:
                 return
 
         data = open(filename, 'rb').read()
-        mimetype = gio.content_type_guess(filename, data, False)
+        mimetype = Gio.content_type_guess(filename, data)[0]
         if self.attachment is None:
             self.attachment = Attachment(store=self.store)
-        self.attachment.name = unicode(os.path.basename(filename))
-        self.attachment.mimetype = unicode(mimetype)
+        self.attachment.name = str(os.path.basename(filename))
+        self.attachment.mimetype = str(mimetype)
         self.attachment.blob = data
         self._update_widget()
 
@@ -534,7 +578,14 @@ class AttachmentField(Field):
             filename = f.name
             f.write(self.attachment.blob)
 
-        gfile = gio.File(path=filename)
-        app_info = gio.app_info_get_default_for_type(
+        gfile = Gio.File.new_for_path(filename)
+        app_info = Gio.app_info_get_default_for_type(
             self.attachment.mimetype, False)
         app_info.launch([gfile])
+
+
+class DateTextField(TextField):
+
+    # FIXME: Maybe we should change kiwi to transform widget_data_type in a
+    # gobject property so we can inform it at creation time
+    widget_data_type = datetime.date

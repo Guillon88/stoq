@@ -1,14 +1,14 @@
 wizard: PersonRoleWizard
 GtkDialog(toplevel): title='New Client', hidden
-  GtkVBox(PluggableWizard-vbox):
-    GtkVBox(vbox1, expand=True, fill=True):
+  GtkBox(PluggableWizard-vbox, orientation=vertical):
+    GtkBox(vbox1, orientation=vertical, expand=True, fill=True):
       ProxyLabel(header_lbl, fill=True): hidden
       GtkEventBox(slave_area, expand=True, fill=True): slave RoleEditorStep is attached
-        GtkVBox(step.toplevel):
+        GtkBox(step.vbox1, orientation=vertical):
           GtkEventBox(step.place_holder, expand=True, fill=True):
-            GtkVBox():
+            GtkBox(orientation=vertical):
               GtkNotebook(expand=True, fill=True):
-                GtkVBox():
+                GtkBox(orientation=vertical):
                   GtkTable(fill=True):
                     GtkLabel(): 'Name:'
                     ProxyEntry(): 'client name'
@@ -20,7 +20,7 @@ GtkDialog(toplevel): title='New Client', hidden
                     ProxyEntry(): ''
                     GtkLabel(): 'Mobile:'
                     ProxyEntry(): ''
-                  GtkHBox(fill=True):
+                  GtkBox(orientation=horizontal, fill=True):
                     GtkLabel(expand=True, fill=True):
                     GtkButton(fill=True): 'Co_ntacts...'
                     GtkButton(fill=True): 'Credit Check History...'
@@ -30,10 +30,10 @@ GtkDialog(toplevel): title='New Client', hidden
                     GtkTable():
                       GtkLabel(): 'Street:'
                       ProxyEntry(): 'street'
-                      GtkHBox():
+                      GtkBox(orientation=horizontal):
                         GtkLabel(expand=True, fill=True):
                         ProxyCheckButton(fill=True): 'Number:', active
-                      GtkHBox():
+                      GtkBox(orientation=horizontal):
                         ProxyEntry(expand=True, fill=True): '123'
                         GtkLabel(fill=True): 'Postal Code:'
                         ProxyEntry(fill=True): '     -   '
@@ -42,18 +42,18 @@ GtkDialog(toplevel): title='New Client', hidden
                       GtkLabel(): 'Complement:'
                       ProxyEntry(): ''
                       GtkLabel(): 'City:'
-                      ProxyEntry(): 'S\xc3\xa3o Carlos'
+                      ProxyEntry(): 'São Carlos'
                       GtkLabel(): 'State:'
                       ProxyEntry(): 'SP'
                       GtkLabel(): 'Country:'
                       ProxyComboEntry():
                         item: 'Brazil', selected
                         item: '... 252 more countries ...'
-                  GtkHBox(fill=True):
+                  GtkBox(orientation=horizontal, fill=True):
                     ProxyLabel(expand=True, fill=True):
                     GtkButton(fill=True): 'More _Addresses...'
                   GtkEventBox(fill=True):
-                GtkVBox():
+                GtkBox(orientation=vertical):
                   GtkFrame(fill=True):
                     GtkEventBox():
                       GtkTable():
@@ -65,11 +65,15 @@ GtkDialog(toplevel): title='New Client', hidden
                         ProxyEntry(): ''
                         GtkLabel(): 'RG Expedition\nDate:'
                         ProxyDateEntry(): None
+                        GtkLabel(): 'State Registry:'
+                        ProxyEntry(): ''
+                        GtkLabel(): 'City Registry:'
+                        ProxyEntry(): ''
                   GtkFrame(fill=True): hidden
                     GtkEventBox():
-                GtkVBox():
+                GtkBox(orientation=vertical):
                   GtkEventBox(fill=True):
-                    GtkVBox():
+                    GtkBox(orientation=vertical):
                       GtkTable(expand=True, fill=True):
                         GtkLabel(): 'Financial Status:'
                         ProxyComboBox():
@@ -82,14 +86,20 @@ GtkDialog(toplevel): title='New Client', hidden
                           item: '', selected
                       GtkHSeparator(fill=True):
                   GtkEventBox(fill=True):
-                    GtkVBox():
+                    GtkBox(orientation=vertical):
                       GtkTable(fill=True):
                         GtkLabel(): 'Gender:'
-                        GtkHBox():
-                          GtkRadioButton(fill=True): 'Male', active
-                          GtkRadioButton(fill=True): 'Female'
+                        GtkBox(orientation=horizontal):
+                          GtkRadioButton(expand=True): 'Not set', active
+                          GtkRadioButton(expand=True): 'Male'
+                          GtkRadioButton(expand=True): 'Female'
                         GtkLabel(): 'Birth Date:'
                         ProxyDateEntry(): None
+                        GtkLabel(): 'Responsible:'
+                        GtkBox(orientation=horizontal):
+                          ProxyEntry(expand=True, fill=True): ''
+                          GtkButton(): insensitive
+                          GtkButton(): insensitive
                         GtkLabel(): 'Occupation:'
                         ProxyEntry(): ''
                         GtkLabel(): 'Birth Country:'
@@ -103,7 +113,7 @@ GtkDialog(toplevel): title='New Client', hidden
                         GtkLabel(): "Father's Name:"
                         ProxyEntry(): ''
                         GtkLabel(): 'Birth City:'
-                        ProxyEntry(): 'S\xc3\xa3o Carlos'
+                        ProxyEntry(): 'São Carlos'
                         GtkLabel(): 'Marital Status:'
                         ProxyComboBox():
                           item: 'Single', selected
@@ -115,13 +125,13 @@ GtkDialog(toplevel): title='New Client', hidden
                         GtkLabel(): 'Spouse:', hidden
                         ProxyEntry(): '', hidden
                   GtkEventBox(expand=True, fill=True):
-                    GtkVBox():
+                    GtkBox(orientation=vertical):
                       GtkLabel(fill=True): hidden
                       GtkLabel(fill=True): 'Observations:'
                       GtkScrolledWindow(expand=True, fill=True):
                         ProxyTextView():
                 GtkEventBox():
-                  GtkHBox():
+                  GtkBox(orientation=horizontal):
                     GtkFrame(expand=True, fill=True, padding=6):
                       GtkAlignment():
                         GtkTable():
@@ -131,47 +141,48 @@ GtkDialog(toplevel): title='New Client', hidden
                           ProxyLabel(): 'Credit Limit ($CURRENCY):'
                           ProxyEntry(): '0.00'
                           GtkLabel(): 'Available Credit:'
-                          ProxyLabel(): '<span >$ 0.00</span>'
+                          ProxyLabel(): '<span >$0.00</span>'
                       GtkLabel(): '<b>Store Credit</b>'
                     GtkFrame(expand=True, fill=True):
                       GtkAlignment():
                         GtkTable():
                           GtkLabel(): 'Available:'
-                          ProxyLabel(): '<span >$ 0.00</span>'
+                          ProxyLabel(): '<span >$0.00</span>'
                           GtkButton():
                           GtkButton(): 'gtk-print'
                       GtkLabel(): '<b>Credit</b>'
       ProxyLabel(notification_lbl, fill=True):
-      GtkHBox(hbox1, fill=True, pack-end):
-        GtkHButtonBox(buttonbox, expand=True, fill=True, pack-end):
+      GtkBox(hbox1, orientation=horizontal, fill=True, pack-end):
+        GtkButtonBox(buttonbox, orientation=horizontal, expand=True, fill=True, pack-end):
           GtkButton(cancel_button): 'gtk-cancel'
           GtkButton(previous_button): 'gtk-go-back'
           GtkButton(next_button): '_Finish'
           GtkButton(ok_button): 'gtk-ok', hidden
-          GtkButton(help_button): 'gtk-help'
-    GtkHButtonBox(dialog-action_area1, fill=True, pack-end):
+          GtkButton(help_button, expand=True, fill=True): 'gtk-help'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(dialog-action_area1, orientation=horizontal, fill=True, pack-end):
 
 model: Client<1>
-  salary: <currency $ 0>
-  credit_limit: <currency $ 0>
+  salary: <currency $0>
+  credit_limit: <currency $0>
   days_late: 0
   person_id: Person<2>
-  status: u'solvent'
+  status: 'solvent'
 
 model: Person<2>
-  email: u''
-  fax_number: u''
-  mobile_number: u''
-  name: u'client name'
-  notes: u''
-  phone_number: u''
+  email: ''
+  fax_number: ''
+  mobile_number: ''
+  name: 'client name'
+  notes: ''
+  phone_number: ''
 
 model: Address<3>
-  complement: u''
-  district: u'district'
+  complement: ''
+  district: 'district'
   is_main_address: True
   person_id: Person<2>
-  postal_code: u''
-  street: u'street'
+  postal_code: ''
+  street: 'street'
   streetnumber: 123
 

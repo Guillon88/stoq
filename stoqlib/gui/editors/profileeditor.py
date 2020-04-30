@@ -23,7 +23,7 @@
 ##
 """ User profile editor implementation.  """
 
-import gtk
+from gi.repository import Gtk
 from kiwi.component import get_utility
 from kiwi.datatypes import ValidationError
 from kiwi.ui.widgets.checkbutton import ProxyCheckButton
@@ -66,9 +66,13 @@ class UserProfileEditor(BaseEditor):
 
         apps = get_utility(IApplicationDescriptions)
         for name, full_name, icon_name, description in apps.get_descriptions():
+            # Virtual apps should not be selected here
+            if name in ProfileSettings.virtual_apps:
+                continue
+
             # Create the user interface for each application which is
             # a HBox, a CheckButton and an Image
-            box = gtk.HBox()
+            box = Gtk.HBox()
             box.show()
 
             button = ProxyCheckButton()
@@ -76,13 +80,13 @@ class UserProfileEditor(BaseEditor):
             button.data_type = bool
             button.model_attribute = 'has_permission'
             button.show()
-            box.pack_start(button, padding=6)
+            box.pack_start(button, True, True, 6)
 
-            image = gtk.image_new_from_stock(icon_name, gtk.ICON_SIZE_MENU)
-            box.pack_start(image, False, False)
+            image = Gtk.Image.new_from_stock(icon_name, Gtk.IconSize.MENU)
+            box.pack_start(image, False, False, 0)
             image.show()
 
-            self.applications_vbox.pack_start(box, False)
+            self.applications_vbox.pack_start(box, False, True, 0)
 
             model = settings.get(name)
             if model is None:
@@ -96,7 +100,7 @@ class UserProfileEditor(BaseEditor):
 
         # Scroll to the bottom of the scrolled window
         vadj = self.scrolled_window.get_vadjustment()
-        vadj.set_value(vadj.upper)
+        vadj.set_value(vadj.get_upper())
 
     #
     # Kiwi handlers

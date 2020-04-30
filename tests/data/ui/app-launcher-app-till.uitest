@@ -1,111 +1,18 @@
 app: LauncherApp
-GtkWindow(toplevel): title='[Moda Stoq] - Till', hidden
-  GtkVBox():
-    GtkMenuBar():
-      GtkImageMenuItem(): '_File'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): 'New'
-            GtkMenu(): hidden
-              GtkImageMenuItem(): 'Cash addition...', insensitive
-              GtkImageMenuItem(): 'Cash removal...', insensitive
-              GtkImageMenuItem(): 'Payment receival...', insensitive
-              GtkSeparatorMenuItem():
-              GtkImageMenuItem(): '_Window'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Open till...'
-          GtkImageMenuItem(): 'Verify till...', insensitive
-          GtkImageMenuItem(): 'Close till...', insensitive
-          GtkImageMenuItem(): 'Till daily movement...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Print...', insensitive
-          GtkImageMenuItem(): 'Export to spreadsheet...', insensitive
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Change password...', hidden
-          GtkImageMenuItem(): 'Sign out...', hidden
-          GtkImageMenuItem(): 'Close'
-          GtkImageMenuItem(): 'Quit', hidden
-      GtkImageMenuItem(): '_Edit'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): '_Preferences'
-      GtkImageMenuItem(): '_View'
-        GtkMenu(): hidden
-          GtkCheckMenuItem(): '_Toolbar'
-          GtkCheckMenuItem(): '_Statusbar'
-          GtkSeparatorMenuItem():
-          GtkCheckMenuItem(): '_Fullscreen'
-      GtkImageMenuItem(): 'Sale'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): 'Details...', insensitive
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Confirm...', insensitive
-          GtkImageMenuItem(): 'Return...', insensitive
-      GtkImageMenuItem(): '_Search'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): 'Clients...'
-          GtkImageMenuItem(): 'Sales...'
-          GtkImageMenuItem(): 'Sold items by branch...'
-          GtkImageMenuItem(): 'Card payments...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Closed till search...'
-          GtkImageMenuItem(): 'Till entry history...', insensitive
-          GtkImageMenuItem(): 'Fiscal till operations...'
-      GtkImageMenuItem(): '_Help'
-        GtkMenu(): hidden
-          GtkImageMenuItem(): 'Till help'
-          GtkImageMenuItem(): 'Contents'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): 'Get support online...'
-          GtkImageMenuItem(): 'Online chat...'
-          GtkImageMenuItem(): 'Translate Stoq...'
-          GtkSeparatorMenuItem():
-          GtkImageMenuItem(): '_About'
-    GtkToolbar():
-      GtkMenuToolButton(): 'Home'
-          GtkMenu(): hidden
-            GtkImageMenuItem(): 'Accounts Payable'
-            GtkImageMenuItem(): 'Accounts Receivable'
-            GtkImageMenuItem(): 'Administrative'
-            GtkImageMenuItem(): 'Calendar'
-            GtkImageMenuItem(): 'Financial'
-            GtkImageMenuItem(): 'Inventory'
-            GtkImageMenuItem(): 'Point of Sales'
-            GtkImageMenuItem(): 'Production'
-            GtkImageMenuItem(): 'Purchase'
-            GtkImageMenuItem(): 'Sales'
-            GtkImageMenuItem(): 'Services'
-            GtkImageMenuItem(): 'Stock'
-            GtkImageMenuItem(): 'Till', hidden
-      GtkSeparatorToolItem():
-      GtkMenuToolButton(): 'New'
-          GtkMenu(): hidden
-            GtkImageMenuItem(): 'Cash addition', insensitive
-            GtkImageMenuItem(): 'Cash removal', insensitive
-            GtkSeparatorMenuItem():
-            GtkImageMenuItem(): '_Window'
-      GtkMenuToolButton(): 'Search'
-          GtkMenu(): hidden
-            GtkImageMenuItem(): 'Fiscal till operations'
-            GtkImageMenuItem(): 'Clients'
-            GtkImageMenuItem(): 'Sales'
-      GtkSeparatorToolItem():
-      GtkToolButton(): 'Print', insensitive
-      GtkToolButton(): 'Quit', hidden
-      GtkSeparatorToolItem():
-      GtkToolButton(): 'Confirm', insensitive
-      GtkToolButton(): 'Return', insensitive
-      GtkToolButton(): 'Details', insensitive
-    GtkVBox(expand=True, fill=True):
-      GtkVBox(expand=True, fill=True):
-        GtkVBox(expand=True, fill=True):
-          GtkVBox(expand=True, fill=True):
+GtkApplicationWindow(toplevel): title='Moda Stoq', hidden
+  GtkBox(orientation=vertical):
+    GtkBox(orientation=horizontal, expand=True, fill=True):
+      GtkBox(orientation=vertical, expand=True, fill=True):
+        GtkBox(orientation=vertical, expand=True, fill=True):
+          GtkBox(orientation=vertical, expand=True, fill=True):
             GtkHSeparator(fill=True):
             ProxyLabel(expand=True, fill=True): '<span weight="bold" size="xx-large">Till closed</span>\n\n<span size="large"><a href="open-till">Open till</a></span>'
             GtkHSeparator(fill=True):
           GtkEventBox(expand=True, fill=True): hidden, insensitive
-            GtkVBox():
-              GtkHBox(fill=True, padding=6):
-                GtkVBox(padding=6):
-                  GtkHBox():
+            GtkBox(orientation=vertical):
+              GtkBox(orientation=horizontal, fill=True, padding=6):
+                GtkBox(orientation=vertical, padding=6):
+                  GtkBox(orientation=horizontal):
                     ComboSearchFilter():
                       GtkLabel(): 'Show orders'
                       ProxyComboBox(padding=6):
@@ -117,15 +24,12 @@ GtkWindow(toplevel): title='[Moda Stoq] - Till', hidden
                         item: 'Cancelled'
                         item: 'Returned'
                         item: 'Renegotiated'
-                    SearchFilter():
+                    StringSearchFilter():
                       GtkLabel(): 'Search:'
                       ProxyComboBox(padding=6): hidden
                         item: 'Contains All Words', selected
-                        item: 'Contains Exactly'
-                        item: 'Identical to'
-                        item: 'Does Not Contain'
-                      HintedEntry(padding=6): ''
-                    GtkButton(): 'gtk-find'
+                      GtkEntry(padding=6): ''
+                    stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(): 'Find'
               SearchResultListView(expand=True, fill=True):
                 column: title='Sale #'
                 column: title='Status'
@@ -134,28 +38,93 @@ GtkWindow(toplevel): title='[Moda Stoq] - Till', hidden
                 column: title='Salesperson'
                 column: title='Quantity'
                 column: title='Total'
-          GtkVBox():
+                column: title='Missing Payment'
+          GtkBox(orientation=vertical):
             GtkAlignment():
-              GtkHBox(): hidden
+              GtkBox(orientation=horizontal): hidden
                 ProxyLabel(expand=True, fill=True): '<span size="xx-large" weight="bold"><span weight="bold" size="xx-large">Till closed</span></span>'
-                GtkVBox(expand=True, fill=True):
-                  ProxyLabel(expand=True, fill=True): '<span size="xx-large" weight="bold">Total: $ 0.00</span>'
+                GtkBox(orientation=vertical, expand=True, fill=True):
+                  ProxyLabel(expand=True, fill=True): '<span size="xx-large" weight="bold">Total: $0.00</span>'
                   ProxyLabel(expand=True, fill=True): hidden
     ShellStatusbar():
       GtkFrame(expand=True, fill=True): hidden
-        GtkHBox():
-          GtkLabel(expand=True, fill=True):
-      GtkHBox(expand=True, fill=True):
-        GtkAlignment(expand=True, fill=True):
-          GtkHBox():
-            GtkLabel(expand=True, fill=True): 'Test Statusbar test'
-            GtkVSeparator():
-            GtkButton(): 'Feedback'
-            GtkVSeparator():
-
-popup: TillSelection
-GtkMenu(): hidden
-  GtkImageMenuItem(): 'Details...', insensitive
-  GtkSeparatorMenuItem():
-  GtkImageMenuItem(): 'Confirm...', insensitive
-  GtkImageMenuItem(): 'Return...', insensitive
+        GtkBox(orientation=horizontal):
+          GtkLabel(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
+        GtkBox(orientation=horizontal, expand=True, fill=True):
+          GtkLabel(expand=True, fill=True): 'Test Statusbar test'
+          GtkVSeparator():
+          GtkButton(): 'Feedback'
+  GtkHeaderBar():
+    stoq+gui+widgets+ButtonGroup():
+      GtkButton():
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Cash addition..., insensitive
+                      GtkModelButton(fill=True): Cash removal..., insensitive
+                      GtkModelButton(fill=True): Payment receival..., insensitive
+    stoq+gui+widgets+ButtonGroup():
+      GtkButton(): insensitive
+      GtkButton(): insensitive
+      GtkButton(): insensitive
+    GtkBox(orientation=horizontal):
+      GtkButton():
+      GtkButton():
+    stoq+gui+widgets+ButtonGroup():
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Print this report..., insensitive
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Export to spreadsheet..., insensitive
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Open till...
+                      GtkModelButton(fill=True): Verify till..., insensitive
+                      GtkModelButton(fill=True): Close till..., insensitive
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Clients...
+                      GtkModelButton(fill=True): Sales...
+                      GtkModelButton(fill=True): Sold items by branch...
+                      GtkModelButton(fill=True): Card payments...
+                      GtkModelButton(fill=True): Closed till search...
+                      GtkModelButton(fill=True): Till entry history..., insensitive
+                      GtkModelButton(fill=True): Fiscal till operations...
+                      GtkModelButton(fill=True): Till daily movement...
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Preferences...
+                      GtkModelButton(fill=True): Change password...
+                      GtkModelButton(fill=True): Sign out...
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Till help
+                      GtkModelButton(fill=True): Contents
+                      GtkModelButton(fill=True): Translate Stoq...
+                      GtkModelButton(fill=True): Get support online...
+                      GtkModelButton(fill=True): Online chat...
+                      GtkModelButton(fill=True): About
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Quit

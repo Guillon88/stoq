@@ -28,7 +28,7 @@
 
 import hashlib
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 
 from stoqlib.api import api
@@ -175,7 +175,7 @@ class PasswordEditor(BaseEditor):
                                                   visual_mode=self.visual_mode)
         self.attach_slave('password_holder', self.password_slave)
 
-        self._sizegroup = gtk.SizeGroup(gtk.SIZE_GROUP_HORIZONTAL)
+        self._sizegroup = Gtk.SizeGroup(Gtk.SizeGroupMode.HORIZONTAL)
         self._sizegroup.add_widget(self.current_password_lbl)
         self._sizegroup.add_widget(self.password_slave.password_lbl)
         self._sizegroup.add_widget(self.password_slave.confirm_password_lbl)
@@ -187,7 +187,7 @@ class PasswordEditor(BaseEditor):
     def validate_confirm(self):
         if not self._needs_password_confirmation():
             return True
-        pw_hash = hashlib.md5(self.model.current_password).hexdigest()
+        pw_hash = hashlib.md5(self.model.current_password.encode()).hexdigest()
         if pw_hash != self.old_password:
             msg = _(u"Password doesn't match with the stored one")
             self.current_password.set_invalid(msg)
@@ -235,7 +235,7 @@ class UserDetailsSlave(BaseEditorSlave):
         self.password_slave = PasswordEditorSlave(self.store)
         self.attach_slave('password_holder', self.password_slave)
 
-        self._sizegroup = gtk.SizeGroup(gtk.SIZE_GROUP_HORIZONTAL)
+        self._sizegroup = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._sizegroup.add_widget(self.username_lbl)
         self._sizegroup.add_widget(self.role_lbl)
         self._sizegroup.add_widget(self.profile)

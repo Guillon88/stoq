@@ -24,8 +24,9 @@
 ##
 """ Editors implementation for Stoq devices configuration"""
 
-from stoqdrivers.interfaces import IChequePrinter
-from stoqdrivers.printers.base import (get_supported_printers,
+from stoqdrivers.interfaces import INonFiscalPrinter
+from stoqdrivers.printers.base import (get_baudrate_values,
+                                       get_usb_printer_devices,
                                        get_supported_printers_by_iface)
 from stoqdrivers.scales.base import get_supported_scales
 
@@ -34,9 +35,20 @@ from stoqlib.domain.devices import DeviceSettings
 from stoqlib.domain.station import BranchStation
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.lib.devicemanager import DeviceManager
+from stoqlib.lib.environment import is_developer_mode
+from stoqlib.lib.message import warning
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
+
+
+TEST_MESSAGE = """<unset_condensed>
+<centralize>Welcome to <set_bold>Stoq<unset_bold>
+<set_condensed>Condensed <set_bold>bold<unset_bold> text<unset_condensed>
+<set_double_height>Double Height<unset_double_height>
+<descentralize>
+<cut_paper>
+"""
 
 
 class DeviceSettingsEditor(BaseEditor):
@@ -46,40 +58,54 @@ class DeviceSettingsEditor(BaseEditor):
                      'brand_combo',
                      'device_combo',
                      'model_combo',
+                     'baudrate',
                      'station',
                      'is_active_button')
 
     def __init__(self, store, model=None, station=None):
         if station is not None and not isinstance(station, BranchStation):
             raise TypeError("station should be a BranchStation")
-        self._device_manager = DeviceManager()
-        self.printers_dict = get_supported_printers()
+
         self._branch_station = station
         # This attribute is set to True when setup_proxies is finished
         self._is_initialized = False
         BaseEditor.__init__(self, store, model)
         self._original_brand = self.model.brand
         self._original_model = self.model.model
+        self.test_button = self.add_button(_('Test device'))
 
     def refresh_ok(self, *args):
-        if self._is_initialized:
-            BaseEditor.refresh_ok(self, self.model.is_valid())
+        if not self._is_initialized:
+            return
+        if self.test_button:
+            self.test_button.set_sensitive(self.model.is_valid())
+        BaseEditor.refresh_ok(self, self.model.is_valid())
 
     def setup_station_combo(self):
         if self._branch_station:
             self.station.prefill([(self._branch_station.name,
                                    self._branch_station)])
             self.model.station = self._branch_station
-            self.station.set_sensitive(False)
             return
+
         self.station.prefill(
             [(station.name, station)
-             for station in self.store.find(BranchStation)])
+             for station in BranchStation.get_active_stations(self.store)])
 
     def setup_device_port_combo(self):
         items = [(_("Choose..."), None)]
-        items.extend([(unicode(device.device_name), unicode(device.device_name))
-                      for device in self._device_manager.get_serial_devices()])
+        items.extend([(str(device.device_name), str(device.device_name))
+                      for device in DeviceManager.get_serial_devices()])
+        items.extend(self._get_usb_devices())
+
+        if is_developer_mode():
+            # Include virtual port for virtual printer
+            items.append(('Virtual device', u'/dev/null'))
+
+        devices = [i[1] for i in items]
+        if self.model.device_name not in devices:
+            items.append(('Unkown device (%s)' % self.model.device_name,
+                          self.model.device_name))
         self.device_combo.prefill(items)
 
     def setup_device_types_combo(self):
@@ -87,8 +113,10 @@ class DeviceSettingsEditor(BaseEditor):
         device_types = (
             # TODO: Reenable when we have cheque printers working.
             # DeviceSettings.CHEQUE_PRINTER_DEVICE,
+            DeviceSettings.NON_FISCAL_PRINTER_DEVICE,
             DeviceSettings.SCALE_DEVICE, )
-        items.extend([(self.model.get_device_type_name(t), t)
+
+        items.extend([(self.model.describe_device_type(t), t)
                       for t in device_types])
         self.type_combo.prefill(items)
 
@@ -96,20 +124,49 @@ class DeviceSettingsEditor(BaseEditor):
         self.setup_device_types_combo()
         self.setup_device_port_combo()
         self.setup_station_combo()
+        self.baudrate.prefill(get_baudrate_values())
         if not self.edit_mode:
             self.is_active_button.set_sensitive(False)
 
     def _get_supported_types(self):
         if self.model.type == DeviceSettings.SCALE_DEVICE:
             supported_types = get_supported_scales()
-        elif self.model.type == DeviceSettings.CHEQUE_PRINTER_DEVICE:
-            supported_types = get_supported_printers_by_iface(IChequePrinter)
+        #elif self.model.type == DeviceSettings.CHEQUE_PRINTER_DEVICE:
+        #    supported_types = get_supported_printers_by_iface(IChequePrinter)
+        elif self.model.type == DeviceSettings.NON_FISCAL_PRINTER_DEVICE:
+            supported_types = get_supported_printers_by_iface(INonFiscalPrinter,
+                                                              include_virtual=is_developer_mode())
         else:
             raise TypeError("The selected device type isn't supported")
         return supported_types
 
+    def _get_usb_devices(self):
+        try:
+            import usb.core
+        except ImportError:  # pragma no cover
+            return []
+
+        devices = []
+        for device in get_usb_printer_devices():
+            try:
+                dev = 'usb:{}:{}'.format(hex(device.idVendor), hex(device.idProduct))
+                try:
+                    if device.manufacturer is not None:
+                        desc = '{} {}'.format(device.manufacturer, device.product)
+                    else:
+                        desc = dev
+                except Exception:
+                    desc = dev
+
+                devices.append((desc, dev))
+            except usb.core.USBError:  # pragma no cover
+                # The user might not have access to some devices
+                continue
+
+        return devices
+
     def _get_supported_brands(self):
-        return list(self._get_supported_types().keys())
+        return sorted(list(self._get_supported_types().keys()))
 
     def _get_supported_models(self):
         return self._get_supported_types()[self.model.brand]
@@ -121,7 +178,7 @@ class DeviceSettingsEditor(BaseEditor):
             return
         items = [(_("Choose..."), None)]
         supported_brands = self._get_supported_brands()
-        items.extend([(brand.capitalize(), unicode(brand))
+        items.extend([(brand.capitalize(), str(brand))
                       for brand in supported_brands])
         self.brand_combo.prefill(items)
 
@@ -133,7 +190,7 @@ class DeviceSettingsEditor(BaseEditor):
             return
         supported_models = self._get_supported_models()
         items = [(_("Choose..."), None)]
-        items.extend([(obj.model_name, unicode(obj.__name__))
+        items.extend([(obj.model_name, str(obj.__name__))
                       for obj in supported_models])
         self.model_combo.prefill(items)
 
@@ -150,6 +207,7 @@ class DeviceSettingsEditor(BaseEditor):
     def create_model(self, store):
         return DeviceSettings(device_name=None,
                               station=api.get_current_station(store),
+                              baudrate=9600,
                               brand=None,
                               model=None,
                               type=None,
@@ -162,17 +220,17 @@ class DeviceSettingsEditor(BaseEditor):
             return _("Add Device")
 
     def validate_confirm(self):
-        if not self.edit_mode:
-            settings = DeviceSettings.get_by_station_and_type(
-                store=api.get_default_store(),
-                station=self.model.station.id,
-                type=self.model.type)
-            if settings:
-                self.station.set_invalid(
-                    _(u"A %s already exists for station \"%s\"") % (
-                        self.model.get_device_type_name(),
-                        self.model.station.name))
-                return False
+        settings = DeviceSettings.get_by_station_and_type(
+            store=api.get_default_store(),
+            station=self.model.station.id,
+            type=self.model.type,
+            exclude=self.model)
+        if settings and self.is_active_button.get_active():
+            warning(_(u"An active %s already exists for station \"%s\"") % (
+                    self.model.device_type_name,
+                    self.model.station_name))
+            return False
+
         return True
 
     #
@@ -187,12 +245,17 @@ class DeviceSettingsEditor(BaseEditor):
         self.update_brand_combo()
         self.refresh_ok()
 
-    def on_brand_combo__state_changed(self, *args):
-        self.update_model_combo()
-        self.refresh_ok()
-
     def on_model_combo__changed(self, *args):
         self.refresh_ok()
 
     def on_device_combo__changed(self, *args):
         self.refresh_ok()
+
+    def on_test_button__clicked(self, button):
+        driver = self.model.get_interface()
+        if self.model.type == DeviceSettings.NON_FISCAL_PRINTER_DEVICE:
+            driver.open()
+            driver.print_line(TEST_MESSAGE)
+        elif self.model.type == DeviceSettings.SCALE_DEVICE:
+            data = driver.read_data()
+            warning(str(data.weight))

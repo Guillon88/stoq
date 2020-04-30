@@ -80,8 +80,8 @@ class TillDailyMovementReport(HTMLReport):
         """Returns a subtitle text
         """
         if self.end_date:
-            return _('Till movement on %s to %s') % (self.start_date,
-                                                     self.end_date)
+            return _('Till movement on %s to %s') % (self.start_date.strftime('%x'),
+                                                     self.end_date.strftime('%x'))
         return _('Till movement on %s') % self.start_date
 
     def get_namespace(self):

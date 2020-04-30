@@ -25,7 +25,7 @@
 
 import datetime
 
-import gtk
+from gi.repository import Gtk
 
 from kiwi.ui.objectlist import Column
 
@@ -41,7 +41,6 @@ from stoqlib.gui.search.productionsearch import (ProductionProductSearch,
 from stoqlib.gui.search.searchcolumns import IdentifierColumn, SearchColumn
 from stoqlib.gui.search.servicesearch import ServiceSearch
 from stoqlib.gui.search.searchfilters import ComboSearchFilter
-from stoqlib.gui.stockicons import STOQ_PRODUCTION_APP
 from stoqlib.gui.utils.keybindings import get_accels
 from stoqlib.gui.wizards.productionwizard import ProductionWizard
 from stoqlib.lib.translation import stoqlib_gettext as _
@@ -69,29 +68,29 @@ class ProductionApp(ShellApp):
             ('menubar', None, ''),
 
             # File
-            ('NewProduction', gtk.STOCK_NEW,
+            ('NewProduction', Gtk.STOCK_NEW,
              _('Production order...'),
              group.get('new_production_order'),
              _('Create a new production')),
-            ('ProductionPurchaseQuote', STOQ_PRODUCTION_APP,
+            ('ProductionPurchaseQuote', None,
              _('Purchase quote...'),
              group.get('new_production_quote')),
 
             # Production
             ('ProductionMenu', None, _('Production')),
-            ('StartProduction', gtk.STOCK_CONVERT, _('Start production...'),
+            ('StartProduction', Gtk.STOCK_CONVERT, _('Start production...'),
              group.get('production_start'),
              _('Start the selected production')),
-            ('EditProduction', gtk.STOCK_EDIT, _('Edit production...'),
+            ('EditProduction', Gtk.STOCK_EDIT, _('Edit production...'),
              group.get('production_edit'),
              _('Edit the selected production')),
-            ('FinalizeProduction', gtk.STOCK_APPLY, _('Finalize production...'),
+            ('FinalizeProduction', Gtk.STOCK_APPLY, _('Finalize production...'),
              None,
              _('Finalize the selected production')),
-            ('CancelProduction', gtk.STOCK_CANCEL, _('Cancel production...'),
+            ('CancelProduction', Gtk.STOCK_CANCEL, _('Cancel production...'),
              None,
              _('Cancel the selected production')),
-            ('ProductionDetails', gtk.STOCK_INFO, _('Production details...'),
+            ('ProductionDetails', Gtk.STOCK_INFO, _('Production details...'),
              group.get('production_details'),
              _('Show production details and register produced items')),
 
@@ -102,7 +101,7 @@ class ProductionApp(ShellApp):
             ("SearchService", None, _("Services..."),
              group.get('search_services'),
              _("Search for services")),
-            ("SearchProductionItem", STOQ_PRODUCTION_APP,
+            ("SearchProductionItem", None,
              _("Production items..."),
              group.get('search_production_items'),
              _("Search for production items")),
@@ -110,37 +109,32 @@ class ProductionApp(ShellApp):
              group.get('search_production_history'),
              _("Search for production history")),
         ]
-        self.production_ui = self.add_ui_actions("", actions,
-                                                 filename="production.xml")
+        self.production_ui = self.add_ui_actions(actions)
         self.set_help_section(_("Production help"), 'app-production')
 
-        self.NewProduction.set_short_label(_("New Production"))
-        self.ProductionPurchaseQuote.set_short_label(_("Purchase"))
-        self.SearchProductionItem.set_short_label(_("Search items"))
-        self.StartProduction.set_short_label(_('Start'))
-        self.EditProduction.set_short_label(_('Edit'))
-        self.FinalizeProduction.set_short_label(_('Finalize'))
-        self.CancelProduction.set_short_label(_('Cancel'))
-        self.ProductionDetails.set_short_label(_('Details'))
-
-        self.StartProduction.props.is_important = True
-        self.FinalizeProduction.props.is_important = True
-
     def create_ui(self):
-        self.popup = self.uimanager.get_widget('/ProductionSelection')
         self.window.add_new_items([self.NewProduction,
                                    self.ProductionPurchaseQuote])
         self.window.add_search_items([
             self.SearchProduct,
             self.SearchService,
             self.SearchProductionItem,
+            self.SearchProductionHistory,
         ])
-        self.window.Print.set_tooltip(
-            _("Print a report of these productions"))
 
         self._inventory_widgets = [self.StartProduction]
         self.register_sensitive_group(self._inventory_widgets,
                                       lambda: not self.has_open_inventory())
+
+    def get_domain_options(self):
+        options = [
+            ('fa-info-circle-symbolic', _('Details'), 'production.ProductionDetails', True),
+            ('fa-edit-symbolic', _('Edit production'), 'production.EditProduction', True),
+            ('fa-play-symbolic', _('Start production'), 'production.StartProduction', True),
+            ('fa-stop-symbolic', _('Finalize production'), 'production.FinalizeProduction', True),
+            ('fa-ban-symbolic', _('Cancel production'), 'production.CancelProduction', True),
+        ]
+        return options
 
     def activate(self, refresh=True):
         if refresh:
@@ -150,15 +144,6 @@ class ProductionApp(ShellApp):
 
         self.search.focus_search_entry()
 
-    def deactivate(self):
-        self.uimanager.remove_ui(self.production_ui)
-
-    def new_activate(self):
-        self._open_production_order()
-
-    def search_activate(self):
-        self.run_dialog(ProductionProductSearch, self.store)
-
     def create_filters(self):
         self.set_text_field_columns(['description'])
         self.status_filter = ComboSearchFilter(
@@ -167,7 +152,7 @@ class ProductionApp(ShellApp):
 
     def get_columns(self):
         return [IdentifierColumn('identifier', title=_('Production #'), sorted=True,
-                                 order=gtk.SORT_DESCENDING),
+                                 order=Gtk.SortType.DESCENDING),
                 Column('status_string', title=_(u'Status'), data_type=str,
                        visible=False),
                 SearchColumn('description', title=_(u'Description'),
@@ -248,7 +233,7 @@ class ProductionApp(ShellApp):
 
     def _finalize_production(self):
         if not yesno(_("The selected order will be finalized."),
-                     gtk.RESPONSE_YES, _("Finalize order"), _("Don't finalize")):
+                     Gtk.ResponseType.YES, _("Finalize order"), _("Don't finalize")):
             return
 
         with api.new_store() as store:
@@ -259,7 +244,7 @@ class ProductionApp(ShellApp):
 
     def _cancel_production(self):
         if not yesno(_("The selected order will be cancelled."),
-                     gtk.RESPONSE_YES, _("Cancel order"), _("Don't cancel")):
+                     Gtk.ResponseType.YES, _("Cancel order"), _("Don't cancel")):
             return
 
         with api.new_store() as store:
@@ -295,9 +280,6 @@ class ProductionApp(ShellApp):
 
     def on_results__row_activated(self, widget, order):
         self._production_details()
-
-    def on_results__right_click(self, results, result, event):
-        self.popup.popup(None, None, None, event.button, event.time)
 
     # Production
 

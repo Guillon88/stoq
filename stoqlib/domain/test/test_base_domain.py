@@ -25,6 +25,7 @@
 __tests__ = 'stoqlib/domain/base.py'
 
 import json
+import re
 
 import mock
 from storm.exceptions import NotOneError
@@ -32,6 +33,7 @@ from storm.references import Reference
 
 from stoqlib.database.properties import (IntCol, UnicodeCol, BoolCol, IdCol,
                                          IdentifierCol)
+from stoqlib.database.runtime import new_store
 from stoqlib.domain.base import Domain
 
 from stoqlib.domain.test.domaintest import DomainTest
@@ -49,6 +51,8 @@ class Dong(Domain):
     ding_id = IdCol()
     ding = Reference(ding_id, Ding.id)
 
+    repr_fields = ['ding_id']
+
 
 class Dung(Domain):
     __storm_table__ = 'dung'
@@ -63,23 +67,19 @@ class TestSelect(DomainTest):
     def setUpClass(cls):
         DomainTest.setUpClass()
         RECREATE_SQL = """
-        DROP TABLE IF EXISTS dung;
-        DROP TABLE IF EXISTS dong;
-        DROP TABLE IF EXISTS ding;
-
-        CREATE TABLE ding (
+        CREATE TABLE IF NOT EXISTS ding (
             id uuid PRIMARY KEY DEFAULT uuid_generate_v1(),
             te_id bigint UNIQUE REFERENCES transaction_entry(id),
             int_field integer default 0,
             str_field text default ''
         );
-        CREATE TABLE dong (
+        CREATE TABLE IF NOT EXISTS dong (
             id uuid PRIMARY KEY DEFAULT uuid_generate_v1(),
             te_id bigint UNIQUE REFERENCES transaction_entry(id),
             bool_field boolean default false,
             ding_id uuid REFERENCES ding(id) ON UPDATE CASCADE
         );
-        CREATE TABLE dung (
+        CREATE TABLE IF NOT EXISTS dung (
             id uuid PRIMARY KEY DEFAULT uuid_generate_v1(),
             identifier SERIAL NOT NULL,
             te_id bigint UNIQUE REFERENCES transaction_entry(id),
@@ -90,37 +90,37 @@ class TestSelect(DomainTest):
         cls.store.commit()
 
     def test_select_one(self):
-        self.assertEquals(self.store.find(Ding).one(), None)
+        self.assertEqual(self.store.find(Ding).one(), None)
         ding1 = Ding(store=self.store)
-        self.assertEquals(self.store.find(Ding).one(), ding1)
+        self.assertEqual(self.store.find(Ding).one(), ding1)
         Ding(store=self.store)
         self.assertRaises(NotOneError, self.store.find(Ding).one)
 
     def test_select_one_by(self):
         Ding(store=self.store)
 
-        self.assertEquals(
+        self.assertEqual(
             None, self.store.find(Ding, int_field=1).one())
         ding1 = Ding(store=self.store, int_field=1)
-        self.assertEquals(
+        self.assertEqual(
             ding1, self.store.find(Ding, int_field=1).one())
         Ding(store=self.store, int_field=1)
         self.assertRaises(NotOneError, self.store.find(Ding, int_field=1).one)
 
     def test_validate_attr(self):
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 TypeError,
-                ("expected_type <type 'object'> needs to be a "
+                ("expected_type <class 'object'> needs to be a "
                  "<class 'storm.properties.Property'> subclass")):
             Ding.validate_attr(Ding.str_field, expected_type=object)
 
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 TypeError,
                 ("attr str_field needs to be a "
                  "<class 'storm.properties.Bool'> instance")):
             Ding.validate_attr(Ding.str_field, expected_type=BoolCol)
 
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 ValueError, "Domain Ding does not have a column bool_field"):
             Ding.validate_attr(Dong.bool_field)
 
@@ -175,6 +175,16 @@ class TestSelect(DomainTest):
         Ding(store=self.store, str_field=u'AB0010')
         self.assertEqual(Ding.get_max_value(self.store, Ding.str_field), u'AB0010')
 
+    def test_max_value_with_query(self):
+        Ding(store=self.store, str_field=u'1', int_field=1)
+        Ding(store=self.store, str_field=u'100', int_field=2)
+
+        self.assertEqual(Ding.get_max_value(self.store, Ding.str_field,
+                                            query=(Ding.int_field == 1)), u'1')
+
+        self.assertEqual(Ding.get_max_value(self.store, Ding.str_field,
+                                            query=(Ding.int_field == 2)), u'100')
+
     def test_check_unique_value_exists(self):
         ding_1 = Ding(store=self.store, str_field=u'Ding_1')
         ding_2 = Ding(store=self.store, str_field=u'Ding_2')
@@ -207,7 +217,7 @@ class TestSelect(DomainTest):
             warning.assert_called_once_with(
                 "more than one result found when trying to "
                 "check_unique_tuple_exists on table 'Ding' for values: "
-                "u'str_field => XXX'")
+                "'str_field => XXX'")
 
     def test_check_unique_tuple_exists(self):
         ding_1 = Ding(store=self.store, str_field=u'Ding_1', int_field=1)
@@ -247,7 +257,7 @@ class TestSelect(DomainTest):
             warning.assert_called_once_with(
                 "more than one result found when trying to "
                 "check_unique_tuple_exists on table 'Ding' for values: "
-                "u'int_field => 1, str_field => XXX'")
+                "'int_field => 1, str_field => XXX'")
 
     def test_can_remove(self):
         ding = Ding(store=self.store)
@@ -267,17 +277,46 @@ class TestSelect(DomainTest):
                                               ('dung', 'ding_id')]))
 
     def test_get_temporary_identifier(self):
+        # When there is no object yet, it should return -1
+        self.clean_domain([Dung])
+        identifier = Dung.get_temporary_identifier(self.store)
+        self.assertEqual(identifier, -1)
+
+        # Now save that object, and the new temporary identifier should be -2
         dung = Dung(store=self.store)
-        dung.identifier = Dung.get_temporary_identifier(self.store)
-        self.assertEquals(dung.identifier, -1)
+        dung.identifier = identifier
 
         new_dung = Dung(store=self.store)
         new_dung.identifier = Dung.get_temporary_identifier(self.store)
-        self.assertEquals(new_dung.identifier, -2)
+        self.assertEqual(new_dung.identifier, -2)
+
+    def test_repr(self):
+        store = new_store()
+        ding = Ding(store=store, str_field=u'Foo', int_field=666)
+        dong = Dong(store=store, bool_field=False,
+                    ding=ding)
+        store.close()
+        # This never got to database, so there is no id
+        self.assertEqual(repr(dong), '<Dong [id missing] ding_id=None>')
+
+        store = new_store()
+        ding = Ding(store=store, str_field=u'Foo', int_field=666)
+        dong = Dong(store=store, bool_field=False,
+                    ding=ding)
+
+        # Where we have a full representation of the object
+        self.assertTrue(re.match("<Dong '[a-f0-9-]*' ding_id='[a-f0-9-]*'>", repr(dong)))
+
+        store.rollback(close=False)
+        self.assertTrue(re.match("<Dong '[a-f0-9-]*' ding_id='\[lost object\]'>", repr(dong)))
+
+        store.rollback()
+        self.assertTrue(re.match("<Dong '[a-f0-9-]*' ding_id='\[database connection closed\]'>",
+                                 repr(dong)))
 
     def test_serialize(self):
         ding = Ding(store=self.store, str_field=u'Sambiquira', int_field=666)
-        self.assertEquals(ding.serialize(), {
+        self.assertEqual(ding.serialize(), {
             'id': ding.id,
             'te_id': ding.te_id,
             'str_field': 'Sambiquira',
@@ -285,7 +324,7 @@ class TestSelect(DomainTest):
         })
 
         dong = Dong(store=self.store, bool_field=False)
-        self.assertEquals(dong.serialize(), {
+        self.assertEqual(dong.serialize(), {
             'id': dong.id,
             'te_id': dong.te_id,
             'bool_field': False,
@@ -295,7 +334,7 @@ class TestSelect(DomainTest):
         dung = Dung(store=self.store)
         dung.identifier = Dung.get_temporary_identifier(self.store)
         dung.ding = ding
-        self.assertEquals(dung.serialize(), {
+        self.assertEqual(dung.serialize(), {
             'id': dung.id,
             'te_id': dung.te_id,
             'identifier': str(dung.identifier),

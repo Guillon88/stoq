@@ -26,17 +26,18 @@
 
 from kiwi.currency import currency
 from storm.expr import (And, Coalesce, Eq, Join, LeftJoin, Or, Sum, Select,
-                        Alias, Count, Cast, Ne)
+                        Alias, Count, Cast, Ne, JoinExpr)
 from storm.info import ClassAlias
 
 from stoqlib.database.expr import (Case, Distinct, Field, NullIf,
-                                   StatementTimestamp, Concat)
+                                   StatementTimestamp, Date, Concat, Round)
 from stoqlib.database.viewable import Viewable
 from stoqlib.domain.account import Account, AccountTransaction
 from stoqlib.domain.address import Address
 from stoqlib.domain.commission import CommissionSource
 from stoqlib.domain.costcenter import CostCenterEntry
-from stoqlib.domain.fiscal import CfopData
+from stoqlib.domain.fiscal import CfopData, Invoice
+from stoqlib.domain.image import Image
 from stoqlib.domain.loan import Loan, LoanItem
 from stoqlib.domain.person import (Person, Supplier, Company, LoginUser,
                                    Branch, Client, Employee, Transporter,
@@ -52,7 +53,7 @@ from stoqlib.domain.production import ProductionOrder, ProductionItem
 from stoqlib.domain.purchase import (Quotation, QuoteGroup, PurchaseOrder,
                                      PurchaseItem)
 from stoqlib.domain.receiving import (ReceivingOrderItem, ReceivingOrder,
-                                      PurchaseReceivingMap)
+                                      PurchaseReceivingMap, ReceivingInvoice)
 from stoqlib.domain.sale import SaleItem, Sale, Delivery
 from stoqlib.domain.returnedsale import ReturnedSale, ReturnedSaleItem
 from stoqlib.domain.sellable import (Sellable, SellableUnit,
@@ -61,21 +62,7 @@ from stoqlib.domain.sellable import (Sellable, SellableUnit,
 from stoqlib.domain.stockdecrease import (StockDecrease, StockDecreaseItem)
 from stoqlib.domain.workorder import WorkOrder, WorkOrderItem
 from stoqlib.lib.decorators import cached_property
-
-
-# Use a subselect to count the number of items, because that takes a lot less
-# time (since it doesn't have a huge GROUP BY clause).
-# Note that there are two subselects possible. The first should be used when the
-# viewable is queried without the branch and the second when it is queried with
-# the branch.
-_StockSummary = Alias(Select(
-    columns=[ProductStockItem.storable_id,
-             Alias(None, 'branch_id'),
-             Alias(Sum(ProductStockItem.quantity), 'stock'),
-             Alias(Sum(ProductStockItem.quantity *
-                       ProductStockItem.stock_cost), 'total_stock_cost')],
-    tables=[ProductStockItem],
-    group_by=[ProductStockItem.storable_id]), '_stock_summary')
+from stoqlib.lib.defaults import DECIMAL_PRECISION
 
 # This subselect will be used to filter by branch, so it should include all
 # possible (branch, storable) combinations so that all storables appear in the
@@ -84,8 +71,9 @@ _StockBranchSummary = Alias(Select(
     columns=[Alias(Storable.id, 'storable_id'),
              Alias(Branch.id, 'branch_id'),
              Alias(Sum(ProductStockItem.quantity), 'stock'),
-             Alias(Sum(ProductStockItem.quantity *
-                       ProductStockItem.stock_cost), 'total_stock_cost')],
+             Alias(Sum(ProductStockItem.quantity
+                       * ProductStockItem.stock_cost),
+                   'total_stock_cost')],
     tables=[Storable,
             # This is equivalent to a cross join
             Join(Branch, And(True)),
@@ -93,10 +81,15 @@ _StockBranchSummary = Alias(Select(
                                            ProductStockItem.storable_id == Storable.id))],
     group_by=[Storable.id, Branch.id]), '_stock_summary')
 
-_price_search = Case(condition=And(StatementTimestamp() >= Sellable.on_sale_start_date,
-                                   StatementTimestamp() <= Sellable.on_sale_end_date),
-                     result=Sellable.on_sale_price,
-                     else_=Sellable.base_price)
+_price_search = Case(
+    condition=Or(And(Date(StatementTimestamp()) >= Date(Sellable.on_sale_start_date),
+                     Date(StatementTimestamp()) <= Date(Sellable.on_sale_end_date)),
+                 And(Eq(Sellable.on_sale_start_date, None),
+                     Date(StatementTimestamp()) <= Date(Sellable.on_sale_end_date)),
+                 And(Date(StatementTimestamp()) >= Date(Sellable.on_sale_start_date),
+                     Eq(Sellable.on_sale_end_date, None))),
+    result=Sellable.on_sale_price,
+    else_=Sellable.base_price)
 
 
 class ProductFullStockView(Viewable):
@@ -116,6 +109,10 @@ class ProductFullStockView(Viewable):
     :cvar stock: the stock of the product
      """
 
+    # We need to store the Branch.id for the get_parent method, but we don't
+    # want it on the result as it would break the aggregation.
+    _branch_id = None
+
     sellable = Sellable
     product = Product
 
@@ -126,13 +123,11 @@ class ProductFullStockView(Viewable):
     status = Sellable.status
     cost = Sellable.cost
     description = Sellable.description
-    image_id = Sellable.image_id
     base_price = Sellable.base_price
     on_sale_price = Sellable.on_sale_price
     on_sale_start_date = Sellable.on_sale_start_date
     on_sale_end_date = Sellable.on_sale_end_date
     price = _price_search
-    has_image = Ne(Sellable.image_id, None)
 
     # Product
     product_id = Product.id
@@ -141,6 +136,15 @@ class ProductFullStockView(Viewable):
     model = Product.model
     brand = Product.brand
     ncm = Product.ncm
+    internal_use = Product.internal_use
+    family = Product.family
+
+    # Storable
+    storable_id = Storable.id
+
+    # Image
+    image_id = Image.id
+    has_image = Ne(Image.id, None)
 
     manufacturer = ProductManufacturer.name
     tax_description = SellableTaxConstant.description
@@ -148,43 +152,49 @@ class ProductFullStockView(Viewable):
     unit = SellableUnit.description
 
     # Aggregates
-    total_stock_cost = Coalesce(Field('_stock_summary', 'total_stock_cost'), 0)
-    stock = Coalesce(Field('_stock_summary', 'stock'), 0)
-    branch_id = Field('_stock_summary', 'branch_id')
+    total_stock_cost = Coalesce(Sum(ProductStockItem.quantity *
+                                    ProductStockItem.stock_cost), 0)
+    stock = Coalesce(Sum(ProductStockItem.quantity), 0)
 
     tables = [
-        # Keep this first 4 joins in this order, so find_by_branch may change it.
         Sellable,
         Join(Product, Product.id == Sellable.id),
         LeftJoin(Storable, Storable.id == Product.id),
-        LeftJoin(_StockSummary,
-                 Field('_stock_summary', 'storable_id') == Storable.id),
-
+        LeftJoin(ProductStockItem, ProductStockItem.storable_id == Storable.id),
         LeftJoin(SellableTaxConstant,
                  SellableTaxConstant.id == Sellable.tax_constant_id),
         LeftJoin(SellableCategory, SellableCategory.id == Sellable.category_id),
         LeftJoin(SellableUnit, Sellable.unit_id == SellableUnit.id),
         LeftJoin(ProductManufacturer,
                  Product.manufacturer_id == ProductManufacturer.id),
+        LeftJoin(Image,
+                 And(Sellable.id == Image.sellable_id, Eq(Image.is_main, True))),
     ]
 
     clause = Sellable.status != Sellable.STATUS_CLOSED
+    group_by = [id, product_id, storable_id, category_description,
+                manufacturer, tax_description, unit, image_id]
+
+    __hash__ = Viewable.__hash__
 
     def __eq__(self, other):
+        hvs = list(self.highjacked.values())
         # Viewable's __eq__ would only consider equal objects of the same
         # class, but the HighjackedViewable is an exception to the rule!
-        if (other.__class__ in [
-                self.__class__, getattr(self, '_highjacked_viewable', None)] or
-            self.__class__ in [
-                other.__class__, getattr(other, '_highjacked_viewable', None)]):
+        if (other.__class__ in [self.__class__] + hvs or
+                self.__class__ in [other.__class__] + hvs):
             return self.id == other.id
 
         return super(ProductFullStockView, self).__eq__(other)
 
     @classmethod
     def post_search_callback(cls, sresults):
-        select = sresults.get_select_expr(Count(Distinct(Sellable.id)),
-                                          Sum(Field('_stock_summary', 'stock')))
+        expr = sresults.get_select_expr(Alias(cls.id, 'id'),
+                                        Alias(cls.stock, 'stock'))
+        select = Select(
+            columns=[Count(Distinct(Field('_sub', 'id'))),
+                     Sum(Field('_sub', 'stock'))],
+            tables=[Alias(expr, '_sub')])
         return ('count', 'sum'), select
 
     @classmethod
@@ -192,38 +202,35 @@ class ProductFullStockView(Viewable):
         if branch is None:
             return store.find(cls)
 
-        # When we need to filter on the branch, we also need to add the branch
-        # column on the ProductStockItem subselect, so the filter works. We cant
-        # keep the branch_id on the main subselect, since that will cause the
-        # results to be duplicate when not filtering by branch (probably the
-        # most common case). So, we need all of this workaround
-
-        # Make sure that the join we are replacing is the correct one.
-        assert cls.tables[3].right == _StockSummary
-
         # Highjack the class being queried, since we need to add the branch
-        # on the ProductStockItem subselect to filter it later
+        # on the ProductStockItem join to filter it.
         # Make sure to create it only once or else Viewable would fail to
         # compare both objects as their class would be different.
-        if '_highjacked_viewable' not in cls.__dict__:
+        hv = cls.highjacked.get(branch.id, None)
+        if hv is None:
             tables = cls.tables[:]
-            tables[3] = LeftJoin(_StockBranchSummary,
-                                 Field('_stock_summary',
-                                       'storable_id') == Storable.id)
-            cls._highjacked_viewable = type(
+            for i, table in enumerate(tables):
+                if not isinstance(table, JoinExpr):
+                    continue
+                if table.right is ProductStockItem:
+                    tables[i] = LeftJoin(
+                        ProductStockItem,
+                        And(ProductStockItem.storable_id == Storable.id,
+                            ProductStockItem.branch_id == branch.id))
+                    break
+            else:  # pragma nocoverage
+                raise AssertionError("Did not find ProductStockItem join")
+
+            hv = type(
                 "Highjacked%s" % (cls.__name__, ),
                 (cls, ),
-                dict(tables=tables))
+                dict(tables=tables, _branch_id=branch.id))
 
+            cls.highjacked[branch.id] = hv
             # Make sure we will not create a highjack highjacked view
-            cls._highjacked_viewable._highjacked_viewable = (
-                cls._highjacked_viewable)
+            hv.highjacked[branch.id] = hv
 
-        # Also show products that were never purchased.
-        query = Or(Field('_stock_summary', 'branch_id') == branch.id,
-                   Eq(Field('_stock_summary', 'branch_id'), None))
-
-        return store.find(cls._highjacked_viewable, query)
+        return store.find(hv)
 
     def get_product_and_category_description(self):
         """Returns the product and the category description in one string.
@@ -241,7 +248,7 @@ class ProductFullStockView(Viewable):
         if not self.parent_id:
             return None
 
-        branch = self.branch_id and self.store.get(Branch, self.branch_id)
+        branch = self._branch_id and self.store.get(Branch, self._branch_id)
         res = self.find_by_branch(self.store, branch)
         return res.find(Product.id == self.parent_id).one()
 
@@ -264,6 +271,8 @@ class ProductFullWithClosedStockView(ProductFullStockView):
     """Stores information about products, showing the closed ones too.
     """
 
+    internal_use = Product.internal_use
+    family = Product.family
     clause = None
 
 
@@ -302,10 +311,7 @@ class ProductWithStockView(ProductFullStockView):
     :cvar stock: the stock of the product
      """
 
-    clause = And(
-        ProductFullStockView.clause,
-        ProductFullStockView.stock > 0,
-    )
+    having = ProductFullStockView.stock > 0
 
 
 class ProductWithStockBranchView(ProductFullStockView):
@@ -316,17 +322,16 @@ class ProductWithStockBranchView(ProductFullStockView):
     filter, otherwise, the results may be duplicated (once for each branch in
     the database)
     """
+    branch_id = ProductStockItem.branch_id
     minimum_quantity = Storable.minimum_quantity
     maximum_quantity = Storable.maximum_quantity
-    branch_id = Field('_stock_summary', 'branch_id')
-    storable_id = Field('_stock_summary', 'storable_id')
-
-    tables = ProductFullStockView.tables[:]
-    tables[3] = LeftJoin(_StockBranchSummary, storable_id == Storable.id)
 
     clause = And(ProductFullStockView.clause,
                  Eq(Product.is_grid, False),
                  Eq(Product.is_package, False))
+
+    group_by = ProductFullStockView.group_by[:]
+    group_by.append(branch_id)
 
 
 # This subselect should query only from PurchaseItem, otherwise, more one
@@ -363,6 +368,9 @@ class ProductFullStockItemView(ProductFullStockView):
 
     clause = And(ProductFullStockView.clause,
                  Eq(Product.is_grid, False))
+
+    group_by = ProductFullStockView.group_by[:]
+    group_by.append(to_receive_quantity)
 
 
 class ProductFullStockItemSupplierView(ProductFullStockItemView):
@@ -492,6 +500,7 @@ class SellableFullStockView(Viewable):
 
     product_id = Product.id
     model = Product.model
+    location = Product.location
 
     unit = SellableUnit.description
     manufacturer = ProductManufacturer.name
@@ -642,7 +651,8 @@ class SoldItemView(Viewable):
 
     # Aggregate
     quantity = Sum(SaleItem.quantity)
-    total_cost = Sum(SaleItem.quantity * SaleItem.average_cost)
+    total_sold = Sum(Round(SaleItem.price * SaleItem.quantity, DECIMAL_PRECISION))
+    total_cost = Sum(Round(SaleItem.quantity * SaleItem.average_cost, DECIMAL_PRECISION))
 
     tables = [
         Sellable,
@@ -737,7 +747,7 @@ class SoldItemsByBranchView(SoldItemView):
     branch_name = Coalesce(NullIf(Company.fancy_name, u''), Person.name)
 
     # Aggregates
-    total = Sum(SaleItem.quantity * SaleItem.price)
+    total = Sum(Round(SaleItem.quantity * SaleItem.price, DECIMAL_PRECISION))
 
     tables = SoldItemView.tables[:]
     tables.extend([
@@ -817,6 +827,15 @@ class ConsignedItemAndStockView(PurchasedItemAndStockView):
                  PurchaseOrder.branch_id == ProductStockItem.branch_id)
 
 
+_ReceivingItemSummary = Select(columns=[ReceivingOrderItem.receiving_order_id,
+                               Alias(Sum(Round(ReceivingOrderItem.quantity *
+                                               ReceivingOrderItem.cost,
+                                               DECIMAL_PRECISION)), 'subtotal')],
+                               tables=[ReceivingOrderItem],
+                               group_by=[ReceivingOrderItem.receiving_order_id])
+ReceivingItemSummary = Alias(_ReceivingItemSummary, '_receiving_item')
+
+
 class PurchaseReceivingView(Viewable):
     """Stores information about received orders.
 
@@ -836,20 +855,36 @@ class PurchaseReceivingView(Viewable):
     _PurchaseResponsible = ClassAlias(Person, "purchase_responsible")
 
     order = ReceivingOrder
+    supplier = Supplier
+    receiving_invoice = ReceivingInvoice
+    purchase = PurchaseOrder
+    branch = Branch
 
     id = ReceivingOrder.id
+    identifier = ReceivingOrder.identifier
     receival_date = ReceivingOrder.receival_date
-    invoice_number = ReceivingOrder.invoice_number
-    invoice_total = ReceivingOrder.invoice_total
+    invoice_number = ReceivingInvoice.invoice_number
+    invoice_total = ReceivingInvoice.invoice_total
+    packing_number = ReceivingOrder.packing_number
+    status = ReceivingOrder.status
+    branch_id = ReceivingOrder.branch_id
+
     purchase_identifier = PurchaseOrder.identifier
     purchase_identifier_str = Cast(PurchaseOrder.identifier, 'text')
-    branch_id = ReceivingOrder.branch_id
+    purchase_group = PurchaseOrder.group_id
+    purchase_date = PurchaseOrder.confirm_date
+
     purchase_responsible_name = _PurchaseResponsible.name
     responsible_name = _Responsible.name
     supplier_name = _Supplier.name
+    supplier_id = Supplier.id
+    _subtotal = Coalesce(Field('_receiving_item', 'subtotal'), 0)
 
     tables = [
         ReceivingOrder,
+        Join(Branch, ReceivingOrder.branch_id == Branch.id),
+        LeftJoin(ReceivingItemSummary, Field('_receiving_item',
+                                             'receiving_order_id') == ReceivingOrder.id),
         LeftJoin(PurchaseReceivingMap,
                  ReceivingOrder.id == PurchaseReceivingMap.receiving_id),
         LeftJoin(PurchaseOrder, PurchaseReceivingMap.purchase_id == PurchaseOrder.id),
@@ -857,11 +892,19 @@ class PurchaseReceivingView(Viewable):
                  PurchaseOrder.responsible_id == _PurchaseUser.id),
         LeftJoin(_PurchaseResponsible,
                  _PurchaseUser.person_id == _PurchaseResponsible.id),
-        LeftJoin(Supplier, ReceivingOrder.supplier_id == Supplier.id),
+        LeftJoin(ReceivingInvoice,
+                 ReceivingOrder.receiving_invoice_id == ReceivingInvoice.id),
+        LeftJoin(Supplier, PurchaseOrder.supplier_id == Supplier.id),
         LeftJoin(_Supplier, Supplier.person_id == _Supplier.id),
         LeftJoin(LoginUser, ReceivingOrder.responsible_id == LoginUser.id),
         LeftJoin(_Responsible, LoginUser.person_id == _Responsible.id),
     ]
+
+    @property
+    def subtotal(self):
+        # The editor requires the model to be a currency, but _subtotal is a
+        # decimal. So we need to convert it
+        return currency(self._subtotal)
 
 
 class SaleItemsView(Viewable):
@@ -894,7 +937,7 @@ class SaleItemsView(Viewable):
     batch_date = StorableBatch.create_date
 
     item_discount = SaleItem.base_price - SaleItem.price
-    total = SaleItem.price * SaleItem.quantity
+    total = Round(SaleItem.price * SaleItem.quantity, DECIMAL_PRECISION)
 
     tables = [
         SaleItem,
@@ -978,10 +1021,12 @@ class ReceivingItemView(Viewable):
              ReceivingOrderItem.receiving_order_id == ReceivingOrder.id),
         Join(PurchaseReceivingMap,
              ReceivingOrder.id == PurchaseReceivingMap.receiving_id),
+        LeftJoin(ReceivingInvoice,
+                 ReceivingOrder.receiving_invoice_id == ReceivingInvoice.id),
         Join(PurchaseOrder, PurchaseReceivingMap.purchase_id == PurchaseOrder.id),
         LeftJoin(Sellable, ReceivingOrderItem.sellable_id == Sellable.id),
         LeftJoin(SellableUnit, Sellable.unit_id == SellableUnit.id),
-        LeftJoin(Supplier, ReceivingOrder.supplier_id == Supplier.id),
+        LeftJoin(Supplier, PurchaseOrder.supplier_id == Supplier.id),
         LeftJoin(Person, Supplier.person_id == Person.id),
         Join(Branch, PurchaseOrder.branch_id == Branch.id),
     ]
@@ -1145,7 +1190,7 @@ class UnconfirmedSaleItemsView(Viewable):
     price = SaleItem.price
     quantity = SaleItem.quantity
     quantity_decreased = SaleItem.quantity_decreased
-    total = SaleItem.price * SaleItem.quantity
+    total = Round(SaleItem.price * SaleItem.quantity, DECIMAL_PRECISION)
 
     branch_id = Sale.branch_id
     sale_id = Sale.id
@@ -1196,10 +1241,15 @@ class UnconfirmedSaleItemsView(Viewable):
         return WorkOrder.statuses[self.wo_status]
 
 
+# XXX: There is another ReturnedSaleView in stoqlib.domain.sale
 class ReturnedSalesView(Viewable):
     PersonBranch = ClassAlias(Person, 'person_branch')
     PersonResponsible = ClassAlias(Person, 'responsible_sale')
     PersonClient = ClassAlias(Person, 'person_client')
+
+    NewSale = ClassAlias(Sale, 'new_sale')
+    NewClient = ClassAlias(Client, 'new_client')
+    NewPersonClient = ClassAlias(Person, 'new_person_client')
 
     returned_sale = ReturnedSale
 
@@ -1214,37 +1264,53 @@ class ReturnedSalesView(Viewable):
     identifier_str = Cast(ReturnedSale.identifier, 'text')
     return_date = ReturnedSale.return_date
     reason = ReturnedSale.reason
-    invoice_number = ReturnedSale.invoice_number
+    invoice_number = Invoice.invoice_number
     receiving_date = ReturnedSale.confirm_date
     receiving_responsible = ReturnedSale.confirm_responsible_id
     status = ReturnedSale.status
 
     sale_id = Sale.id
+    sale_identifier = Sale.identifier
     sale_identifier_str = Cast(Sale.identifier, 'text')
+
+    new_sale_id = NewSale.id
 
     responsible_name = PersonResponsible.name
     branch_name = Coalesce(NullIf(Company.fancy_name, u''), PersonBranch.name)
-    client_name = PersonClient.name
+
+    client_name = Coalesce(PersonClient.name, NewPersonClient.name)
 
     tables = [
         ReturnedSale,
-        Join(Sale, Sale.id == ReturnedSale.sale_id),
+        LeftJoin(Sale, Sale.id == ReturnedSale.sale_id),
+        LeftJoin(NewSale, NewSale.id == ReturnedSale.new_sale_id),
         Join(LoginUser, LoginUser.id == ReturnedSale.responsible_id),
         Join(PersonResponsible, PersonResponsible.id == LoginUser.person_id),
         Join(Branch, Branch.id == ReturnedSale.branch_id),
         Join(PersonBranch, PersonBranch.id == Branch.person_id),
         Join(Company, Company.person_id == PersonBranch.id),
+        LeftJoin(Invoice, Invoice.id == ReturnedSale.invoice_id),
+        # Client from the original sale
         LeftJoin(Client, Client.id == Sale.client_id),
         LeftJoin(PersonClient, PersonClient.id == Client.person_id),
+        # Client from the new sale (if a trade)
+        LeftJoin(NewClient, NewClient.id == NewSale.client_id),
+        LeftJoin(NewPersonClient, NewPersonClient.id == NewClient.person_id),
     ]
 
     @property
-    def sale_identifier(self):
-        return self.sale.identifier
+    def new_sale(self):
+        return self.store.get(Sale, self.new_sale_id)
 
-    def can_receive(self):
-        from stoqlib.api import api
-        same_branch = self.sale.branch == api.get_current_branch(self.store)
+    @property
+    def new_sale_identifier(self):
+        return self.new_sale.identifier
+
+    def can_receive(self, branch: Branch):
+        if not self.sale:
+            # There is no original sale to compare
+            return self.is_pending()
+        same_branch = self.sale.branch == branch
         return bool(self.is_pending() and same_branch)
 
     def is_pending(self):
@@ -1262,6 +1328,7 @@ class ReturnedItemView(ReturnedSalesView):
     id = ReturnedSaleItem.id
     item_description = Sellable.description
     item_quantity = ReturnedSaleItem.quantity
+    returned_sale_id = ReturnedSale.id
 
     tables = ReturnedSalesView.tables[:]
 
@@ -1269,6 +1336,11 @@ class ReturnedItemView(ReturnedSalesView):
                         ReturnedSale.id == ReturnedSaleItem.returned_sale_id),
                    Join(Sellable, ReturnedSaleItem.sellable_id == Sellable.id),
                    LeftJoin(Product, Sellable.id == Product.id)])
+
+    @property
+    def returned_sale_view(self):
+        return self.store.find(ReturnedSalesView,
+                               id=self.returned_sale_id).one()
 
 
 class PendingReturnedSalesView(ReturnedSalesView):
@@ -1300,7 +1372,7 @@ class LoanView(Viewable):
 
     # Aggregates
     loaned = Sum(LoanItem.quantity)
-    total = Sum(LoanItem.quantity * LoanItem.price)
+    total = Sum(Round(LoanItem.quantity * LoanItem.price, DECIMAL_PRECISION))
 
     tables = [
         Loan,
@@ -1328,7 +1400,7 @@ class LoanItemView(Viewable):
     sale_quantity = LoanItem.sale_quantity
     return_quantity = LoanItem.return_quantity
     price = LoanItem.price
-    total = LoanItem.quantity * LoanItem.price
+    total = Round(LoanItem.quantity * LoanItem.price, DECIMAL_PRECISION)
 
     loan_identifier = Loan.identifier
     loan_status = Loan.status
@@ -1425,44 +1497,70 @@ class AccountView(Viewable):
 
 
 class DeliveryView(Viewable):
-    PersonTransporter = ClassAlias(Person, 'person_transporter')
-    PersonClient = ClassAlias(Person, 'person_client')
+    # Aliases
+    TransporterPerson = ClassAlias(Person, 'person_transporter')
+    TransporterCompany = ClassAlias(Company, 'company_transporter')
+    RecipientPerson = ClassAlias(Person, 'person_client')
+    RecipientCompany = ClassAlias(Company, 'company_client')
+    BranchPerson = ClassAlias(Person, "person_branch")
+    BranchCompany = ClassAlias(Company, 'company_branch')
 
+    # Objects
     delivery = Delivery
+    branch = Branch
+    transporter = Transporter
 
     # Delivery
     id = Delivery.id
     status = Delivery.status
     tracking_code = Delivery.tracking_code
     open_date = Delivery.open_date
-    deliver_date = Delivery.deliver_date
+    cancel_date = Delivery.cancel_date
+    send_date = Delivery.send_date
     receive_date = Delivery.receive_date
+    pick_date = Delivery.pick_date
+    pack_date = Delivery.pack_date
 
-    identifier_str = Cast(Sale.identifier, 'text')
+    # Operation
+    identifier = Coalesce(Sale.identifier, StockDecrease.identifier)
+    identifier_str = Cast(identifier, 'text')
+
+    operation_nature = Invoice.operation_nature
 
     # Transporter
-    transporter_name = PersonTransporter.name
+    transporter_name = Coalesce(NullIf(TransporterCompany.fancy_name, u''),
+                                TransporterPerson.name)
 
-    # Client
-    client_name = PersonClient.name
+    # Recipient
+    recipient_name = Coalesce(NullIf(RecipientCompany.fancy_name, u''),
+                              RecipientPerson.name)
 
-    # Sale
-    sale_identifier = Sale.identifier
+    # Branch
+    branch_name = Coalesce(NullIf(BranchCompany.fancy_name, u''),
+                           BranchPerson.name)
 
     # Address
     address_id = Delivery.address_id
 
     tables = [
         Delivery,
+        LeftJoin(Invoice, Invoice.id == Delivery.invoice_id),
+        LeftJoin(Sale, Sale.invoice_id == Invoice.id),
+        LeftJoin(StockDecrease, StockDecrease.invoice_id == Invoice.id),
+
         LeftJoin(Transporter, Transporter.id == Delivery.transporter_id),
-        LeftJoin(PersonTransporter,
-                 PersonTransporter.id == Transporter.person_id),
-        LeftJoin(SaleItem, SaleItem.id == Delivery.service_item_id),
-        LeftJoin(Sale, Sale.id == SaleItem.sale_id),
-        LeftJoin(Client, Client.id == Sale.client_id),
-        LeftJoin(PersonClient, PersonClient.id == Client.person_id),
-        # LeftJoin(Address,
-        #         Address.person_id == Client.person_id),
+        LeftJoin(TransporterPerson,
+                 TransporterPerson.id == Transporter.person_id),
+        LeftJoin(TransporterCompany,
+                 TransporterPerson.id == TransporterCompany.person_id),
+
+        LeftJoin(Branch, Branch.id == Invoice.branch_id),
+        LeftJoin(BranchPerson, BranchPerson.id == Branch.person_id),
+        LeftJoin(BranchCompany, BranchPerson.id == BranchCompany.person_id),
+
+        LeftJoin(Address, Address.id == Delivery.address_id),
+        LeftJoin(RecipientPerson, RecipientPerson.id == Address.person_id),
+        LeftJoin(RecipientCompany, RecipientPerson.id == RecipientCompany.person_id),
     ]
 
     @property
@@ -1472,6 +1570,13 @@ class DeliveryView(Viewable):
     @property
     def address_str(self):
         return self.store.get(Address, self.address_id).get_description()
+
+    @classmethod
+    def post_search_callback(cls, sresults):
+        # FIXME: We are using the count of the deliveries because we have
+        # nothing to sum here. Should we do something different?
+        select = sresults.get_select_expr(Count(1), Count(1))
+        return ('count', 'sum'), select
 
 
 class CostCenterEntryStockView(Viewable):
@@ -1509,11 +1614,7 @@ class CostCenterEntryStockView(Viewable):
              CostCenterEntry.stock_transaction_id == StockTransactionHistory.id),
         Join(LoginUser, StockTransactionHistory.responsible_id == LoginUser.id),
         Join(Person, LoginUser.person_id == Person.id),
-        Join(ProductStockItem,
-             StockTransactionHistory.product_stock_item_id == ProductStockItem.id),
-        Join(Storable, ProductStockItem.storable_id == Storable.id),
-        Join(Product, Storable.id == Product.id),
-        Join(Sellable, Product.id == Sellable.id),
+        Join(Sellable, StockTransactionHistory.storable_id == Sellable.id),
 
         # possible sale item and stock decrease item
         LeftJoin(SaleItem, SaleItem.id == StockTransactionHistory.object_id),

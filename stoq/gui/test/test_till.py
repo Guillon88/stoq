@@ -51,11 +51,11 @@ class TestTill(BaseGUITest):
                 mock.patch.object(self.store, 'close')) as ctx:
             self.activate(action)
             run_dialog = ctx[0]
-            self.assertEquals(run_dialog.call_count, 1)
+            self.assertEqual(run_dialog.call_count, 1)
             args, kwargs = run_dialog.call_args
             called_dialog, store = args
-            self.assertEquals(called_dialog, dialog)
-            self.assertEquals(store, self.store)
+            self.assertEqual(called_dialog, dialog)
+            self.assertEqual(store, self.store)
 
     def test_initial_with_open_till(self):
         till = self.create_till()
@@ -63,6 +63,14 @@ class TestTill(BaseGUITest):
         till.status = Till.STATUS_OPEN
         app = self.create_app(TillApp, u'till')
         self.check_app(app, u'till-opened-till')
+
+    def test_initial_with_open_till_and_token(self):
+        till = self.create_till()
+        till.opening_date = localtoday()
+        till.status = Till.STATUS_OPEN
+        with self.sysparam(USE_SALE_TOKEN=True):
+            app = self.create_app(TillApp, u'till')
+            self.check_app(app, u'till-opened-till-with-token')
 
     def test_initial_with_closed_till(self):
         app = self.create_app(TillApp, u'till')
@@ -132,7 +140,7 @@ class TestTill(BaseGUITest):
             self.activate(app.Confirm)
             run_dialog.assert_called_once_with(SalePaymentsEditor, app,
                                                self.store, wo_sale)
-            self.assertEquals(sale.status, Sale.STATUS_ORDERED)
+            self.assertEqual(sale.status, Sale.STATUS_ORDERED)
 
     @mock.patch('stoq.gui.till.api.new_store')
     def test_run_search_dialogs(self, new_store):
@@ -160,13 +168,13 @@ class TestTill(BaseGUITest):
         results.select(results[0])
 
         self.activate(app.Details)
-        self.assertEquals(run_dialog.call_count, 1)
+        self.assertEqual(run_dialog.call_count, 1)
         args, kwargs = run_dialog.call_args
         dialog, _app, store, sale_view = args
-        self.assertEquals(dialog, SaleDetailsDialog)
-        self.assertEquals(_app, app)
+        self.assertEqual(dialog, SaleDetailsDialog)
+        self.assertEqual(_app, app)
         self.assertTrue(store is not None)
-        self.assertEquals(sale_view, results[0])
+        self.assertEqual(sale_view, results[0])
 
     @mock.patch('stoq.gui.till.run_dialog')
     @mock.patch('stoqlib.api.new_store')
@@ -177,7 +185,7 @@ class TestTill(BaseGUITest):
 
         with mock.patch.object(self.store, 'commit'):
             with mock.patch.object(self.store, 'close'):
-                app.TillAddCash.set_sensitive(True)
+                app.TillAddCash.set_enabled(True)
                 self.activate(app.TillAddCash)
                 run_dialog.assert_called_once_with(CashInEditor,
                                                    app, self.store)

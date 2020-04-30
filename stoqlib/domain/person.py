@@ -73,8 +73,8 @@ from stoqlib.database.properties import (BoolCol, DateTimeCol,
                                          PriceCol, EnumCol,
                                          UnicodeCol, IdCol)
 from stoqlib.database.viewable import Viewable
-from stoqlib.database.runtime import get_current_station, get_current_branch
-from stoqlib.domain.address import Address
+from stoqlib.domain.address import Address, CityLocation
+from stoqlib.domain.certificate import Certificate
 from stoqlib.domain.base import Domain
 from stoqlib.domain.event import Event
 from stoqlib.domain.interfaces import IDescribable, IActive
@@ -82,12 +82,16 @@ from stoqlib.domain.payment.group import PaymentGroup
 from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.domain.payment.payment import Payment
 from stoqlib.domain.profile import UserProfile
-from stoqlib.enums import LatePaymentPolicy
-from stoqlib.exceptions import DatabaseInconsistency, LoginError, SellError
+from stoqlib.domain.station import BranchStation
+from stoqlib.enums import LatePaymentPolicy, RelativeLocation
+from stoqlib.exceptions import (DatabaseInconsistency, LoginError, SellError,
+                                ModelDataError)
 from stoqlib.lib.dateutils import localnow, localtoday
-from stoqlib.lib.formatters import raw_phone_number, format_phone_number
+from stoqlib.lib.formatters import (raw_phone_number, format_phone_number,
+                                    raw_document)
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import locale_sorted, stoqlib_gettext
+from stoqlib.lib.validators import validate_cnpj, validate_cpf
 
 _ = stoqlib_gettext
 
@@ -222,8 +226,10 @@ class CreditCheckHistory(Domain):
     #: if a client does not have debt
     STATUS_NOT_INCLUDED = u'not-included'
 
-    statuses = {STATUS_INCLUDED: _(u'Included'),
-                STATUS_NOT_INCLUDED: _(u'Not included')}
+    statuses = collections.OrderedDict([
+        (STATUS_INCLUDED, _(u'Included')),
+        (STATUS_NOT_INCLUDED, _(u'Not included')),
+    ])
 
     #: when this check was created
     creation_date = DateTimeCol(default_factory=localnow)
@@ -496,6 +502,17 @@ class Person(Domain):
         elif self.individual:
             return self.individual.cpf
 
+    def get_relative_location(self, other):
+        my_location = self.get_main_address().city_location
+        other_location = other.get_main_address().city_location
+
+        if other_location.state == my_location.state:
+            return RelativeLocation.SAME_STATE
+        if other_location.country != my_location.country:
+            return RelativeLocation.OTHER_COUNTRY
+        else:
+            return RelativeLocation.OTHER_STATE
+
     def has_individual_or_company_facets(self):
         return self.individual or self.company
 
@@ -539,6 +556,9 @@ class Person(Domain):
         super(Person, self).merge_with(other, skip, copy_empty_values)
         other.merged_with_id = self.id
 
+    def get_description(self):
+        return self.name
+
 
 @implementer(IActive)
 @implementer(IDescribable)
@@ -554,8 +574,7 @@ class Individual(Domain):
     STATUS_MARRIED = u'married'
     STATUS_DIVORCED = u'divorced'
     STATUS_WIDOWED = u'widowed'
-    # FIXME: Change to 'separated' after fix this typo in database.
-    STATUS_SEPARATED = u'separeted'
+    STATUS_SEPARATED = u'separated'
     STATUS_COHABITATION = u'cohabitation'
 
     marital_statuses = collections.OrderedDict([
@@ -570,8 +589,11 @@ class Individual(Domain):
     GENDER_MALE = u'male'
     GENDER_FEMALE = u'female'
 
-    genders = {GENDER_MALE: _(u'Male'),
-               GENDER_FEMALE: _(u'Female')}
+    genders = collections.OrderedDict([
+        (GENDER_MALE, _(u'Male')),
+        (GENDER_FEMALE, _(u'Female')),
+        (None, _(u'None')),
+    ])
 
     person_id = IdCol()
 
@@ -584,6 +606,13 @@ class Individual(Domain):
 
     #: A Brazilian government register which identify an individual
     rg_number = UnicodeCol(default=u'')
+
+    # In some cases the individual can have state and city registry
+    #: Brazilian register number associated with a certain State
+    state_registry = UnicodeCol(default='')
+
+    #: Brazilian register number associated with a certain City
+    city_registry = UnicodeCol(default='')
 
     #: when this individual was born
     birth_date = DateTimeCol(default=None)
@@ -606,8 +635,8 @@ class Individual(Domain):
     #: Where the rg number was issued
     rg_expedition_local = UnicodeCol(default=u'')
 
-    #: male or female
-    gender = EnumCol(allow_none=False, default=GENDER_MALE)
+    #: unregistered/male/female
+    gender = EnumCol(default=None)
 
     #: the name of the spouse individual's partner in marriage
     spouse_name = UnicodeCol(default=u'')
@@ -619,6 +648,8 @@ class Individual(Domain):
 
     is_active = BoolCol(default=True)
 
+    responsible_id = IdCol()
+    responsible = Reference(responsible_id, 'Individual.id')
     #
     # IActive
     #
@@ -673,6 +704,14 @@ class Individual(Domain):
         in the database.
         """
         return self.check_unique_value_exists(Individual.cpf, cpf)
+
+    def get_raw_cpf(self):
+        """Returns the cpf without non-numeric characters as a string."""
+        if not validate_cpf(self.cpf):
+            raise ModelDataError(_("The CPF of %s is not valid") %
+                                 self.person.name)
+
+        return raw_document(self.cpf)
 
     @classmethod
     def get_birthday_query(cls, start, end=None):
@@ -729,6 +768,11 @@ class Company(Domain):
     city_registry = UnicodeCol(default=u'')
 
     is_active = BoolCol(default=True)
+
+    parent_id = IdCol()
+    #: The parent company of this company. When set, the parent company data will be used to emit
+    #: fiscal documents
+    parent = Reference(parent_id, 'Company.id')
 
     #
     # IActive
@@ -798,6 +842,13 @@ class Company(Domain):
         in the database.
         """
         return self.check_unique_value_exists(Company.cnpj, cnpj)
+
+    def get_raw_cnpj(self):
+        """Returns the cnpj without non-numeric characters as a string."""
+        if not validate_cnpj(self.cnpj):
+            raise ModelDataError(_("The CNPJ of %s is not valid.") % self.person.name)
+
+        return raw_document(self.cnpj)
 
 
 @implementer(IDescribable)
@@ -990,8 +1041,9 @@ class Client(Domain):
         tied with the current client
         """
         from stoqlib.domain.sale import ReturnedSaleView
-        returned_sale_view = self.store.find(ReturnedSaleView,
-                                             ReturnedSaleView.client_id == self.id)
+        query = And(ReturnedSaleView.client_id == self.id,
+                    Eq(ReturnedSaleView.returned_item.parent_item_id, None))
+        returned_sale_view = self.store.find(ReturnedSaleView, query)
         return returned_sale_view.order_by(ReturnedSaleView.return_date)
 
     def get_client_services(self):
@@ -1004,20 +1056,29 @@ class Client(Domain):
         return self.store.find(SoldServicesView,
                                client_id=self.id).order_by(SoldServicesView.estimated_fix_date)
 
-    def get_client_work_orders(self):
+    def get_client_work_orders(self, ignore=None):
         """Returns the :class:'stoqlib.domain.WorkOrderView'  associated with a client
+
+        :param ignore: a |work_order| we should ignore.
         :returns: a sequence of :class:'stoqlib.domain.WorkOrderView'
         """
         from stoqlib.domain.workorder import WorkOrderView
-        return self.store.find(WorkOrderView,
-                               WorkOrderView.client.id == self.id)
+        query = WorkOrderView.client.id == self.id
+        if ignore:
+            query = And(query,
+                        WorkOrderView.id != ignore.id)
+        return self.store.find(WorkOrderView, query)
 
-    def get_client_products(self):
+    def get_client_products(self, with_children=True):
         """Returns a list of products from SoldProductsView with products
         sold to the client
         """
         from stoqlib.domain.sale import SoldProductsView
-        return self.store.find(SoldProductsView, client_id=self.id)
+        query = SoldProductsView.client_id == self.id
+        if not with_children:
+            query = And(query,
+                        Eq(SoldProductsView.sale_item.parent_item_id, None))
+        return self.store.find(SoldProductsView, query)
 
     def get_client_payments(self):
         """Returns a list of payment from InPaymentView with client's payments
@@ -1167,9 +1228,11 @@ class Supplier(Domain):
     STATUS_INACTIVE = u'inactive'
     STATUS_BLOCKED = u'blocked'
 
-    statuses = {STATUS_ACTIVE: _(u'Active'),
-                STATUS_INACTIVE: _(u'Inactive'),
-                STATUS_BLOCKED: _(u'Blocked')}
+    statuses = collections.OrderedDict([
+        (STATUS_ACTIVE, _(u'Active')),
+        (STATUS_INACTIVE, _(u'Inactive')),
+        (STATUS_BLOCKED, _(u'Blocked')),
+    ])
 
     person_id = IdCol()
 
@@ -1183,6 +1246,17 @@ class Supplier(Domain):
     product_desc = UnicodeCol(default=u'')
 
     is_active = BoolCol(default=True)
+
+    #
+    # Properties
+    #
+
+    @property
+    def document(self):
+        if self.person.company:
+            return self.person.company.cnpj
+
+        return self.person.individual.cpf
 
     #
     # IActive
@@ -1297,10 +1371,12 @@ class Employee(Domain):
     STATUS_VACATION = u'vacation'
     STATUS_OFF = u'off'
 
-    statuses = {STATUS_NORMAL: _(u'Normal'),
-                STATUS_AWAY: _(u'Away'),
-                STATUS_VACATION: _(u'Vacation'),
-                STATUS_OFF: _(u'Off')}
+    statuses = collections.OrderedDict([
+        (STATUS_NORMAL, _(u'Normal')),
+        (STATUS_AWAY, _(u'Away')),
+        (STATUS_VACATION, _(u'Vacation')),
+        (STATUS_OFF, _(u'Off')),
+    ])
 
     #: normal/away/vacation/off
     status = EnumCol(allow_none=False, default=STATUS_NORMAL)
@@ -1411,8 +1487,10 @@ class LoginUser(Domain):
     (STATUS_ACTIVE,
      STATUS_INACTIVE) = range(2)
 
-    statuses = {STATUS_ACTIVE: _(u'Active'),
-                STATUS_INACTIVE: _(u'Inactive')}
+    statuses = collections.OrderedDict([
+        (STATUS_ACTIVE, _(u'Active')),
+        (STATUS_INACTIVE, _(u'Inactive')),
+    ])
 
     person_id = IdCol()
 
@@ -1486,9 +1564,8 @@ class LoginUser(Domain):
     def hash(cls, password):
         """:returns: the hash of a password.
         """
-        assert isinstance(password, unicode)
-
-        return unicode(hashlib.md5(password).hexdigest())
+        assert isinstance(password, str)
+        return hashlib.md5(password.encode()).hexdigest()
 
     @classmethod
     def authenticate(cls, store, username, pw_hash, current_branch):
@@ -1522,6 +1599,21 @@ class LoginUser(Domain):
         """Returns a list of all active |loginusers|"""
         return store.find(cls, is_active=True)
 
+    @classmethod
+    def get_active_items(cls, store):
+        """
+        Return a list of active items (name, id)
+
+        :param store: a store
+        :returns: the items
+        """
+        join1 = LeftJoin(Person, Person.id == cls.person_id)
+        items = store.using(cls, join1).find((
+            Person.name,
+            cls.id),
+            Eq(cls.is_active, True))
+        return locale_sorted(items, key=operator.itemgetter(0))
+
     def get_associated_branches(self):
         """ Returns all the |branches| which the user has access
         """
@@ -1546,8 +1638,7 @@ class LoginUser(Domain):
         """
         self.pw_hash = self.hash(password or u'')
 
-    def login(self):
-        station = get_current_station(self.store)
+    def login(self, station: BranchStation):
         if station:
             Event.log(self.store,
                       Event.TYPE_USER,
@@ -1558,8 +1649,7 @@ class LoginUser(Domain):
                       Event.TYPE_USER,
                       _(u"User '%s' logged in") % (self.username, ))
 
-    def logout(self):
-        station = get_current_station(self.store)
+    def logout(self, station: BranchStation):
         if station:
             Event.log(self.store,
                       Event.TYPE_USER,
@@ -1583,8 +1673,14 @@ class Branch(Domain):
     (STATUS_ACTIVE,
      STATUS_INACTIVE) = range(2)
 
-    statuses = {STATUS_ACTIVE: _(u'Active'),
-                STATUS_INACTIVE: _(u'Inactive')}
+    statuses = collections.OrderedDict([
+        (STATUS_ACTIVE, _(u'Active')),
+        (STATUS_INACTIVE, _(u'Inactive')),
+    ])
+
+    #: The name of this branch. Usually, a internal name to differenciate from other companies of
+    #: the same franchise (like the name of the location).
+    name = UnicodeCol()
 
     person_id = IdCol()
 
@@ -1610,6 +1706,14 @@ class Branch(Domain):
 
     #: if this branch can execute |workorders| that belongs to other branches
     can_execute_foreign_work_orders = BoolCol(default=False)
+
+    certificate_id = IdCol()
+    #: the |certificate| this branch should use
+    certificate = Reference(certificate_id, Certificate.id)
+
+    #: the default client category this branch should use
+    default_client_category_id = IdCol()
+    default_client_category = Reference(default_client_category_id, 'ClientCategory.id')
 
     #
     # IActive
@@ -1690,14 +1794,13 @@ class Branch(Domain):
         return store.find(cls, Eq(cls.is_active, True))
 
     @classmethod
-    def get_active_remote_branches(cls, store):
+    def get_active_remote_branches(cls, store, current_branch: 'Branch'):
         """Find all active branches excluding the current one
 
         :param store: the store to be used to find the branches
         :returns: a sequence of active |branches|
         """
         branches = cls.get_active_branches(store)
-        current_branch = get_current_branch(store)
         return branches.find(Branch.id != current_branch.id)
 
     @classmethod
@@ -1736,16 +1839,15 @@ class SalesPerson(Domain):
      COMMISSION_BY_SELLABLE_CATEGORY,
      COMMISSION_BY_SALE_TOTAL) = range(7)
 
-    comission_types = {COMMISSION_GLOBAL: _(u'Globally'),
-                       COMMISSION_BY_SALESPERSON: _(u'By Salesperson'),
-                       COMMISSION_BY_SELLABLE: _(u'By Sellable'),
-                       COMMISSION_BY_PAYMENT_METHOD: _(u'By Payment Method'),
-                       COMMISSION_BY_BASE_SELLABLE_CATEGORY: _(u'By Base '
-                                                               u'Sellable '
-                                                               u'Category'),
-                       COMMISSION_BY_SELLABLE_CATEGORY: _(u'By Sellable '
-                                                          u'Category'),
-                       COMMISSION_BY_SALE_TOTAL: _(u'By Sale Total')}
+    comission_types = collections.OrderedDict([
+        (COMMISSION_GLOBAL, _('Globally')),
+        (COMMISSION_BY_SALESPERSON, _('By Salesperson')),
+        (COMMISSION_BY_SELLABLE, _('By Sellable')),
+        (COMMISSION_BY_PAYMENT_METHOD, _('By Payment Method')),
+        (COMMISSION_BY_BASE_SELLABLE_CATEGORY, _('By Base Sellable Category')),
+        (COMMISSION_BY_SELLABLE_CATEGORY, _('By Sellable Category')),
+        (COMMISSION_BY_SALE_TOTAL, _('By Sale Total')),
+    ])
 
     person_id = IdCol()
 
@@ -1791,7 +1893,7 @@ class SalesPerson(Domain):
     #
 
     @classmethod
-    def get_active_salespersons(cls, store):
+    def get_active_salespersons(cls, store, branch: Branch):
         """Get a list of all active salespersons
 
         When the salesperson is also a user in the system, only the users that
@@ -1804,16 +1906,15 @@ class SalesPerson(Domain):
                   Join(Person, Person.id == SalesPerson.person_id),
                   LeftJoin(LoginUser, LoginUser.person_id == SalesPerson.person_id),
                   LeftJoin(UserBranchAccess, UserBranchAccess.user_id == LoginUser.id)]
-        current_branch = get_current_branch(store)
         query = And(
             Eq(cls.is_active, True),
-            Or(UserBranchAccess.branch_id == current_branch.id,
+            Or(UserBranchAccess.branch_id == branch.id,
                Eq(UserBranchAccess.branch_id, None)))
         items = store.using(*tables).find((Person.name, SalesPerson), query)
         return locale_sorted(items, key=operator.itemgetter(0))
 
     @classmethod
-    def get_active_items(cls, store):
+    def get_active_items(cls, store, branch: Branch):
         """
         Return a list of active items (name, id)
 
@@ -1824,7 +1925,7 @@ class SalesPerson(Domain):
         :returns: the items
         """
         return [(name, salesperson.id) for name, salesperson in
-                cls.get_active_salespersons(store)]
+                cls.get_active_salespersons(store, branch)]
 
 
 @implementer(IActive)
@@ -2008,6 +2109,7 @@ class ClientView(Viewable):
     person_id = Person.id
     phone_number = Person.phone_number
     mobile_number = Person.mobile_number
+    email = Person.email
 
     # Company
     fancy_name = Company.fancy_name
@@ -2025,6 +2127,7 @@ class ClientView(Viewable):
     street = Address.street
     streetnumber = Address.streetnumber
     district = Address.district
+    complement = Address.complement
 
     tables = [
         Client,
@@ -2093,7 +2196,7 @@ class EmployeeView(Viewable):
     tables = [
         Employee,
         Join(Person, Person.id == Employee.person_id),
-        Join(EmployeeRole, Employee.role_id == EmployeeRole.id),
+        LeftJoin(EmployeeRole, Employee.role_id == EmployeeRole.id),
     ]
 
     clause = Eq(Person.merged_with_id, None)
@@ -2147,6 +2250,7 @@ class SupplierView(Viewable):
     street = Address.street
     streetnumber = Address.streetnumber
     district = Address.district
+    complement = Address.complement
 
     tables = [
         Supplier,
@@ -2227,10 +2331,17 @@ class BranchView(Viewable):
     id = Branch.id
     acronym = Branch.acronym
     is_active = Branch.is_active
+    crt = Branch.crt
     person_id = Person.id
     name = Person.name
-    fancy_name = Company.fancy_name
+    person_name = Person.name
+    branch_name = Branch.name
     phone_number = Person.phone_number
+    cnpj = Company.cnpj
+    state_registry = Company.state_registry
+    fancy_name = Company.fancy_name
+    city = CityLocation.city
+    state = CityLocation.state
     manager_name = Manager_Person.name
 
     tables = [
@@ -2238,6 +2349,8 @@ class BranchView(Viewable):
         Join(Person, Person.id == Branch.person_id),
         LeftJoin(Company, Company.person_id == Person.id),
         LeftJoin(Employee, Branch.manager_id == Employee.id),
+        Join(Address, Person.id == Address.person_id),
+        Join(CityLocation, Address.city_location_id == CityLocation.id),
         LeftJoin(Manager_Person, Employee.person_id == Manager_Person.id),
     ]
 
@@ -2246,7 +2359,7 @@ class BranchView(Viewable):
     #
 
     def get_description(self):
-        return self.name
+        return self.person_name
 
     #
     # Public API
@@ -2489,6 +2602,21 @@ class ClientsWithCreditView(Viewable):
     clause = Or(credit_spent > 0, credit_received > 0)
 
 
+class IndividualView(Viewable):
+    id = Individual.id
+
+    name = Person.name
+    cpf = Individual.cpf
+
+    tables = [
+        Individual,
+        LeftJoin(Person, Person.id == Individual.person_id),
+    ]
+
+    def get_description(self):
+        return self.name
+
+
 class PersonAddressView(Viewable):
     person = Person
     main_address = Address
@@ -2503,6 +2631,10 @@ class PersonAddressView(Viewable):
     cpf = Individual.cpf
     birth_date = Individual.birth_date
     rg_number = Individual.rg_number
+    district = Address.district
+    street = Address.street
+    streetnumber = Address.streetnumber
+    complement = Address.complement
 
     clean_name = StoqNormalizeString(Person.name)
     clean_street = Coalesce(StoqNormalizeString(Address.street), u'')
@@ -2519,3 +2651,6 @@ class PersonAddressView(Viewable):
     ]
 
     clause = Eq(Person.merged_with_id, None)
+
+    def get_description(self):
+        return self.name

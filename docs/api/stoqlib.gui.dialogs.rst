@@ -33,6 +33,14 @@ dialogs Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`certificatedialog` Module
+-------------------------------
+
+.. automodule:: stoqlib.gui.dialogs.certificatedialog
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 :mod:`clientcategorydialog` Module
 ----------------------------------
 
@@ -177,6 +185,15 @@ dialogs Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`masseditordialog` Module
+----------------------------
+
+.. automodule:: stoqlib.gui.dialogs.masseditordialog
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+
 :mod:`missingitemsdialog` Module
 --------------------------------
 
@@ -237,6 +254,14 @@ dialogs Package
 -------------------------------
 
 .. automodule:: stoqlib.gui.dialogs.personmergedialog
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`pindialog` Module
+-----------------------
+
+.. automodule:: stoqlib.gui.dialogs.pindialog
     :members:
     :undoc-members:
     :show-inheritance:
@@ -350,14 +375,6 @@ dialogs Package
 ---------------------------
 
 .. automodule:: stoqlib.gui.dialogs.sellableimage
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-:mod:`sellablepricedialog` Module
----------------------------------
-
-.. automodule:: stoqlib.gui.dialogs.sellablepricedialog
     :members:
     :undoc-members:
     :show-inheritance:

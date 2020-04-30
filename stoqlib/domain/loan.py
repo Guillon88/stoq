@@ -32,6 +32,7 @@ set of :class:`LoanItem`.
 
 # pylint: enable=E1101
 
+import collections
 from decimal import Decimal
 
 from kiwi.currency import currency
@@ -43,9 +44,13 @@ from stoqlib.database.expr import Round
 from stoqlib.database.properties import (UnicodeCol, DateTimeCol, PriceCol,
                                          QuantityCol, IdentifierCol,
                                          IdCol, EnumCol)
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
+from stoqlib.domain.events import StockOperationConfirmedEvent
+from stoqlib.domain.fiscal import Invoice
 from stoqlib.domain.interfaces import IContainer, IInvoice, IInvoiceItem
+from stoqlib.domain.person import LoginUser
 from stoqlib.domain.product import StockTransactionHistory
+from stoqlib.domain.taxes import check_tax_info_presence
 from stoqlib.exceptions import DatabaseInconsistency
 from stoqlib.lib.dateutils import localnow
 from stoqlib.lib.defaults import DECIMAL_PRECISION, quantize
@@ -105,13 +110,41 @@ class LoanItem(Domain):
     #: :class:`loan <Loan>` this item belongs to
     loan = Reference(loan_id, 'Loan.id')
 
+    icms_info_id = IdCol()
+
+    #: the :class:`stoqlib.domain.taxes.InvoiceItemIcms` tax for *self*
+    icms_info = Reference(icms_info_id, 'InvoiceItemIcms.id')
+
+    ipi_info_id = IdCol()
+
+    #: the :class:`stoqlib.domain.taxes.InvoiceItemIpi` tax for *self*
+    ipi_info = Reference(ipi_info_id, 'InvoiceItemIpi.id')
+
+    pis_info_id = IdCol()
+
+    #: the :class:`stoqlib.domain.taxes.InvoiceItemPis` tax for *self*
+    pis_info = Reference(pis_info_id, 'InvoiceItemPis.id')
+
+    cofins_info_id = IdCol()
+
+    #: the :class:`stoqlib.domain.taxes.InvoiceItemCofins` tax for *self*
+    cofins_info = Reference(cofins_info_id, 'InvoiceItemCofins.id')
+
     def __init__(self, *args, **kwargs):
         # stores the total quantity that was loaned before synching stock
         self._original_quantity = 0
         # stores the loaned quantity that was returned before synching stock
         self._original_return_quantity = self.return_quantity
+        check_tax_info_presence(kwargs, kwargs.get('store'))
 
         super(LoanItem, self).__init__(*args, **kwargs)
+
+        product = self.sellable.product
+        if product:
+            self.ipi_info.set_item_tax(self)
+            self.icms_info.set_item_tax(self)
+            self.pis_info.set_item_tax(self)
+            self.cofins_info.set_item_tax(self)
 
     def __storm_loaded__(self):
         super(LoanItem, self).__storm_loaded__()
@@ -131,32 +164,20 @@ class LoanItem(Domain):
     #
 
     @property
-    def icms_info(self):
-        # FIXME: We must return the ICMS values, based on calculation between
-        # the ProductIcmsTemplate and the loan_item.
-        return None
+    def parent(self):
+        return self.loan
 
     @property
-    def ipi_info(self):
-        # FIXME: We must return the IPI values, based on calculation between
-        # the ProductIpiTemplate and the loan_item.
-        return None
+    def item_discount(self):
+        if self.price < self.base_price:
+            return self.base_price - self.price
+        return Decimal('0')
 
     @property
-    def nfe_cfop_code(self):
-        client_address = self.loan.client.person.get_main_address()
-        our_address = self.loan.branch.person.get_main_address()
+    def cfop_code(self):
+        return u'5917'
 
-        same_state = True
-        if (our_address.city_location.state != client_address.city_location.state):
-            same_state = False
-
-        if same_state:
-            return u'5917'
-        else:
-            return u'6917'
-
-    def sync_stock(self):
+    def sync_stock(self, user: LoginUser):
         """Synchronizes the stock, increasing/decreasing it accordingly.
         Using the stored values when this object is created/loaded, compute how
         much we should increase or decrease the stock quantity.
@@ -173,12 +194,12 @@ class LoanItem(Domain):
         if diff_quantity > 0:
             self.storable.increase_stock(diff_quantity, self.branch,
                                          StockTransactionHistory.TYPE_RETURNED_LOAN,
-                                         self.id, batch=self.batch)
+                                         self.id, user, batch=self.batch)
         elif diff_quantity < 0:
             diff_quantity = - diff_quantity
             self.storable.decrease_stock(diff_quantity, self.branch,
                                          StockTransactionHistory.TYPE_LOANED,
-                                         self.id, batch=self.batch)
+                                         self.id, user, batch=self.batch)
 
         # Reset the values used to calculate the stock quantity, just like
         # when the object as loaded from the database again.
@@ -210,12 +231,12 @@ class LoanItem(Domain):
         :param decimal.Decimal discount: the discount to be applied
             as a percentage, e.g. 10.0, 22.5
         """
-        self.price = quantize(self.base_price * (1 - discount / 100))
+        self.price = quantize(self.base_price * (1 - Decimal(discount) / 100))
 
 
 @implementer(IContainer)
 @implementer(IInvoice)
-class Loan(Domain):
+class Loan(IdentifiableDomain):
     """
     A loan is a collection of |sellable| that is being loaned
     to a |client|, the items are expected to be either be
@@ -240,10 +261,17 @@ class Loan(Domain):
     #: returned and are available in stock.
     STATUS_CLOSED = u'closed'
 
+    #: The loan is cancelled and all the products or other sellable items have
+    #: been returned and are available in stock.
+    STATUS_CANCELLED = u'cancelled'
+
     # FIXME: This is missing a few states,
     #        STATUS_LOANED: stock is completely synchronized
-    statuses = {STATUS_OPEN: _(u'Opened'),
-                STATUS_CLOSED: _(u'Closed')}
+    statuses = collections.OrderedDict([
+        (STATUS_OPEN, _(u'Opened')),
+        (STATUS_CLOSED, _(u'Closed')),
+        (STATUS_CANCELLED, _(u'Cancelled')),
+    ])
 
     #: A numeric identifier for this object. This value should be used instead of
     #: :obj:`Domain.id` when displaying a numerical representation of this object to
@@ -266,11 +294,21 @@ class Loan(Domain):
     #: to be returned by this date
     expire_date = DateTimeCol(default=None)
 
+    #: the date the loan was cancelled
+    cancel_date = DateTimeCol(default=None)
+
     removed_by = UnicodeCol(default=u'')
+
+    #: the reason the loan was cancelled
+    cancel_reason = UnicodeCol()
 
     #: branch where the loan was done
     branch_id = IdCol()
     branch = Reference(branch_id, 'Branch.id')
+
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
 
     #: :class:`user <stoqlib.domain.person.LoginUser>` of the system
     #: that made the loan
@@ -296,6 +334,20 @@ class Loan(Domain):
 
     #: |transporter| used in loan
     transporter = None
+
+    invoice_id = IdCol()
+
+    #: The |invoice| generated by the loan
+    invoice = Reference(invoice_id, 'Invoice.id')
+
+    #: The responsible for cancelling the loan. At the moment, the
+    #: |loginuser| that cancelled the loan
+    cancel_responsible_id = IdCol()
+    cancel_responsible = Reference(cancel_responsible_id, 'LoginUser.id')
+
+    def __init__(self, store, branch, **kwargs):
+        kwargs['invoice'] = Invoice(store=store, branch=branch, invoice_type=Invoice.TYPE_OUT)
+        super(Loan, self).__init__(store=store, branch=branch, **kwargs)
 
     #
     # Classmethods
@@ -350,11 +402,6 @@ class Loan(Domain):
     @property
     def recipient(self):
         return self.client.person
-
-    @property
-    def invoice_number(self):
-        # TODO: After, use the invoice number that will be saved in new database table (Invoice)
-        return 1
 
     @property
     def operation_nature(self):
@@ -435,7 +482,7 @@ class Loan(Domain):
         candidate = None
         for item in self.get_items():
             item.set_discount(discount)
-            new_total += item.price * item.quantity
+            new_total += quantize(item.price * item.quantity)
             if item.quantity == 1:
                 candidate = item
 
@@ -468,8 +515,7 @@ class Loan(Domain):
         :returns: the total value
         """
         return currency(self.get_items().sum(
-            Round(LoanItem.price * LoanItem.quantity,
-                        DECIMAL_PRECISION)) or 0)
+            Round(LoanItem.price * LoanItem.quantity, DECIMAL_PRECISION)) or 0)
 
     def get_client_name(self):
         if self.client:
@@ -488,7 +534,7 @@ class Loan(Domain):
     # Public API
     #
 
-    def sync_stock(self):
+    def sync_stock(self, user: LoginUser):
         """Synchronizes the stock of *self*'s :class:`loan items <LoanItem>`
 
         Just a shortcut to call :meth:`LoanItem.sync_stock` of all of
@@ -499,7 +545,7 @@ class Loan(Domain):
             # No need to sync stock for products that dont need.
             if not loan_item.sellable.product.manage_stock:
                 continue
-            loan_item.sync_stock()
+            loan_item.sync_stock(user)
 
     def can_close(self):
         """Checks if the loan can be closed. A loan can be closed if it is
@@ -521,8 +567,8 @@ class Loan(Domain):
 
         :returns: the base subtotal
         """
-        subtotal = self.get_items().sum(LoanItem.quantity *
-                                        LoanItem.base_price)
+        subtotal = self.get_items().sum(Round(LoanItem.quantity * LoanItem.base_price,
+                                              DECIMAL_PRECISION))
         return currency(subtotal)
 
     def close(self):
@@ -531,3 +577,12 @@ class Loan(Domain):
         assert self.can_close()
         self.close_date = localnow()
         self.status = Loan.STATUS_CLOSED
+
+    def confirm(self):
+        # Save the operation nature and branch in Invoice table.
+        self.invoice.operation_nature = self.operation_nature
+        self.invoice.branch = self.branch
+        # Since there is no status change here and the event requires
+        # the parameter, we use None
+        old_status = None
+        StockOperationConfirmedEvent.emit(self, old_status)

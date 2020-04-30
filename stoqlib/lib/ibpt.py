@@ -35,6 +35,8 @@ import csv
 from decimal import Decimal
 
 from stoqlib.database.runtime import get_current_branch, new_store
+from stoqlib.lib.defaults import quantize
+from stoqlib.lib.parameters import sysparam
 
 taxes_data = {}
 TaxInfo = namedtuple('TaxInfo', 'nacionalfederal, importadosfederal, estadual,'
@@ -69,12 +71,9 @@ def load_taxes_csv():
     address = branch.person.get_main_address()
     state = address.city_location.state
 
-    # Change the version according to the updates of IBPT tables.
-    version = '16.1.A'
     filename = environ.get_resource_filename('stoq', 'csv', 'ibpt_tables',
-                                             'TabelaIBPTax%s%s.csv'
-                                             % (state, version))
-    csv_file = (csv.reader(open(filename, "r"), delimiter=';'))
+                                             'TabelaIBPTax%s.csv' % state)
+    csv_file = (csv.reader(open(filename, "r", encoding='latin1'), delimiter=';'))
 
     for (ncm, ex, tipo, descricao, nacionalfederal, importadosfederal,
          estadual, municipal, vigenciainicio, vigenciafim, chave,
@@ -88,9 +87,10 @@ def load_taxes_csv():
 
 
 class IBPTGenerator(object):
-    def __init__(self, items):
+    def __init__(self, items, include_services=False):
         load_taxes_csv()
         self.items = items
+        self.include_services = include_services
 
     def _format_ex(self, ex_tipi):
         if not ex_tipi:
@@ -102,12 +102,19 @@ class IBPTGenerator(object):
         assert item
         sellable = item.sellable
         product = sellable.product
-        if not product:
-            return None
-        ncm = product.ncm or ''
-        ex_tipi = self._format_ex(product.ex_tipi)
+        service = sellable.service
+        delivery = sysparam.get_object(item.store, 'DELIVERY_SERVICE').sellable
+        if product:
+            code = product.ncm or ''
+            ex_tipi = self._format_ex(product.ex_tipi)
+        else:
+            if not self.include_services or sellable == delivery:
+                return
 
-        options = taxes_data.get(ncm, {})
+            code = '%04d' % int(service.service_list_item_code.replace('.', ''))
+            ex_tipi = ''
+
+        options = taxes_data.get(code, {})
         n_options = len(options)
         if n_options == 0:
             tax_values = TaxInfo('0', '0', '0', '', '0')
@@ -129,11 +136,11 @@ class IBPTGenerator(object):
         sellable = item.sellable
         product = sellable.product
 
-        if product.icms_template:
-            origin = product.icms_template.orig
+        if product and product.get_icms_template(item.parent.branch):
+            origin = product.get_icms_template(item.parent.branch).orig
         else:
-            # If the product does not have any fiscal information, defaults to
-            # national origin
+            # If the product does not have any fiscal information or it's a
+            # service, defaults to national origin
             origin = 0
 
         # Values (0, 3, 4, 5, 8) represent the taxes codes of brazilian origin.
@@ -142,13 +149,13 @@ class IBPTGenerator(object):
         # Different codes, represent taxes of international origin.
         else:
             federal_tax = Decimal(tax_values.importadosfederal) / 100
-        total_item = item.price * item.quantity
+        total_item = quantize(item.price * item.quantity)
         return total_item * federal_tax
 
     def _calculate_state_tax(self, item, tax_values):
         if tax_values is None:
             return Decimal("0")
-        total_item = item.price * item.quantity
+        total_item = quantize(item.price * item.quantity)
         state_tax = Decimal(tax_values.estadual) / 100
         return total_item * state_tax
 
@@ -168,12 +175,12 @@ class IBPTGenerator(object):
         federal_msg = "%0.2f Federal" % federal_tax
         state_msg = "%0.2f Estadual" % state_tax
 
-        final_msg = ("Trib aprox R$: {federal} e {state}\n"
-                     "Fonte: {source} {key} ")
+        final_msg = ("Tributos aproximados: R$ {federal} e R$ {state}\n"
+                     "Fonte: {source} {key}")
         return final_msg.format(federal=federal_msg, state=state_msg,
                                 source=source, key=key)
 
 
-def generate_ibpt_message(items):
-    generator = IBPTGenerator(items)
+def generate_ibpt_message(items, include_services=False):
+    generator = IBPTGenerator(items, include_services)
     return generator.get_ibpt_message()

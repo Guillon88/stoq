@@ -24,11 +24,12 @@
 
 import logging
 
-import gtk
+from gi.repository import Gtk
 from kiwi.environ import environ
 from kiwi.ui.delegates import GladeSlaveDelegate
 from kiwi.utils import gsignal
 
+from stoqlib.api import api
 from stoqlib.database.queryexecuter import DateQueryState, DateIntervalQueryState
 from stoqlib.domain.person import Individual
 from stoqlib.enums import SearchFilterPosition
@@ -100,7 +101,7 @@ class SearchDialog(BasicDialog):
     search_label = None
 
     #: Selection mode to use (if its possible to select more than one row)
-    selection_mode = gtk.SELECTION_BROWSE
+    selection_mode = Gtk.SelectionMode.BROWSE
 
     #: Default size for this dialog
     size = ()
@@ -140,6 +141,9 @@ class SearchDialog(BasicDialog):
     #: MAX_SEARCH_RESULTS. When True, there will be no limit and everything will
     #: be displayed
     unlimited_results = False
+
+    #: If the column settings should be saved or not.
+    save_columns = True
 
     def __init__(self, store, search_spec=None, hide_footer=True,
                  title='', selection_mode=None, double_click_confirm=False,
@@ -196,18 +200,22 @@ class SearchDialog(BasicDialog):
         # be able to use both the keyboard and the mouse to select items
         # in the search list.
         selection_mode = selection_mode or self.selection_mode
-        if (selection_mode != gtk.SELECTION_BROWSE and
-            selection_mode != gtk.SELECTION_MULTIPLE):
+        if (selection_mode != Gtk.SelectionMode.BROWSE and
+                selection_mode != Gtk.SelectionMode.MULTIPLE):
             raise ValueError('Invalid selection mode %r' % selection_mode)
         return selection_mode
 
     def _setup_search(self):
         self.columns = self.get_columns()
         SearchDialogSetupSearchEvent.emit(self)
+        if self.save_columns:
+            restore_name = self.__class__.__name__
+        else:
+            restore_name = None
         self.search = SearchSlave(
             self.columns,
             tree=self.tree,
-            restore_name=self.__class__.__name__,
+            restore_name=restore_name,
             store=self.store,
             search_spec=self.search_spec,
             fast_iter=self.fast_iter,
@@ -272,16 +280,16 @@ class SearchDialog(BasicDialog):
         :param stock: the gtk stock id to be used in the button.
         :param image: the image filename.
         """
-        button = gtk.Button(label=label)
+        button = Gtk.Button(label=label)
         if image:
-            image_widget = gtk.Image()
+            image_widget = Gtk.Image()
             image_widget.set_from_file(
                 environ.get_resource_filename('stoq', 'pixmaps', image))
             image_widget.show()
             button.set_image(image_widget)
         elif stock:
             button_set_image_with_label(button, stock, label)
-        self.action_area.set_layout(gtk.BUTTONBOX_END)
+        self.action_area.set_layout(Gtk.ButtonBoxStyle.END)
         self.action_area.pack_start(button, False, False, 6)
         self.action_area.set_child_secondary(button, True)
         return button
@@ -302,7 +310,7 @@ class SearchDialog(BasicDialog):
 
     def get_selection(self):
         mode = self.results.get_selection_mode()
-        if mode == gtk.SELECTION_BROWSE:
+        if mode == Gtk.SelectionMode.BROWSE:
             return self.results.get_selected()
         return self.results.get_selected_rows()
 
@@ -314,13 +322,15 @@ class SearchDialog(BasicDialog):
         if retval is None:
             retval = self.get_selection()
         self.retval = retval
-        self.search.save_columns()
+        if self.save_columns:
+            self.search.save_columns()
         # FIXME: This should chain up so the "confirm" signal gets emitted
         self.close()
 
     def cancel(self, *args):
         self.retval = []
-        self.search.save_columns()
+        if self.save_columns:
+            self.search.save_columns()
         # FIXME: This should chain up so the "cancel" signal gets emitted
         self.close()
 
@@ -442,7 +452,8 @@ class SearchDialog(BasicDialog):
 
     def create_provider_filter(self, label=None):
         from stoqlib.domain.payment.card import CreditProvider
-        providers = CreditProvider.get_card_providers(self.store)
+        providers = CreditProvider.get_card_providers(
+            self.store).order_by(CreditProvider.short_name)
         items = [(p.short_name, p) for p in providers]
         items.insert(0, (_("Any"), None))
 
@@ -454,7 +465,7 @@ class SearchDialog(BasicDialog):
 
     def create_salesperson_filter(self, label=None):
         from stoqlib.domain.person import SalesPerson
-        items = SalesPerson.get_active_items(self.store)
+        items = SalesPerson.get_active_items(self.store, api.get_current_branch(self.store))
         items.insert(0, (_("Any"), None))
 
         if not label:
@@ -468,7 +479,7 @@ class SearchDialog(BasicDialog):
     def on_search__search_completed(self, search, results, states):
         self.search_completed(results, states)
 
-    def _on_results__cell_edited(self, results, obj, attr):
+    def _on_results__cell_edited(self, results, obj, column):
         """Override this method on child when it's needed to perform some
         tasks when editing a row.
         """
@@ -492,8 +503,11 @@ class SearchDialog(BasicDialog):
 
     def _on_export_csv_button__clicked(self, widget):
         if not self.unlimited_results:
+            # FIXME: This is making the filters set by the user be respected
+            # when exporting the results.
             executer = self.search.get_query_executer()
-            data = executer.search(limit=-1)
+            states = [(sf.get_state()) for sf in self.search.get_search_filters()]
+            data = executer.search(states, limit=-1)
         else:
             # The results are already unlimited, let the exporter get the data
             # from the objectlist

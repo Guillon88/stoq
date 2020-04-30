@@ -55,6 +55,7 @@ class TestParameter(DomainTest):
         self.sale = Sale(coupon_id=123, client=client,
                          cfop_id=self.sparam.get_object_id('DEFAULT_SALES_CFOP'),
                          group=group, branch=self.branch,
+                         station=self.current_station,
                          salesperson=self.salesperson,
                          store=self.store)
 
@@ -122,7 +123,7 @@ class TestParameter(DomainTest):
     def test_return_policy_on_sales(self):
         param = self.sparam.get_int('RETURN_POLICY_ON_SALES')
         self.assertTrue(isinstance(param, int))
-        self.assertEquals(param, 0)
+        self.assertEqual(param, 0)
 
     def test_ask_sale_cfop(self):
         param = self.sparam.get_bool('ASK_SALES_CFOP')
@@ -131,16 +132,15 @@ class TestParameter(DomainTest):
     def test_default_sales_cfop(self):
         self._create_examples()
         group = self.create_payment_group()
-        sale = Sale(coupon_id=123, salesperson=self.salesperson,
+        sale = Sale(coupon_id=123, salesperson=self.salesperson, station=self.current_station,
                     branch=self.branch, group=group, store=self.store)
         self.assertTrue(self.sparam.compare_object(
             'DEFAULT_SALES_CFOP', sale.cfop))
         param = self.sparam.get_object(self.store, 'DEFAULT_RECEIVING_CFOP')
         group = self.create_payment_group()
-        sale = Sale(coupon_id=432, salesperson=self.salesperson,
-                    branch=self.branch, group=group, cfop=param,
-                    store=self.store)
-        self.assertEquals(sale.cfop, param)
+        sale = Sale(coupon_id=432, salesperson=self.salesperson, branch=self.branch, group=group,
+                    station=self.current_station, cfop=param, store=self.store)
+        self.assertEqual(sale.cfop, param)
 
     def test_default_return_sales_cfop(self):
         from stoqlib.domain.fiscal import FiscalBookEntry
@@ -173,15 +173,15 @@ class TestParameter(DomainTest):
                                 username=u'craudio')
         receiving_order = ReceivingOrder(responsible=responsible,
                                          branch=branch,
+                                         station=self.current_station,
                                          store=self.store,
-                                         invoice_number=876,
-                                         supplier=None)
+                                         invoice_number=876)
         param2 = self.sparam.get_object(self.store, 'DEFAULT_SALES_CFOP')
         receiving_order2 = ReceivingOrder(responsible=responsible,
+                                          station=self.current_station,
                                           cfop=param2, branch=branch,
                                           store=self.store,
-                                          invoice_number=1231,
-                                          supplier=None)
+                                          invoice_number=1231)
         self.assertEqual(param, receiving_order.cfop)
         self.failIfEqual(param, receiving_order2.cfop)
 
@@ -197,6 +197,28 @@ class TestParameter(DomainTest):
         param = self.sparam.get_decimal('SUBSTITUTION_TAX')
         assert isinstance(param, Decimal)
 
+    def test_default_product_pis_template(self):
+        pis_template = self.create_product_pis_template()
+        param_name = 'DEFAULT_PRODUCT_PIS_TEMPLATE'
+        self.sparam.set_object(self.store, param_name, pis_template)
+
+        wrong_template = self.create_product_cofins_template()
+        with self.assertRaises(TypeError):
+            self.sparam.set_object(self.store, param_name, wrong_template)
+
+    def test_default_product_cofins_template(self):
+        cofins_template = self.create_product_cofins_template()
+        param_name = 'DEFAULT_PRODUCT_COFINS_TEMPLATE'
+        self.sparam.set_object(self.store, param_name, cofins_template)
+
+        wrong_template = self.create_product_pis_template()
+        with self.assertRaises(TypeError):
+            self.sparam.set_object(self.store, param_name, wrong_template)
+
     def test_default_area_code(self):
         param = self.sparam.get_int('DEFAULT_AREA_CODE')
-        self.failUnless(isinstance(param, int), type(param))
+        self.assertTrue(isinstance(param, int), type(param))
+
+    def test_default_label_columns(self):
+        param = self.sparam.get_string('LABEL_COLUMNS')
+        self.assertEqual(param, 'code,barcode,description,price')

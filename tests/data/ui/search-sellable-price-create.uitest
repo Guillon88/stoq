@@ -1,0 +1,124 @@
+search: SellableMassEditorDialog
+GtkDialog(toplevel): title='', hidden
+  GtkBox(_main_vbox, orientation=vertical):
+    GtkBox(vbox, orientation=vertical, expand=True, fill=True):
+      GtkEventBox(header): hidden
+      GtkEventBox(main, expand=True, fill=True, padding=6): slave SearchSlave is attached
+        GtkBox(vbox, orientation=vertical):
+          GtkBox(orientation=horizontal, fill=True, padding=6):
+            GtkBox(filters_box, orientation=vertical, padding=6):
+              GtkBox(hbox, orientation=horizontal):
+                StringSearchFilter(_primary_filter):
+                  GtkLabel(): 'Search:'
+                  ProxyComboBox(padding=6): hidden
+                    item: 'Contains All Words', selected
+                  GtkEntry(search_entry, padding=6): ''
+                stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(search_button): 'Find'
+          stoqlib+gui+dialogs+masseditordialog+MassEditorWidget(mass_editor):
+            GtkLabel(): 'Update'
+            ProxyComboBox():
+              item: 'Category', selected
+              item: 'Description'
+              item: 'Unit'
+              item: 'C.F.O.P.'
+              item: 'Cost'
+              item: 'Default Price'
+              item: 'On Sale Price'
+              item: 'On Sale Start Date'
+              item: 'On Sale End Date'
+              item: 'NCM'
+              item: 'Location'
+              item: 'Brand'
+              item: 'Family'
+              item: 'Model'
+              item: 'Width'
+              item: 'Height'
+              item: 'Depth'
+              item: 'Weight'
+              item: 'Manufacturer'
+              item: 'Service List Item Code'
+              item: 'City Taxation Code'
+              item: 'ISS Aliquot'
+              item: 'cat1 Price'
+              item: 'cat2 Price'
+            GtkEventBox():
+              stoqlib+gui+dialogs+masseditordialog+ObjectEditor():
+                ProxyComboBox(expand=True, fill=True):
+                  item: 'Set value to', selected
+                stoqlib+gui+dialogs+masseditordialog+SetObjectValueOperation(expand=True, fill=True):
+                  ProxyComboBox():
+                    item: 'Erase value', selected
+                    item: 'Bermudas'
+                    item: 'Bermudas Sarja'
+                    item: 'Bermudas Shorts'
+                    item: 'Camisetas'
+                    item: 'Tinturada'
+                    item: 'Calçados'
+                    item: 'Chinelos'
+                    item: 'Calças'
+                    item: 'Calças Jeans'
+                    item: 'Calças Poliester'
+                    item: 'Casacos'
+                    item: 'Algodão'
+                    item: 'Blusas'
+                    item: 'Blusas Algodão'
+                    item: 'Blusas Poliester'
+                    item: 'Vestido'
+                    item: 'Viscose'
+            GtkButton(): 'gtk-apply'
+          SearchResultListView(results, expand=True, fill=True):
+            column: title='Code'
+            column: title='Barcode'
+            column: title='Category'
+            column: title='Description'
+            column: title='Unit', hidden
+            column: title='C.F.O.P.', hidden
+            column: title='Markup'
+            column: title='Cost'
+            column: title='Default Price'
+            column: title='On Sale Price'
+            column: title='On Sale Start Date'
+            column: title='On Sale End Date'
+            column: title='Need Price Update', hidden
+            column: title='Cost Last Updated', hidden
+            column: title='Price Last Updated', hidden
+            column: title='NCM', hidden
+            column: title='Location', hidden
+            column: title='Brand', hidden
+            column: title='Family', hidden
+            column: title='Model', hidden
+            column: title='Width', hidden
+            column: title='Height', hidden
+            column: title='Depth', hidden
+            column: title='Weight', hidden
+            column: title='Manufacturer', hidden
+            column: title='Service List Item Code', hidden
+            column: title='City Taxation Code', hidden
+            column: title='ISS Aliquot', hidden
+            column: title='cat1 Price'
+            column: title='cat2 Price'
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+            row: None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, uuid.uuid(), uuid.uuid()
+      GtkBox(orientation=horizontal, fill=True):
+        GtkEventBox(extra_holder, expand=True, fill=True, padding=6):
+        GtkEventBox(print_holder, expand=True, fill=True):
+        GtkEventBox(notice, fill=True):
+        GtkEventBox(details_holder, padding=6, pack-end):
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
+        GtkButton(ok_button, expand=True, fill=True, padding=6): 'gtk-ok'

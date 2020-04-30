@@ -22,14 +22,28 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-import gtk
+from gi.repository import Gtk
 import mock
 
+from kiwi.ui.forms import TextField
+
 from stoqlib.domain.returnedsale import ReturnedSale
+from stoqlib.domain.sale import SaleView
 from stoqlib.domain.views import PendingReturnedSalesView, ReturnedSalesView
 from stoqlib.gui.dialogs.returnedsaledialog import (ReturnedSaleDialog,
                                                     ReturnedSaleUndoDialog)
+from stoqlib.gui.dialogs.saledetails import SaleDetailsDialog
+from stoqlib.gui.editors.baseeditor import BaseEditorSlave
 from stoqlib.gui.test.uitestutils import GUITest
+from stoqlib.lib.decorators import cached_property
+
+
+class _TestSlave(BaseEditorSlave):
+    model_type = object
+
+    @cached_property()
+    def fields(self):
+        return dict(field_name=TextField('Slave field'))
 
 
 class TestReturnedSaleDialog(GUITest):
@@ -41,6 +55,64 @@ class TestReturnedSaleDialog(GUITest):
         model = self.store.find(PendingReturnedSalesView).one()
         dialog = ReturnedSaleDialog(self.store, model)
         self.check_dialog(dialog, 'dialog-receive-pending-returned-sale')
+
+    def test_trade(self):
+        # First create a sale
+        sale = self.create_sale()
+        sale.identifier = 14913
+        self.add_product(sale)
+        sale.order(self.current_user)
+        self.add_payments(sale)
+        sale.confirm(self.current_user)
+        sale.group.pay()
+
+        # A new sale and a trade
+        returned_sale = sale.create_sale_return_adapter(self.current_branch, self.current_user,
+                                                        self.current_station)
+        returned_sale.identifier = 991
+        new_sale = self.create_sale()
+        new_sale.identifier = 14914
+        returned_sale.new_sale = new_sale
+        returned_sale.trade(self.current_user)
+
+        model = self.store.find(ReturnedSalesView).one()
+        dialog = ReturnedSaleDialog(self.store, model)
+        self.check_dialog(dialog, 'dialog-returned-sale-with-trade')
+
+    def test_trade_without_original_sale(self):
+        returned_sale = self.create_trade()
+        returned_sale.identifier = 1992
+        returned_sale.new_sale.identifier = 14915
+        returned_sale.trade(self.current_user)
+
+        model = self.store.find(ReturnedSalesView).one()
+        dialog = ReturnedSaleDialog(self.store, model)
+        self.check_dialog(dialog, 'dialog-returned-sale-without-original')
+
+    def test_show_with_package_product(self):
+        sale = self.create_sale()
+        sale.identifier = 666
+        package = self.create_product(description=u'Package', is_package=True)
+        comp = self.create_product(description=u'Component 1', stock=5,
+                                   storable=True)
+        p_comp = self.create_product_component(product=package,
+                                               component=comp,
+                                               component_quantity=2,
+                                               price=2)
+        item = sale.add_sellable(package.sellable, quantity=1, price=0)
+        sale.add_sellable(comp.sellable,
+                          quantity=item.quantity * p_comp.quantity,
+                          price=p_comp.price,
+                          parent=item)
+        self.add_payments(sale)
+        sale.order(self.current_user)
+        sale.confirm(self.current_user)
+        r_sale = self.create_returned_sale(sale)
+        r_sale.identifier = 666
+
+        model = self.store.find(ReturnedSalesView).one()
+        dialog = ReturnedSaleDialog(self.store, model)
+        self.check_dialog(dialog, 'dialog-returned-sale-with-package')
 
     def test_show_undone(self):
         rsale = self.create_returned_sale()
@@ -61,14 +133,14 @@ class TestReturnedSaleDialog(GUITest):
         self.create_pending_returned_sale()
         model = self.store.find(PendingReturnedSalesView).one()
         dialog = ReturnedSaleDialog(self.store, model)
-        self.assertEquals(dialog.receive_button.get_property('visible'), True)
-        self.assertEquals(model.returned_sale.status, ReturnedSale.STATUS_PENDING)
+        self.assertEqual(dialog.receive_button.get_property('visible'), True)
+        self.assertEqual(model.returned_sale.status, ReturnedSale.STATUS_PENDING)
         with mock.patch.object(self.store, 'commit'):
             self.click(dialog.receive_button)
             yesno.assert_called_once_with(u'Receive pending returned sale?',
-                                          gtk.RESPONSE_NO,
+                                          Gtk.ResponseType.NO,
                                           u'Receive', u"Don't receive")
-            self.assertEquals(model.returned_sale.status, ReturnedSale.STATUS_CONFIRMED)
+            self.assertEqual(model.returned_sale.status, ReturnedSale.STATUS_CONFIRMED)
 
     @mock.patch('stoqlib.gui.dialogs.returnedsaledialog.print_report')
     def test_print_button(self, print_report):
@@ -98,6 +170,45 @@ class TestReturnedSaleDialog(GUITest):
 
         run_dialog.assert_called_once_with(ReturnedSaleUndoDialog, dialog,
                                            self.store, model.returned_sale)
+
+    @mock.patch('stoqlib.gui.dialogs.returnedsaledialog.run_dialog')
+    def test_sale_buttons(self, run_dialog):
+        # First create a sale
+        sale = self.create_sale()
+        self.add_product(sale)
+        sale.order(self.current_user)
+        self.add_payments(sale)
+        sale.confirm(self.current_user)
+        sale.group.pay()
+
+        # A new sale and a trade
+        returned_sale = sale.create_sale_return_adapter(self.current_branch, self.current_user,
+                                                        self.current_station)
+        new_sale = self.create_sale()
+        returned_sale.new_sale = new_sale
+        returned_sale.trade(self.current_user)
+
+        model = self.store.find(ReturnedSalesView).one()
+        dialog = ReturnedSaleDialog(self.store, model)
+        self.click(dialog.sale_details_button)
+        sale_view = self.store.find(SaleView, id=sale.id).one()
+        run_dialog.assert_called_once_with(SaleDetailsDialog, dialog, self.store,
+                                           sale_view)
+
+        run_dialog.reset_mock()
+        self.click(dialog.new_sale_details_button)
+        sale_view = self.store.find(SaleView, id=new_sale.id).one()
+        run_dialog.assert_called_once_with(SaleDetailsDialog, dialog, self.store,
+                                           sale_view)
+
+    def test_add_tab(self):
+        rsale = self.create_returned_sale()
+        rsale.sale.identifier = 336
+        rsale.identifier = 60
+        model = self.store.find(ReturnedSalesView).one()
+        dialog = ReturnedSaleDialog(self.store, model)
+        dialog.add_tab(_TestSlave(self.store, object()), u'Test Tab')
+        self.check_dialog(dialog, 'dialog-returned-sale-add-tab')
 
 
 class TestReturnedSaleUndoDialog(GUITest):

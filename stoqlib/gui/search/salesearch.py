@@ -28,18 +28,19 @@
 import datetime
 from decimal import Decimal
 
-import pango
-import gtk
+from gi.repository import Gtk, Pango
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column
 from storm.expr import Count, And
 
 from stoqlib.api import api
+from stoqlib.enums import SearchFilterPosition
 from stoqlib.domain.sale import (Sale,
                                  SaleView,
                                  SalePaymentMethodView,
                                  SoldItemsByClient,
-                                 SaleToken)
+                                 SaleToken,
+                                 SaleTokenView)
 from stoqlib.domain.person import Branch
 from stoqlib.domain.till import Till
 from stoqlib.domain.views import SoldItemsByBranchView, UnconfirmedSaleItemsView
@@ -86,19 +87,19 @@ class _BaseSaleSearch(SearchDialog):
 
     def get_columns(self):
         return [IdentifierColumn('identifier', title=_('Sale #'), sorted=True,
-                                 order=gtk.SORT_DESCENDING),
+                                 order=Gtk.SortType.DESCENDING),
                 SearchColumn('open_date', title=_('Date Started'), width=110,
-                             data_type=datetime.date, justify=gtk.JUSTIFY_RIGHT),
+                             data_type=datetime.date, justify=Gtk.Justification.RIGHT),
                 SearchColumn('client_name', title=_('Client'),
                              data_type=str, expand=True,
-                             ellipsize=pango.ELLIPSIZE_END),
+                             ellipsize=Pango.EllipsizeMode.END),
                 SearchColumn('salesperson_name', title=_('Salesperson'),
                              data_type=str, width=150),
                 SearchColumn('total_quantity', title=_('Items'),
                              data_type=Decimal, width=60,
                              format_func=format_quantity),
                 SearchColumn('total', title=_('Total'), data_type=currency,
-                             width=90)]
+                             search_attribute='_total', width=90)]
 
 
 class SaleWithToolbarSearch(_BaseSaleSearch):
@@ -212,24 +213,25 @@ class SoldItemsByBranchSearch(SearchDialog):
         self._setup_summary()
 
     def _setup_summary(self):
-        hbox = gtk.HBox()
+        hbox = Gtk.HBox()
         hbox.set_spacing(6)
 
-        self.vbox.pack_start(hbox, False, True)
+        self.vbox.pack_start(hbox, False, True, 0)
         self.vbox.reorder_child(hbox, 2)
         self.vbox.set_spacing(6)
 
-        hbox.pack_start(gtk.Label(), True, True)
+        label = Gtk.Label()
+        hbox.pack_start(label, True, True, 0)
 
         # Create some labels to show a summary for the search (kiwi's
         # SummaryLabel supports only one column)
-        self.items_label = gtk.Label()
-        self.quantity_label = gtk.Label()
-        self.items_per_sale_label = gtk.Label()
-        self.total_label = gtk.Label()
+        self.items_label = Gtk.Label()
+        self.quantity_label = Gtk.Label()
+        self.items_per_sale_label = Gtk.Label()
+        self.total_label = Gtk.Label()
         for widget in [self.items_label, self.quantity_label,
                        self.items_per_sale_label, self.total_label]:
-            hbox.pack_start(widget, False, False)
+            hbox.pack_start(widget, False, False, 0)
             set_bold(widget)
 
         hbox.show_all()
@@ -265,7 +267,7 @@ class SoldItemsByBranchSearch(SearchDialog):
 
     def get_columns(self):
         return [SearchColumn('code', title=_('Code'), data_type=str,
-                             sorted=True, order=gtk.SORT_DESCENDING),
+                             sorted=True, order=Gtk.SortType.DESCENDING),
                 SearchColumn('description', title=_('Product'), data_type=str,
                              expand=True),
                 SearchColumn('category', title=_('Category'), data_type=str,
@@ -305,7 +307,7 @@ class SoldItemsByClientSearch(SearchDialog):
     def get_columns(self):
         columns = [
             SearchColumn('code', title=_('Code'), data_type=str, sorted=True,
-                         order=gtk.SORT_DESCENDING),
+                         order=Gtk.SortType.DESCENDING),
             SearchColumn('description', title=_('Description'),
                          data_type=str, expand=True),
             SearchColumn('client_name', title=_('Client'), data_type=str),
@@ -318,6 +320,43 @@ class SoldItemsByClientSearch(SearchDialog):
             QuantityColumn('quantity', title=_('Qty'), use_having=True),
             SearchColumn('price', title=_('Avg price'), data_type=currency,
                          use_having=True),
+            SearchColumn('total', title=_('Total'), data_type=currency,
+                         use_having=True)
+        ]
+        return columns
+
+
+class SoldItemsBySalespersonSearch(SearchDialog):
+    from stoqlib.domain.sale import SoldItemsBySalesperson
+    title = _(u'Search for Items sold by Salesperson')
+    size = (800, 450)
+    search_spec = SoldItemsBySalesperson
+    unlimited_results = True
+
+    branch_filter_column = Sale.branch_id
+
+    def setup_widgets(self):
+        self.add_csv_button(_('Sale items'), _('sale items'))
+
+    def create_filters(self):
+        self.set_text_field_columns(['salesperson_name', 'description', 'code'])
+
+        self._date_filter = DateSearchFilter("Data:")
+        self.add_filter(self._date_filter, SearchFilterPosition.BOTTOM,
+                        columns=[Sale.confirm_date])
+
+    def get_columns(self):
+        columns = [
+            SearchColumn('salesperson_name', title=_('Salesperson'), data_type=str),
+            SearchColumn('code', title=_('Code'), data_type=str, sorted=True,
+                         order=Gtk.SortType.DESCENDING),
+            SearchColumn('description', title=_('Description'),
+                         data_type=str, expand=True),
+            Column('brand', title=_('Brand'), data_type=str),
+            Column('batch_number', title=_('Batch'), data_type=str, visible=False),
+            SearchColumn('category', title=_('Category'), data_type=str,
+                         visible=False),
+            QuantityColumn('quantity', title=_('Qty'), use_having=True),
             SearchColumn('total', title=_('Total'), data_type=currency,
                          use_having=True)
         ]
@@ -347,7 +386,7 @@ class UnconfirmedSaleItemsSearch(SearchDialog):
 
     def get_columns(self):
         return [IdentifierColumn('identifier', title=_('Sale #'),
-                                 sorted=True, order=gtk.SORT_DESCENDING),
+                                 sorted=True, order=Gtk.SortType.DESCENDING),
                 SearchColumn('status_str', title=_('Status'),
                              search_attribute='status',
                              valid_values=self._get_status_values(), data_type=str),
@@ -371,7 +410,7 @@ class UnconfirmedSaleItemsSearch(SearchDialog):
                              visible=False),
                 SearchColumn('total', title=_('Total'), data_type=currency,),
                 IdentifierColumn('wo_identifier', title=_('WO #'),
-                                 visible=False, justify=gtk.JUSTIFY_RIGHT),
+                                 visible=False, justify=Gtk.Justification.RIGHT),
                 SearchColumn('wo_status_str', title=_('WO Status'), data_type=str,
                              search_attribute='wo_status', visible=False,
                              valid_values=self._get_wo_status_values()),
@@ -381,23 +420,24 @@ class UnconfirmedSaleItemsSearch(SearchDialog):
                              data_type=datetime.date, visible=False)]
 
     def _setup_summary(self):
-        hbox = gtk.HBox()
+        hbox = Gtk.HBox()
         hbox.set_spacing(6)
 
-        self.vbox.pack_start(hbox, False, True)
+        self.vbox.pack_start(hbox, False, True, 0)
         self.vbox.reorder_child(hbox, 2)
         self.vbox.set_spacing(6)
 
-        hbox.pack_start(gtk.Label(), True, True)
+        label = Gtk.Label()
+        hbox.pack_start(label, True, True, 0)
 
         # Create some labels to show a summary for the search (kiwi's
         # SummaryLabel supports only one column)
-        self.quantity_label = gtk.Label()
-        self.reserved_label = gtk.Label()
-        self.total_label = gtk.Label()
+        self.quantity_label = Gtk.Label()
+        self.reserved_label = Gtk.Label()
+        self.total_label = Gtk.Label()
         for widget in [self.quantity_label, self.reserved_label,
                        self.total_label]:
-            hbox.pack_start(widget, False, False)
+            hbox.pack_start(widget, False, False, 0)
             set_bold(widget)
 
         hbox.show_all()
@@ -438,19 +478,38 @@ class UnconfirmedSaleItemsSearch(SearchDialog):
 
 class SaleTokenSearch(SearchEditor):
     title = _(u'Sale Token Search')
-    size = (500, 400)
-    search_spec = SaleToken
+    size = (600, 500)
+    search_spec = SaleTokenView
     editor_class = SaleTokenEditor
-    text_field_columns = [SaleToken.code]
+    text_field_columns = [SaleTokenView.name,
+                          SaleTokenView.code,
+                          SaleTokenView.client_name,
+                          SaleTokenView.branch_name]
 
-    def __init__(self, store, search_str=None, hide_toolbar=False,
-                 hide_footer=False):
+    def __init__(self, store, initial_string=None, hide_toolbar=False,
+                 hide_footer=False, double_click_confirm=False):
         SearchEditor.__init__(self, store, search_spec=self.search_spec,
                               editor_class=self.editor_class,
+                              initial_string=initial_string,
                               hide_toolbar=hide_toolbar,
-                              hide_footer=hide_footer)
+                              hide_footer=hide_footer,
+                              double_click_confirm=double_click_confirm)
 
     def get_columns(self):
-        return [SearchColumn('code', title=_('Code'), data_type=str,
-                             sorted=True, expand=True),
-                Column('status_str', title=_('Status'), data_type=str)]
+        status_values = ([(_('Any'), None)] +
+                         [(v, k) for k, v in SaleToken.statuses.items()])
+        return [
+            SearchColumn('name', title=_('Name'), data_type=str,
+                         sorted=True, expand=True),
+            SearchColumn('code', title=_('Code'), data_type=str),
+            SearchColumn('branch_name', title=_('Branch'), data_type=str,
+                         visible=False),
+            SearchColumn('client_name', title=_('Client'), data_type=str,
+                         expand=True),
+            SearchColumn('status_str', title=_('Status'), data_type=str,
+                         search_attribute='status',
+                         valid_values=status_values),
+        ]
+
+    def get_editor_model(self, model):
+        return model.sale_token

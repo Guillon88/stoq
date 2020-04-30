@@ -1,0 +1,19 @@
+dialog: StatusPopover
+stoq+gui+shell+statusbar+StatusPopover(): hidden
+  stoq+gui+shell+statusbar+StatusBox():
+    GtkBox(orientation=vertical):
+      GtkScrolledWindow(expand=True, fill=True):
+        GtkViewport():
+          GtkListBox():
+            GtkListBoxRow():
+              stoq+gui+shell+statusbar+ResourceStatusBox(orientation=horizontal):
+                GtkImage(fill=True):
+                GtkLabel(fill=True): 'Status not available...'
+                GtkBox(orientation=horizontal, fill=True, pack-end):
+            GtkListBoxRow():
+              stoq+gui+shell+statusbar+ResourceStatusBox(orientation=horizontal):
+                GtkImage(fill=True):
+                GtkLabel(fill=True): 'Status not available...'
+                GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(orientation=horizontal, fill=True):
+        GtkButton(expand=True, fill=True, padding=6): 'Refresh'

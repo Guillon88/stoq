@@ -23,14 +23,13 @@
 ##
 """ List management for common dialogs.  """
 
-import gtk
+from gi.repository import Gtk
 from kiwi.enums import ListType
 from kiwi.ui.objectlist import ObjectList, ObjectTree
 from kiwi.ui.listdialog import ListSlave
 from kiwi.utils import gsignal
 
 from stoqlib.api import api
-from stoqlib.domain.interfaces import IDescribable
 from stoqlib.exceptions import SelectionError, StoqlibError
 from stoqlib.gui.base.dialogs import run_dialog, BasicDialog
 from stoqlib.gui.base.wizards import BaseWizard
@@ -56,7 +55,7 @@ class ModelListSlave(ListSlave):
         :param store: a store connection
         """
         if orientation is None:
-            orientation = gtk.ORIENTATION_VERTICAL
+            orientation = Gtk.Orientation.VERTICAL
         if self.columns is None:
             fmt = "%s needs to set it's columns attribute"
             raise TypeError(fmt % (self.__class__.__name__, ))
@@ -122,7 +121,7 @@ class ModelListSlave(ListSlave):
             retval = self.run_editor(store, model)
             store.confirm(retval)
             if retval:
-                retval = self.model_type.get(retval.id, store=self.store)
+                retval = self.store.get(self.model_type, retval.id)
             store.close()
         return retval
 
@@ -137,8 +136,11 @@ class ModelListSlave(ListSlave):
         return self._prepare_run_editor(None)
 
     def remove_item(self, item):
-        retval = self.listcontainer.default_remove(
-            IDescribable(item).get_description())
+        if hasattr(item, 'description'):
+            desc = item.description
+        else:
+            desc = item.get_description()
+        retval = self.listcontainer.default_remove(desc)
         if retval:
             # Remove the list before deleting it because it'll be late
             # afterwards, the object is invalid and SQLObject will complain
@@ -215,8 +217,8 @@ class ModelListDialog(BasicDialog):
 
         BasicDialog.__init__(self, title=self.title, size=self.size)
 
-        self.vbox = gtk.VBox()
-        self.vbox.pack_start(self.list_slave.listcontainer)
+        self.vbox = Gtk.VBox()
+        self.vbox.pack_start(self.list_slave.listcontainer, True, True, 0)
         self.add(self.vbox)
         self.vbox.show()
 
@@ -235,6 +237,7 @@ class AdditionListSlave(SearchSlave):
                'klist',
                'list_vbox',
                'edit_button')
+    gsignal('before-edit-item', object, retval=object)
     gsignal('on-edit-item', object)
     gsignal('on-add-item', object)
     gsignal('before-delete-items', object)
@@ -288,7 +291,7 @@ class AdditionListSlave(SearchSlave):
 
     def _setup_klist(self, klist_objects):
         self.klist.set_columns(self.columns)
-        self.klist.set_selection_mode(gtk.SELECTION_MULTIPLE)
+        self.klist.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         if self.tree:
             (self.klist.append(obj.parent_item, obj) for obj in klist_objects)
         else:
@@ -312,7 +315,9 @@ class AdditionListSlave(SearchSlave):
 
     def _edit_model(self, model=None, parent=None):
         edit_mode = model
-        result = self.run_editor(model)
+        result = self.emit('before-edit-item', model)
+        if result is None:
+            result = self.run_editor(model)
 
         if not result:
             return
@@ -365,7 +370,7 @@ class AdditionListSlave(SearchSlave):
             _("Keep it"),
             _("Keep them"),
             qty)
-        if not yesno(msg, gtk.RESPONSE_NO, delete_label, keep_label):
+        if not yesno(msg, Gtk.ResponseType.NO, delete_label, keep_label):
             return
         self.emit('before-delete-items', objs)
         if qty == len(self.klist):
@@ -424,14 +429,14 @@ class AdditionListSlave(SearchSlave):
         :param stock: stock label of the button, can be ``None`` if label
             is passed
         :param returns: the button added
-        :rtype: gtk.Button
+        :rtype: Gtk.Button
         """
         if label is None and stock is None:
             raise TypeError("You need to provide a label or a stock argument")
 
-        button = gtk.Button(label=label, stock=stock)
+        button = Gtk.Button(label=label, stock=stock)
         button.set_property('can_focus', True)
-        self.button_box.pack_end(button, False, False)
+        self.button_box.pack_end(button, False, False, 0)
         button.show()
 
         return button
@@ -456,7 +461,7 @@ class AdditionListSlave(SearchSlave):
     def get_selection(self):
         # XXX: add get_selected_rows and raise exceptions if not in the
         #      right mode
-        if self.klist.get_selection_mode() == gtk.SELECTION_MULTIPLE:
+        if self.klist.get_selection_mode() == Gtk.SelectionMode.MULTIPLE:
             return self.klist.get_selected_rows()
         selection = self.klist.get_selected()
         if not selection:
@@ -520,9 +525,9 @@ class SimpleListDialog(BasicDialog):
             self.cancel_button.hide()
 
         if multiple:
-            selection_mode = gtk.SELECTION_MULTIPLE
+            selection_mode = Gtk.SelectionMode.MULTIPLE
         else:
-            selection_mode = gtk.SELECTION_BROWSE
+            selection_mode = Gtk.SelectionMode.BROWSE
         self.setup_slave(columns, objects, selection_mode)
 
     def setup_slave(self, columns, objects, selection_mode):
@@ -533,7 +538,7 @@ class SimpleListDialog(BasicDialog):
 
     def get_selection(self):
         mode = self._klist.get_selection_mode()
-        if mode == gtk.SELECTION_MULTIPLE:
+        if mode == Gtk.SelectionMode.MULTIPLE:
             return self._klist.get_selected_rows()
         selection = self._klist.get_selected()
         if not selection:

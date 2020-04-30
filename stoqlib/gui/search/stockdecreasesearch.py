@@ -27,9 +27,10 @@
 import datetime
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.ui.objectlist import Column
 
+from stoqlib.api import api
 from stoqlib.domain.stockdecrease import StockDecrease
 from stoqlib.domain.views import StockDecreaseView
 from stoqlib.gui.base.dialogs import run_dialog
@@ -48,7 +49,7 @@ class StockDecreaseSearch(SearchDialog):
     size = (750, 500)
     search_spec = StockDecreaseView
     report_class = StockDecreaseReport
-    selection_mode = gtk.SELECTION_MULTIPLE
+    selection_mode = Gtk.SelectionMode.MULTIPLE
     text_field_columns = [StockDecreaseView.removed_by_name,
                           StockDecreaseView.branch_name,
                           StockDecreaseView.reason]
@@ -59,8 +60,10 @@ class StockDecreaseSearch(SearchDialog):
         self._setup_widgets()
 
     def _show_details(self, item):
-        run_dialog(StockDecreaseDetailsDialog, self, self.store,
-                   item.stock_decrease)
+        with api.new_store() as store:
+            model = store.fetch(item.stock_decrease)
+            run_dialog(StockDecreaseDetailsDialog, self, store, model)
+            store.retval = store.get_pending_count() > 0
 
     def _setup_widgets(self):
         self.results.connect('row_activated', self.on_row_activated)

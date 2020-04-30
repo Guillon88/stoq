@@ -24,7 +24,7 @@
 
 import datetime
 import mock
-import gtk
+from gi.repository import Gtk
 
 from stoqlib.api import api
 
@@ -77,24 +77,24 @@ class TestPurchase(BaseGUITest):
             self.fake.set_retval(purchase)
             self.activate(app.NewQuote)
 
-            self.assertEquals(run_dialog.call_count, 1)
+            self.assertEqual(run_dialog.call_count, 1)
             args, kwargs = run_dialog.call_args
             wizard, store, edit_mode = args
-            self.assertEquals(wizard, QuotePurchaseWizard)
+            self.assertEqual(wizard, QuotePurchaseWizard)
             self.assertTrue(store is not None)
-            self.assertEquals(edit_mode, None)
+            self.assertEqual(edit_mode, None)
 
     @mock.patch('stoq.gui.purchase.PurchaseApp.print_report')
     def test_print_report(self, print_report):
         api.sysparam.set_bool(self.store, 'SMART_LIST_LOADING', False)
         app = self.create_app(PurchaseApp, u'purchase')
 
-        self.activate(app.window.Print)
-        self.assertEquals(print_report.call_count, 1)
+        self.activate(app.window.print)
+        self.assertEqual(print_report.call_count, 1)
 
         args, kwargs = print_report.call_args
         report, results, views = args
-        self.assertEquals(report, PurchaseReport)
+        self.assertEqual(report, PurchaseReport)
         self.assertTrue(isinstance(results, SearchResultListView))
         for view in views:
             self.assertTrue(isinstance(view, PurchaseOrderView))
@@ -142,13 +142,13 @@ class TestPurchase(BaseGUITest):
         olist.select(olist[0])
         olist.double_click(0)
 
-        self.assertEquals(run_dialog.call_count, 1)
+        self.assertEqual(run_dialog.call_count, 1)
         args, kwargs = run_dialog.call_args
         dialog, store = args
 
-        self.assertEquals(dialog, PurchaseDetailsDialog)
+        self.assertEqual(dialog, PurchaseDetailsDialog)
         self.assertTrue(store is not None)
-        self.assertEquals(kwargs[u'model'], purchase)
+        self.assertEqual(kwargs[u'model'], purchase)
 
     @mock.patch('stoq.gui.purchase.yesno')
     @mock.patch('stoq.gui.purchase.api.new_store')
@@ -174,9 +174,9 @@ class TestPurchase(BaseGUITest):
                 self.activate(app.Confirm)
                 yesno.assert_called_once_with(u'The selected order will be '
                                               u'marked as sent.',
-                                              gtk.RESPONSE_YES,
+                                              Gtk.ResponseType.YES,
                                               u"Confirm order", u"Don't confirm")
-                self.assertEquals(purchase.status, PurchaseOrder.ORDER_CONFIRMED)
+                self.assertEqual(purchase.status, PurchaseOrder.ORDER_CONFIRMED)
 
     @mock.patch('stoq.gui.purchase.PurchaseApp.run_dialog')
     @mock.patch('stoq.gui.purchase.api.new_store')
@@ -226,9 +226,9 @@ class TestPurchase(BaseGUITest):
             with mock.patch.object(self.store, 'commit'):
                 self.activate(app.Cancel)
                 yesno.assert_called_once_with(u'The selected order will be '
-                                              u'cancelled.', gtk.RESPONSE_YES,
+                                              u'cancelled.', Gtk.ResponseType.YES,
                                               u"Cancel order", u"Don't cancel")
-                self.assertEquals(purchase.status, PurchaseOrder.ORDER_CANCELLED)
+                self.assertEqual(purchase.status, PurchaseOrder.ORDER_CANCELLED)
 
     @mock.patch('stoqlib.gui.wizards.productwizard.run_dialog')
     @mock.patch('stoqlib.gui.wizards.productwizard.api.new_store')
@@ -270,9 +270,9 @@ class TestPurchase(BaseGUITest):
             self.fake.set_retval(purchase)
             self.activate(app.NewConsignment)
 
-            self.assertEquals(run_dialog.call_count, 1)
+            self.assertEqual(run_dialog.call_count, 1)
             args, kwargs = run_dialog.call_args
             wizard, store = args
-            self.assertEquals(wizard, ConsignmentWizard)
+            self.assertEqual(wizard, ConsignmentWizard)
             self.assertTrue(store is not None)
-            self.assertEquals(kwargs[u'model'], None)
+            self.assertEqual(kwargs[u'model'], None)

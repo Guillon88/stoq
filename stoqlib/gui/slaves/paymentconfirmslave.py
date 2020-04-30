@@ -29,8 +29,7 @@
 import datetime
 import os
 
-import gio
-import glib
+from gi.repository import GLib, Gio
 from kiwi import ValueUnset
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
@@ -48,6 +47,7 @@ from stoqlib.gui.dialogs.saledetails import SaleDetailsDialog
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.gui.utils.filters import get_filters_for_attachment
 from stoqlib.lib.dateutils import localtoday
+from stoqlib.lib.message import warning
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
 
@@ -368,6 +368,13 @@ class _PaymentConfirmSlave(BaseEditor):
                 combo.select(
                     sysparam.get_object(self.store, 'IMBALANCE_ACCOUNT'))
 
+        category_account = payment.category and payment.category.account
+        if category_account:
+            if payment.payment_type == payment.TYPE_IN:
+                self.source_account.select(category_account)
+            else:
+                self.destination_account.select(category_account)
+
     def _setup_attachment_chooser(self):
         self.attachment_chooser.connect('file-set',
                                         self._on_attachment_chooser__file_set)
@@ -381,10 +388,10 @@ class _PaymentConfirmSlave(BaseEditor):
             # the database.
             label = (self.attachment_chooser.
                      get_children()[0].get_children()[0].get_children()[1])
-            # We need to use glib.idle_add() so the label.set_label() will be
+            # We need to use GLib.idle_add() so the label.set_label() will be
             # run once gtk main loop is done drawing the button (so it won't
             # overwrite to label back to '(None)').
-            glib.idle_add(label.set_label, name)
+            GLib.idle_add(label.set_label, name)
 
         for ffilter in get_filters_for_attachment():
             self.attachment_chooser.add_filter(ffilter)
@@ -392,11 +399,11 @@ class _PaymentConfirmSlave(BaseEditor):
     def _on_attachment_chooser__file_set(self, button):
         filename = self.attachment_chooser.get_filename()
         data = open(filename, 'rb').read()
-        mimetype = unicode(gio.content_type_guess(filename, data, False))
+        mimetype = str(Gio.content_type_guess(filename, data))
 
         if self._attachment is None:
             self._attachment = Attachment(store=self.store)
-        self._attachment.name = unicode(os.path.basename(filename))
+        self._attachment.name = str(os.path.basename(filename))
         self._attachment.mimetype = mimetype
         self._attachment.blob = data
 
@@ -431,6 +438,16 @@ class _PaymentConfirmSlave(BaseEditor):
 
     def get_account_destination_combo(self):
         raise NotImplementedError
+
+    def validate_confirm(self):
+        if not sysparam.get_bool('BLOCK_PAYMENT_FOR_IMBALANCE_ACCOUNT'):
+            return True
+
+        accounts = [self.source_account.get_selected(), self.destination_account.get_selected()]
+        if sysparam.get_object(self.store, 'IMBALANCE_ACCOUNT') in accounts:
+            warning(_('You must inform the source and destination accounts'))
+            return False
+        return True
 
     #
     # Callbacks
@@ -497,6 +514,16 @@ class SalePaymentConfirmSlave(_PaymentConfirmSlave):
 
     def _setup_widgets(self):
         _PaymentConfirmSlave._setup_widgets(self)
+        self._update_discount()
+
+    def _update_discount(self):
+        discount = currency(0)
+        for payment in self._payments:
+            card_data = payment.card_data
+            if card_data:
+                discount += (card_data.fee_value + card_data.fare)
+
+        self.discount.update(discount)
 
     def get_till_info_msg(self):
         # TRANSLATORS: 'cash addition' is 'suprimento' in pt_BR

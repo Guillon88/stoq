@@ -1,18 +1,19 @@
 dialog: HIGAlertDialog
-GtkDialog(): title=' ', hidden
-  GtkVBox():
-    GtkHBox():
+kiwi+ui+dialogs+HIGAlertDialog(): title=' ', hidden
+  GtkBox(vbox, orientation=vertical):
+    GtkBox(orientation=horizontal, expand=True, fill=True):
       GtkImage(_image):
-      GtkVBox(label_vbox):
+      GtkBox(main_vbox, orientation=vertical, expand=True, fill=True):
         GtkLabel(_primary_label): "We'r sorry to inform you that an error occurred while running Stoqlib. Please help us improving Stoq by sending a automatically generated report about the incident.\nClick on details to see the report text."
         GtkLabel(_secondary_label):
         GtkExpander(_expander):
           GtkScrolledWindow():
             GtkTextView():
           GtkLabel(): 'Details ...'
-        GtkScrolledWindow(padding=6):
+        GtkScrolledWindow(expand=True, fill=True, padding=6):
           GtkTextView():
-        HintedEntry(padding=6): ''
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(fill=True, pack-end): 'Send report'
-      GtkButton(fill=True, pack-end): 'No thanks'
+        GtkEntry(padding=6): ''
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(expand=True, fill=True): 'No thanks'
+        GtkButton(expand=True, fill=True): 'Send report'

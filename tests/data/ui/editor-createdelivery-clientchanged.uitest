@@ -1,42 +1,91 @@
 editor: CreateDeliveryEditor
 GtkDialog(main_dialog.toplevel): title='Add Delivery', hidden
-  GtkVBox(main_dialog._main_vbox):
-    GtkVBox(main_dialog.vbox, expand=True, fill=True):
+  GtkBox(main_dialog._main_vbox, orientation=vertical):
+    GtkBox(main_dialog.vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(main_dialog.header):
       GtkEventBox(main_dialog.main, expand=True, fill=True, padding=6): slave CreateDeliveryEditor is attached
-        GtkVBox(toplevel):
+        GtkBox(vbox1, orientation=vertical):
           GtkEventBox(forms, fill=True): slave BasicForm is attached
             GtkAlignment(toplevel):
               GtkTable():
-                ProxyLabel(client_id_lbl): 'Client:'
-                ProxyComboEntry(client_id):
-                  item: 'Alessandra Almeida Itaber\xc3\xa1'
-                  item: 'Client01'
-                  item: 'Client02', selected
-                  item: 'Franciso Elisio de Lima Junior'
-                  item: 'Luis Sergio da Silva Marin'
-                  item: 'Vitalina Claudino'
-                GtkHBox():
-                  GtkButton(client_id_add_button):
-                  GtkButton(client_id_edit_button):
-                ProxyLabel(price_lbl): 'Delivery cost:'
-                ProxyEntry(price): '0.00'
-                GtkHBox():
+                ProxyLabel(recipient_lbl): 'Recipient:'
+                ProxyEntry(recipient): 'Client02'
+                GtkBox(orientation=horizontal):
+                  GtkButton(recipient_add_button):
+                  GtkButton(recipient_edit_button):
+                ProxyLabel(volumes_quantity_lbl): 'Volumes quantity:'
+                ProxyEntry(volumes_quantity): '1'
+                GtkBox(orientation=horizontal):
                 ProxyLabel(transporter_id_lbl): 'Transporter:'
                 ProxyComboEntry(transporter_id):
-                  item: 'Jos\xc3\xa9 Carlos de Carvalho'
-                GtkHBox():
+                  item: 'José Carlos de Carvalho'
+                GtkBox(orientation=horizontal):
                   GtkButton(transporter_id_add_button):
                   GtkButton(transporter_id_edit_button): insensitive
-                ProxyLabel(estimated_fix_date_lbl): 'Estimated delivery date:'
-                ProxyDateEntry(estimated_fix_date): date.today()
-                GtkHBox():
+                ProxyLabel(volumes_net_weight_lbl): 'Volumes net weight:'
+                ProxySpinButton(volumes_net_weight): '0.000'
+                GtkBox(orientation=horizontal):
                 ProxyLabel(address_lbl): 'Address:'
                 ProxyComboEntry(address):
-                  item: 'Mainstreet02 138, Cidade Araci', selected
-                GtkHBox():
+                  item: 'Mainstreet02 138, Compl, Cidade Araci', selected
+                GtkBox(orientation=horizontal):
                   GtkButton(address_add_button):
                   GtkButton(address_edit_button):
+                ProxyLabel(volumes_gross_weight_lbl): 'Volumes gross weight:'
+                ProxySpinButton(volumes_gross_weight): '0.000'
+                GtkBox(orientation=horizontal):
+                ProxyLabel(freight_type_lbl): 'Freight type:'
+                ProxyComboBox(freight_type):
+                  item: 'No freight'
+                  item: 'CIF', selected
+                  item: 'FOB'
+                  item: 'Third party'
+                GtkBox(orientation=horizontal):
+                ProxyLabel(vehicle_license_plate_lbl): 'Vehicle license plate:'
+                ProxyEntry(vehicle_license_plate): ''
+                GtkBox(orientation=horizontal):
+                ProxyLabel(price_lbl): 'Delivery cost:'
+                ProxyEntry(price): '0.00'
+                GtkBox(orientation=horizontal):
+                ProxyLabel(vehicle_state_lbl): 'Vehicle state:'
+                ProxyComboEntry(vehicle_state):
+                  item: 'AC'
+                  item: 'AL'
+                  item: 'AM'
+                  item: 'AP'
+                  item: 'BA'
+                  item: 'CE'
+                  item: 'DF'
+                  item: 'ES'
+                  item: 'GO'
+                  item: 'MA'
+                  item: 'MG'
+                  item: 'MS'
+                  item: 'MT'
+                  item: 'PB'
+                  item: 'PE'
+                  item: 'PI'
+                  item: 'PR'
+                  item: 'RJ'
+                  item: 'RO'
+                  item: 'RN'
+                  item: 'RR'
+                  item: 'PA'
+                  item: 'RS'
+                  item: 'SE'
+                  item: 'SC'
+                  item: 'SP'
+                  item: 'TO'
+                GtkBox(orientation=horizontal):
+                ProxyLabel(estimated_fix_date_lbl): 'Estimated delivery date:'
+                ProxyDateEntry(estimated_fix_date): date.today()
+                GtkBox(orientation=horizontal):
+                ProxyLabel(vehicle_registration_lbl): 'Vehicle registration:'
+                ProxyEntry(vehicle_registration): ''
+                GtkBox(orientation=horizontal):
+                ProxyLabel(volumes_kind_lbl): 'Volumes kind:'
+                ProxyEntry(volumes_kind): 'Volumes'
+                GtkBox(orientation=horizontal):
           GtkHSeparator(hseparator1, fill=True):
           GtkLabel(label3, fill=True): 'Products to Deliver:'
           GtkEventBox(addition_list_holder, expand=True, fill=True):
@@ -45,22 +94,23 @@ GtkDialog(main_dialog.toplevel): title='Add Delivery', hidden
               column: title='Description', expand
               column: title='Quantity'
               column: title='Deliver'
-              row: None, u'Delivery item 1', Decimal('1.000'), True
-              row: None, u'Delivery item 2', Decimal('1.000'), True
-              row: None, u'Delivery item 3', Decimal('1.000'), True
-              row: None, u'Delivery item 4', Decimal('1.000'), True
-              row: None, u'Delivery item 5', Decimal('1.000'), True
+              row: None, 'Delivery item 1', Decimal('1.000'), True
+              row: None, 'Delivery item 2', Decimal('1.000'), True
+              row: None, 'Delivery item 3', Decimal('1.000'), True
+              row: None, 'Delivery item 4', Decimal('1.000'), True
+              row: None, 'Delivery item 5', Decimal('1.000'), True
           GtkHSeparator(hseparator2, fill=True):
           GtkTable(table1, fill=True):
             GtkLabel(label4):
             GtkButton(additional_info_button): 'Additional _Instructions'
           GtkAlignment(alignment1, fill=True):
             ProxyLabel(additional_info_label): '<span size="small">There is Additional Instructions</span>', hidden
-      GtkHBox(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(main_dialog.extra_holder, expand=True, fill=True, padding=6):
         GtkEventBox(main_dialog.print_holder, expand=True, fill=True):
         GtkEventBox(main_dialog.notice, fill=True):
         GtkEventBox(main_dialog.details_holder, padding=6, pack-end):
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
-      GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(main_dialog.action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
+        GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok'

@@ -60,23 +60,41 @@ CREATE EXTENSION IF NOT EXISTS unaccent;
 
 CREATE OR REPLACE FUNCTION stoq_normalize_string(input_string text) RETURNS text AS $$
 BEGIN
-  input_string := LOWER(input_string);
-  return unaccent(input_string);
+  return LOWER(public.unaccent(input_string));
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
--- Returns a default te_id for the domain tables
-CREATE OR REPLACE FUNCTION new_te() RETURNS integer AS $$
-    DECLARE te_id integer;
+CREATE OR REPLACE FUNCTION validate_stock_item() RETURNS trigger AS $$
+DECLARE
+    count_ int;
+    errmsg text;
 BEGIN
-    INSERT INTO transaction_entry (te_time, dirty) VALUES (STATEMENT_TIMESTAMP(), true) RETURNING id INTO te_id;
-    RETURN te_id;
-END;
-$$ LANGUAGE plpgsql;
+    -- Only allow updates that are not touching quantity/stock_cost
+    IF (TG_OP = 'UPDATE' AND
+        NEW.quantity = OLD.quantity AND
+        NEW.stock_cost = OLD.stock_cost) THEN
+        RETURN NEW;
+    END IF;
 
--- Updates the transaction entry for the given id
-CREATE OR REPLACE FUNCTION update_te(te_id bigint) RETURNS void AS $$
-BEGIN
-    UPDATE transaction_entry SET te_time = STATEMENT_TIMESTAMP(), dirty = true WHERE id = $1;
+    BEGIN
+        SELECT COUNT(1) INTO count_ FROM __inserting_sth
+            WHERE warning_note = (
+                E'I SHOULD ONLY INSERT OR UPDATE DATA ON PRODUCT_STOCK_ITEM BY ' ||
+                E'INSERTING A ROW ON STOCK_TRANSACTION_HISTORY, OTHERWISE MY ' ||
+                E'DATABASE WILL BECOME INCONSISTENT. I\'M HEREBY WARNED');
+    EXCEPTION WHEN undefined_table THEN
+        count_ := 0;
+    END;
+
+    IF count_ = 0 THEN
+        -- Postgresql will give us a syntaxerror if we try to break
+        -- the string in the RAISE EXCEPTION statement
+        errmsg := ('product_stock_item should not be inserted or have its ' ||
+                   'quantity/stock_cost columns updated manually. ' ||
+                   'To do that, insert a row on stock_transaction_history');
+        RAISE EXCEPTION '%', errmsg;
+    END IF;
+
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

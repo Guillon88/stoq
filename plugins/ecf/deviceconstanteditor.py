@@ -26,7 +26,7 @@
 
 import re
 
-import gtk
+from gi.repository import Gtk
 from kiwi.decorators import signal_block
 from kiwi.python import Settable
 from kiwi.ui.objectlist import Column, ObjectList
@@ -46,7 +46,7 @@ _HEX_REGEXP = re.compile("[0-9a-fA-F]{1,2}")
 
 
 def dec2hex(dec):
-    return "".join([data.encode("hex") for data in dec])
+    return ''.join(data.encode().hex() for data in dec)
 
 
 def hex2dec(hex):
@@ -54,7 +54,7 @@ def hex2dec(hex):
     import string
     dec = ""
     for data in _HEX_REGEXP.findall(hex):
-        data = data.zfill(2).decode("hex")
+        data = bytes.fromhex(data.zfill(2)).decode()
         if not data in string.printable:
             data = UNKNOWN_CHARACTER
         dec += data
@@ -188,13 +188,13 @@ class DeviceConstantsDialog(BasicDialog):
         self._create_ui()
 
     def _create_ui(self):
-        hbox = gtk.HBox()
+        hbox = Gtk.HBox()
         self.klist = ObjectList([Column('name')])
         self.klist.set_size_request(150, -1)
         self.klist.get_treeview().set_headers_visible(False)
         self.klist.connect('selection-changed',
                            self._on_klist__selection_changed)
-        hbox.pack_start(self.klist)
+        hbox.pack_start(self.klist, True, True, 0)
         hbox.show()
 
         for name, ctype in [(_(u'Units'), DeviceConstant.TYPE_UNIT),
@@ -206,7 +206,7 @@ class DeviceConstantsDialog(BasicDialog):
         self._constant_slave = _DeviceConstantsList(self.store, self.printer)
         self._constant_slave.switch(DeviceConstant.TYPE_UNIT)
 
-        hbox.pack_start(self._constant_slave.get_toplevel())
+        hbox.pack_start(self._constant_slave.get_toplevel(), True, True, 0)
 
         # FIXME: redesign BasicDialog
         self.main.remove(self.main_label)

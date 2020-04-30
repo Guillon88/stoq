@@ -22,14 +22,11 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-__tests__ = 'stoqlib/domain/payment/group.py'
-
 from decimal import Decimal
 
 from nose.exc import SkipTest
 from kiwi.python import Settable
 
-from stoqlib.database.runtime import get_current_branch
 from stoqlib.domain.commission import CommissionSource, Commission
 from stoqlib.domain.events import PaymentGroupGetOrderEvent
 from stoqlib.domain.payment.method import PaymentMethod
@@ -38,6 +35,8 @@ from stoqlib.domain.sale import Sale
 from stoqlib.domain.stockdecrease import StockDecrease
 from stoqlib.domain.test.domaintest import DomainTest
 from stoqlib.lib.parameters import sysparam
+
+__tests__ = 'stoqlib/domain/payment/group.py'
 
 StockDecrease  # pylint: disable=W0104
 
@@ -60,7 +59,7 @@ class TestPaymentGroup(DomainTest):
             self.store,
             "SALE_PAY_COMMISSION_WHEN_CONFIRMED",
             True)
-        self.failUnless(
+        self.assertTrue(
             sysparam.get_bool('SALE_PAY_COMMISSION_WHEN_CONFIRMED'))
 
     def test_remove_item(self):
@@ -71,20 +70,20 @@ class TestPaymentGroup(DomainTest):
 
     def test_installments_number(self):
         payment = self.create_payment()
-        self.assertEquals(payment.group.installments_number, 1)
+        self.assertEqual(payment.group.installments_number, 1)
 
     def test_get_payments_sum(self):
         payment = self.create_payment()
         payments = payment.group.get_valid_payments()
         result = payment.group._get_payments_sum(payments=payments,
                                                  attr=Payment.value)
-        self.assertEquals(result, 10)
+        self.assertEqual(result, 10)
 
     def test_clear_unused(self):
         payment = self.create_payment()
         payment2 = self.create_payment(group=payment.group)
         payment2.status = Payment.STATUS_PREVIEW
-        self.assertEquals(payment.group._get_preview_payments().count(), 2)
+        self.assertEqual(payment.group._get_preview_payments().count(), 2)
         payment.group.clear_unused()
         with self.assertRaises(AttributeError):
             payment.group._get_preview_payments()
@@ -94,8 +93,10 @@ class TestPaymentGroup(DomainTest):
         group = self.create_payment_group()
 
         method = PaymentMethod.get_by_name(self.store, u'bill')
-        payment1 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
-        payment2 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
+        payment1 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
+        payment2 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
 
         payment2.set_pending()
         self.assertEqual(payment1.status, Payment.STATUS_PREVIEW)
@@ -110,8 +111,10 @@ class TestPaymentGroup(DomainTest):
         group = self.create_payment_group()
 
         method = PaymentMethod.get_by_name(self.store, u'bill')
-        payment1 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
-        payment2 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
+        payment1 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
+        payment2 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
         group.confirm()
 
         self.assertEqual(payment1.status, Payment.STATUS_PENDING)
@@ -128,12 +131,16 @@ class TestPaymentGroup(DomainTest):
         group = self.create_payment_group()
 
         method = PaymentMethod.get_by_name(self.store, u'bill')
-        payment1 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
-        payment2 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
+        payment1 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
+        payment2 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
         method = PaymentMethod.get_by_name(self.store, u'money')
         method.max_installments = 2
-        payment3 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
-        payment4 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
+        payment3 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
+        payment4 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
         group.confirm()
 
         self.assertEqual(payment1.status, Payment.STATUS_PENDING)
@@ -154,9 +161,12 @@ class TestPaymentGroup(DomainTest):
         group = self.create_payment_group()
 
         method = PaymentMethod.get_by_name(self.store, u'bill')
-        payment1 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
-        payment2 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
-        payment3 = method.create_payment(Payment.TYPE_IN, group, branch, Decimal(10))
+        payment1 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
+        payment2 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
+        payment3 = method.create_payment(branch, self.current_station, Payment.TYPE_IN, group,
+                                         Decimal(10))
         group.confirm()
 
         payment3.pay()
@@ -174,38 +184,40 @@ class TestPaymentGroup(DomainTest):
 
         sale = self.create_sale()
         sellable = self.add_product(sale, price=300)
-        sale.order()
+        sale.order(self.current_user)
         CommissionSource(sellable=sellable,
                          direct_value=12,
                          installments_value=5,
                          store=self.store)
 
         method = PaymentMethod.get_by_name(self.store, u'check')
-        method.create_payment(Payment.TYPE_IN, sale.group, sale.branch, Decimal(100))
-        method.create_payment(Payment.TYPE_IN, sale.group, sale.branch, Decimal(200))
+        method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, sale.group,
+                              Decimal(100))
+        method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, sale.group,
+                              Decimal(200))
         self.assertTrue(self.store.find(Commission, sale=sale).is_empty())
-        sale.confirm()
+        sale.confirm(self.current_user)
         self.assertFalse(self.store.find(Commission, sale=sale).is_empty())
 
         commissions = self.store.find(Commission,
                                       sale=sale).order_by(Commission.value)
-        self.assertEquals(commissions.count(), 2)
+        self.assertEqual(commissions.count(), 2)
         for c in commissions:
-            self.failUnless(c.commission_type == Commission.INSTALLMENTS)
+            self.assertTrue(c.commission_type == Commission.INSTALLMENTS)
 
         # the first payment represent 1/3 of the total amount
         # 5% of 300: 15,00 * 1/3 => 5,00
-        self.assertEquals(commissions[0].value, Decimal("5.00"))
+        self.assertEqual(commissions[0].value, Decimal("5.00"))
         # the second payment represent 2/3 of the total amount
         # $15 * 2/3 => 10,00
-        self.assertEquals(commissions[1].value, Decimal("10.00"))
+        self.assertEqual(commissions[1].value, Decimal("10.00"))
 
     def test_installments_commission_amount_with_multiple_items(self):
         self._payComissionWhenConfirmed()
 
         sale = self.create_sale()
         sellable = self.add_product(sale, price=300, quantity=3)
-        sale.order()
+        sale.order(self.current_user)
 
         CommissionSource(sellable=sellable,
                          direct_value=12,
@@ -213,28 +225,31 @@ class TestPaymentGroup(DomainTest):
                          store=self.store)
 
         method = PaymentMethod.get_by_name(self.store, u'check')
-        method.create_payment(Payment.TYPE_IN, sale.group, sale.branch, Decimal(300))
-        method.create_payment(Payment.TYPE_IN, sale.group, sale.branch, Decimal(450))
-        method.create_payment(Payment.TYPE_IN, sale.group, sale.branch, Decimal(150))
+        method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, sale.group,
+                              Decimal(300))
+        method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, sale.group,
+                              Decimal(450))
+        method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, sale.group,
+                              Decimal(150))
         self.assertTrue(self.store.find(Commission, sale=sale).is_empty())
 
-        sale.confirm()
+        sale.confirm(self.current_user)
 
         commissions = self.store.find(Commission,
                                       sale=sale).order_by(Commission.value)
-        self.assertEquals(commissions.count(), 3)
+        self.assertEqual(commissions.count(), 3)
         for c in commissions:
-            self.failUnless(c.commission_type == Commission.INSTALLMENTS)
+            self.assertTrue(c.commission_type == Commission.INSTALLMENTS)
 
         # the first payment represent 1/3 of the total amount
         # 45 / 6 => 7.50
-        self.assertEquals(commissions[0].value, Decimal("7.50"))
+        self.assertEqual(commissions[0].value, Decimal("7.50"))
         # the second payment represent 1/3 of the total amount
         # 5% of 900: 45,00 * 1/3 => 15,00
-        self.assertEquals(commissions[1].value, Decimal("15.00"))
+        self.assertEqual(commissions[1].value, Decimal("15.00"))
         # the third payment represent 1/2 of the total amount
         # 45 / 2 => 22,50
-        self.assertEquals(commissions[2].value, Decimal("22.50"))
+        self.assertEqual(commissions[2].value, Decimal("22.50"))
 
     def test_installments_commission_amount_when_sale_return(self):
         if True:
@@ -251,22 +266,25 @@ class TestPaymentGroup(DomainTest):
 
         sale.add_sellable(sellable, quantity=3, price=300)
         product = sellable.product
-        branch = get_current_branch(self.store)
-        self.create_storable(product, branch, 100)
+        self.create_storable(product, self.current_branch, 100)
 
-        sale.order()
+        sale.order(self.current_user)
         method = PaymentMethod.get_by_name(self.store, u'check')
-        payment1 = method.create_payment(Payment.TYPE_IN, sale.group, sale.branch, Decimal(300))
-        payment2 = method.create_payment(Payment.TYPE_IN, sale.group, sale.branch, Decimal(450))
-        payment3 = method.create_payment(Payment.TYPE_IN, sale.group, sale.branch, Decimal(150))
-        sale.confirm()
+        payment1 = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN,
+                                         sale.group, Decimal(300))
+        payment2 = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN,
+                                         sale.group, Decimal(450))
+        payment3 = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN,
+                                         sale.group, Decimal(150))
+        sale.confirm(self.current_user)
 
         # the commissions are created after the payment
         payment1.pay()
         payment2.pay()
         payment3.pay()
 
-        returned_sale = sale.create_sale_return_adapter()
+        returned_sale = sale.create_sale_return_adapter(self.current_branch, self.current_user,
+                                                        self.current_station)
         returned_sale.return_()
         self.assertEqual(sale.status, Sale.STATUS_RETURNED)
 
@@ -274,7 +292,7 @@ class TestPaymentGroup(DomainTest):
         value = sum([c.value for c in commissions])
         self.assertEqual(value, Decimal(0))
         self.assertEqual(commissions.count(), 4)
-        self.failIf(commissions[-1].value >= 0)
+        self.assertFalse(commissions[-1].value >= 0)
 
     def test_get_total_value(self):
         method = PaymentMethod.get_by_name(self.store, u'check')
@@ -286,13 +304,16 @@ class TestPaymentGroup(DomainTest):
         group = sale.group
         self.assertEqual(group.get_total_value(), 0)
 
-        method.create_payment(Payment.TYPE_IN, group, sale.branch, Decimal(100))
+        method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
+                              Decimal(100))
         self.assertEqual(group.get_total_value(), Decimal(100))
 
-        method.create_payment(Payment.TYPE_IN, group, sale.branch, Decimal(200))
+        method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
+                              Decimal(200))
         self.assertEqual(group.get_total_value(), Decimal(300))
 
-        method.create_payment(Payment.TYPE_OUT, group, sale.branch, Decimal(50))
+        method.create_payment(sale.branch, self.current_station, Payment.TYPE_OUT, group,
+                              Decimal(50))
         self.assertEqual(group.get_total_value(), Decimal(250))
 
         # Test for a group in a purchase
@@ -302,13 +323,16 @@ class TestPaymentGroup(DomainTest):
         group = purchase.group
         self.assertEqual(group.get_total_value(), 0)
 
-        method.create_payment(Payment.TYPE_OUT, group, purchase.branch, Decimal(100))
+        method.create_payment(purchase.branch, self.current_station, Payment.TYPE_OUT, group,
+                              Decimal(100))
         self.assertEqual(group.get_total_value(), Decimal(100))
 
-        method.create_payment(Payment.TYPE_OUT, group, purchase.branch, Decimal(200))
+        method.create_payment(purchase.branch, self.current_station, Payment.TYPE_OUT, group,
+                              Decimal(200))
         self.assertEqual(group.get_total_value(), Decimal(300))
 
-        method.create_payment(Payment.TYPE_IN, group, purchase.branch, Decimal(50))
+        method.create_payment(purchase.branch, self.current_station, Payment.TYPE_IN, group,
+                              Decimal(50))
         self.assertEqual(group.get_total_value(), Decimal(250))
 
     def test_get_total_to_pay(self):
@@ -319,12 +343,12 @@ class TestPaymentGroup(DomainTest):
         group = sale.group
         self.assertEqual(group.get_total_to_pay(), 0)
 
-        payment1 = method.create_payment(Payment.TYPE_IN, group, sale.branch,
+        payment1 = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
                                          Decimal(100))
         payment1.set_pending()
         self.assertEqual(group.get_total_to_pay(), Decimal(100))
 
-        payment2 = method.create_payment(Payment.TYPE_IN, group, sale.branch,
+        payment2 = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
                                          Decimal(200))
         payment2.set_pending()
         self.assertEqual(group.get_total_to_pay(), Decimal(300))
@@ -346,19 +370,19 @@ class TestPaymentGroup(DomainTest):
         self.assertEqual(group.get_total_confirmed_value(), 0)
 
         p = method.create_payment(
-            Payment.TYPE_IN, group, sale.branch, Decimal(100))
+            sale.branch, self.current_station, Payment.TYPE_IN, group, Decimal(100))
         self.assertEqual(group.get_total_confirmed_value(), 0)
         p.set_pending()
         self.assertEqual(group.get_total_confirmed_value(), 100)
 
         p = method.create_payment(
-            Payment.TYPE_IN, group, sale.branch, Decimal(200))
+            sale.branch, self.current_station, Payment.TYPE_IN, group, Decimal(200))
         self.assertEqual(group.get_total_confirmed_value(), 100)
         p.set_pending()
         self.assertEqual(group.get_total_confirmed_value(), 300)
 
         p = method.create_payment(
-            Payment.TYPE_OUT, group, sale.branch, Decimal(50))
+            sale.branch, self.current_station, Payment.TYPE_OUT, group, Decimal(50))
         self.assertEqual(group.get_total_confirmed_value(), 300)
         p.set_pending()
         self.assertEqual(group.get_total_confirmed_value(), 250)
@@ -371,19 +395,19 @@ class TestPaymentGroup(DomainTest):
         self.assertEqual(group.get_total_confirmed_value(), 0)
 
         p = method.create_payment(
-            Payment.TYPE_OUT, group, purchase.branch, Decimal(100))
+            purchase.branch, self.current_station, Payment.TYPE_OUT, group, Decimal(100))
         self.assertEqual(group.get_total_confirmed_value(), 0)
         p.set_pending()
         self.assertEqual(group.get_total_confirmed_value(), 100)
 
         p = method.create_payment(
-            Payment.TYPE_OUT, group, purchase.branch, Decimal(200))
+            purchase.branch, self.current_station, Payment.TYPE_OUT, group, Decimal(200))
         self.assertEqual(group.get_total_confirmed_value(), 100)
         p.set_pending()
         self.assertEqual(group.get_total_confirmed_value(), 300)
 
         p = method.create_payment(
-            Payment.TYPE_IN, group, purchase.branch, Decimal(50))
+            purchase.branch, self.current_station, Payment.TYPE_IN, group, Decimal(50))
         self.assertEqual(group.get_total_confirmed_value(), 300)
         p.set_pending()
         self.assertEqual(group.get_total_confirmed_value(), 250)
@@ -398,15 +422,18 @@ class TestPaymentGroup(DomainTest):
         group = sale.group
         self.assertEqual(group.get_total_value(), 0)
 
-        p = method.create_payment(Payment.TYPE_IN, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.discount = Decimal(10)
         self.assertEqual(group.get_total_discount(), Decimal(10))
 
-        p = method.create_payment(Payment.TYPE_IN, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.discount = Decimal(20)
         self.assertEqual(group.get_total_discount(), Decimal(30))
 
-        p = method.create_payment(Payment.TYPE_OUT, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.discount = Decimal(10)
         self.assertEqual(group.get_total_discount(), Decimal(20))
 
@@ -417,15 +444,18 @@ class TestPaymentGroup(DomainTest):
         group = purchase.group
         self.assertEqual(group.get_total_value(), 0)
 
-        p = method.create_payment(Payment.TYPE_OUT, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.discount = Decimal(10)
         self.assertEqual(group.get_total_discount(), Decimal(10))
 
-        p = method.create_payment(Payment.TYPE_OUT, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.discount = Decimal(20)
         self.assertEqual(group.get_total_discount(), Decimal(30))
 
-        p = method.create_payment(Payment.TYPE_IN, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.discount = Decimal(10)
         self.assertEqual(group.get_total_discount(), Decimal(20))
 
@@ -439,15 +469,18 @@ class TestPaymentGroup(DomainTest):
         group = sale.group
         self.assertEqual(group.get_total_value(), 0)
 
-        p = method.create_payment(Payment.TYPE_IN, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.interest = Decimal(10)
         self.assertEqual(group.get_total_interest(), Decimal(10))
 
-        p = method.create_payment(Payment.TYPE_IN, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.interest = Decimal(20)
         self.assertEqual(group.get_total_interest(), Decimal(30))
 
-        p = method.create_payment(Payment.TYPE_OUT, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.interest = Decimal(10)
         self.assertEqual(group.get_total_interest(), Decimal(20))
 
@@ -458,15 +491,18 @@ class TestPaymentGroup(DomainTest):
         group = purchase.group
         self.assertEqual(group.get_total_value(), 0)
 
-        p = method.create_payment(Payment.TYPE_OUT, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.interest = Decimal(10)
         self.assertEqual(group.get_total_interest(), Decimal(10))
 
-        p = method.create_payment(Payment.TYPE_OUT, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.interest = Decimal(20)
         self.assertEqual(group.get_total_interest(), Decimal(30))
 
-        p = method.create_payment(Payment.TYPE_IN, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.interest = Decimal(10)
         self.assertEqual(group.get_total_interest(), Decimal(20))
 
@@ -480,15 +516,18 @@ class TestPaymentGroup(DomainTest):
         group = sale.group
         self.assertEqual(group.get_total_value(), 0)
 
-        p = method.create_payment(Payment.TYPE_IN, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.penalty = Decimal(10)
         self.assertEqual(group.get_total_penalty(), Decimal(10))
 
-        p = method.create_payment(Payment.TYPE_IN, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.penalty = Decimal(20)
         self.assertEqual(group.get_total_penalty(), Decimal(30))
 
-        p = method.create_payment(Payment.TYPE_OUT, group, sale.branch, Decimal(10))
+        p = method.create_payment(sale.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.penalty = Decimal(10)
         self.assertEqual(group.get_total_penalty(), Decimal(20))
 
@@ -499,15 +538,18 @@ class TestPaymentGroup(DomainTest):
         group = purchase.group
         self.assertEqual(group.get_total_value(), 0)
 
-        p = method.create_payment(Payment.TYPE_OUT, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.penalty = Decimal(10)
         self.assertEqual(group.get_total_penalty(), Decimal(10))
 
-        p = method.create_payment(Payment.TYPE_OUT, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_OUT, group,
+                                  Decimal(10))
         p.penalty = Decimal(20)
         self.assertEqual(group.get_total_penalty(), Decimal(30))
 
-        p = method.create_payment(Payment.TYPE_IN, group, purchase.branch, Decimal(10))
+        p = method.create_payment(purchase.branch, self.current_station, Payment.TYPE_IN, group,
+                                  Decimal(10))
         p.penalty = Decimal(10)
         self.assertEqual(group.get_total_penalty(), Decimal(20))
 
@@ -546,11 +588,11 @@ class TestPaymentGroup(DomainTest):
         decrease = self.create_stock_decrease(group=group)
         payment_group = self.create_payment_group()
 
-        self.assertEquals(sale, sale.group.get_parent())
-        self.assertEquals(purchase, purchase.group.get_parent())
-        self.assertEquals(renegotiation, renegotiation.group.get_parent())
-        self.assertEquals(decrease, decrease.group.get_parent())
-        self.assertEquals(None, payment_group.get_parent())
+        self.assertEqual(sale, sale.group.get_parent())
+        self.assertEqual(purchase, purchase.group.get_parent())
+        self.assertEqual(renegotiation, renegotiation.group.get_parent())
+        self.assertEqual(decrease, decrease.group.get_parent())
+        self.assertEqual(None, payment_group.get_parent())
 
     def test_get_description(self):
         sale = self.create_sale()
@@ -558,23 +600,25 @@ class TestPaymentGroup(DomainTest):
         renegotiation = self.create_payment_renegotiation()
         group = self.create_payment_group()
         decrease = self.create_stock_decrease(group=group)
+        group = self.create_payment_group()
+        receiving_invoice = self.create_receiving_invoice(group=group)
 
         sale.identifier = 77777
         purchase.identifier = 88888
         renegotiation.identifier = 99999
         decrease.identifier = 12345
+        receiving_invoice.identifier = 12223
 
-        self.assertEquals(sale.group.get_description(), u'sale 77777')
-        self.assertEquals(purchase.group.get_description(), u'order 88888')
-        self.assertEquals(renegotiation.group.get_description(),
-                          u'renegotiation 99999')
-        self.assertEquals(decrease.group.get_description(),
-                          u'stock decrease 12345')
+        self.assertEqual(sale.group.get_description(), u'sale 77777')
+        self.assertEqual(purchase.group.get_description(), u'order 88888')
+        self.assertEqual(renegotiation.group.get_description(), u'renegotiation 99999')
+        self.assertEqual(decrease.group.get_description(), u'stock decrease 12345')
+        self.assertEqual(receiving_invoice.group.get_description(), u'receiving 12223')
 
         callback = lambda g, s: Settable(payment_description='foobar')
         PaymentGroupGetOrderEvent.connect(callback)
         try:
-            self.assertEquals(
+            self.assertEqual(
                 self.create_payment_group().get_description(), 'foobar')
         finally:
             PaymentGroupGetOrderEvent.disconnect(callback)

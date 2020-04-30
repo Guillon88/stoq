@@ -24,9 +24,11 @@
 
 """Tests for module :class:`stoqlib.database.runtime`"""
 
+import mock
+
 from stoqlib.database.exceptions import InterfaceError
 from stoqlib.database.properties import UnicodeCol
-from stoqlib.database.runtime import new_store
+from stoqlib.database.runtime import new_store, StoqlibStore, autoreload_object
 from stoqlib.domain.base import Domain
 from stoqlib.domain.person import Person, Client, ClientView
 from stoqlib.domain.test.domaintest import DomainTest
@@ -86,6 +88,51 @@ class StoqlibStoreTest(DomainTest):
                                     WillBeCommitted.SQL_CREATE)))
         self.store.commit()
 
+    def test_context_manager(self):
+        # Normal store with retval = True (default)
+        with new_store() as store:
+            store.confirm = mock.Mock()
+            store.close = mock.Mock()
+
+        self.assertCalledOnceWith(store.confirm, commit=True)
+        self.assertCalledOnceWith(store.close)
+
+        # Normal store with retval = False
+        with new_store() as store:
+            store.confirm = mock.Mock()
+            store.close = mock.Mock()
+            store.retval = False
+
+        self.assertCalledOnceWith(store.confirm, commit=False)
+        self.assertCalledOnceWith(store.close)
+
+        # An exception handled inside the context manager should not
+        # impact on the result The store should be committed
+        with new_store() as store:
+            store.confirm = mock.Mock()
+            store.close = mock.Mock()
+            try:
+                raise ValueError
+            except Exception:
+                pass
+
+        self.assertCalledOnceWith(store.confirm, commit=True)
+        self.assertCalledOnceWith(store.close)
+
+        # An exception handled outside (or not handled, but we can't not
+        # handle it on tests) should impact on the result.
+        # The store should rollback and close.
+        try:
+            with new_store() as store:
+                store.confirm = mock.Mock()
+                store.close = mock.Mock()
+                raise ValueError
+        except Exception:
+            pass
+
+        self.assertCalledOnceWith(store.confirm, commit=False)
+        self.assertCalledOnceWith(store.close)
+
     def test_get_pending_count(self):
         store = new_store()
         self.assertEqual(store.get_pending_count(), 0)
@@ -97,8 +144,8 @@ class StoqlibStoreTest(DomainTest):
         obj.test_var = u'yyy'
         self.assertEqual(store.get_pending_count(), 1)
 
-        # Changing obj after flush should set it dirty again and thus,
-        # increase the pending count
+        # Changing obj after flush should set it dirty again increasing the pending
+        # count.
         store.flush()
         obj.test_var = u'zzz'
         self.assertEqual(store.get_pending_count(), 2)
@@ -135,15 +182,15 @@ class StoqlibStoreTest(DomainTest):
         store.rollback()
 
     def test_dirty_flag(self):
-        # Creating an object should set its dirty flag to True
+        # Creating an object should set its sync_status to 0 (not synced)
         store = new_store()
         obj = WillBeCommitted(store=store)
         obj_id = obj.id
         store.commit()
-        self.assertTrue(obj.te.dirty)
+        self.assertEqual(obj.te.sync_status, '0')
 
         # Reset the flag to test changing the object
-        obj.te.dirty = False
+        obj.te.sync_status = '1'
         store.commit()
         store.close()
 
@@ -151,13 +198,13 @@ class StoqlibStoreTest(DomainTest):
         store = new_store()
         obj = store.get(WillBeCommitted, obj_id)
 
-        # The flag must be False
-        self.assertFalse(obj.te.dirty)
+        # The bit must still be set to 1
+        self.assertEqual(obj.te.sync_status, '1')
 
         # Changing the object and commiting should update the flag
         obj.test_var = u'asd'
         store.commit()
-        self.assertTrue(obj.te.dirty)
+        self.assertEqual(obj.te.sync_status, '0')
         store.close()
 
     def test_rollback_to_savepoint(self):
@@ -190,6 +237,57 @@ class StoqlibStoreTest(DomainTest):
         self.assertRaises(ValueError, self.store.rollback_to_savepoint,
                           name='Not existing savepoint')
 
+    def test_rollback_nested_savepoints_with_new_objects(self):
+        outside = WillBeCommitted(store=self.store, test_var=u'outside')
+        self.store.savepoint('first_savepoint')
+        inside = WillBeCommitted(store=self.store, test_var=u'inside_savepoint')
+        self.store.savepoint('second_savepoint')
+        inside_inside = WillBeCommitted(store=self.store, test_var=u'inside_inside_savepoint')
+
+        # All objects are on the same store, but two of them are inside savepoints.
+        self.assertEqual(StoqlibStore.of(outside), self.store)
+        self.assertEqual(StoqlibStore.of(inside), self.store)
+        self.assertEqual(StoqlibStore.of(inside_inside), self.store)
+
+        # Now rollback to the second savepoint
+        self.store.rollback_to_savepoint('second_savepoint')
+        # The event inside_inside object should not be in the store
+        self.assertIsNone(StoqlibStore.of(inside_inside))
+
+        # ... but the other two should still be.
+        self.assertEqual(StoqlibStore.of(inside), self.store)
+        self.assertEqual(StoqlibStore.of(outside), self.store)
+
+        self.store.rollback_to_savepoint('first_savepoint')
+        # The outer inside object should not be in the store
+        self.assertIsNone(StoqlibStore.of(inside))
+
+    def test_rollback_double_savepoint_with_new_objects(self):
+        outside = WillBeCommitted(store=self.store, test_var=u'outside')
+        self.store.savepoint('first_savepoint')
+        inside = WillBeCommitted(store=self.store, test_var=u'inside_savepoint')
+        self.store.savepoint('second_savepoint')
+        inside_inside = WillBeCommitted(store=self.store, test_var=u'inside_inside_savepoint')
+
+        # All objects are on the same store, but tho of them are in savepoints
+        self.assertEqual(StoqlibStore.of(outside), self.store)
+        self.assertEqual(StoqlibStore.of(inside), self.store)
+        self.assertEqual(StoqlibStore.of(inside_inside), self.store)
+
+        # Now rollback to the first savepoint
+        self.store.rollback_to_savepoint('first_savepoint')
+        # ... the two inner objects should not be in the store.
+        self.assertIsNone(StoqlibStore.of(inside))
+        self.assertIsNone(StoqlibStore.of(inside_inside))
+
+        # ... but the ouside one should still be in the store.
+        self.assertEqual(StoqlibStore.of(outside), self.store)
+
+        # It should not be possible to rollback to the second_savepoint, since that was
+        # already done when we rolled back to the first
+        with self.assertRaises(ValueError):
+            self.store.rollback_to_savepoint('second_savepoint')
+
     def test_close(self):
         store = new_store()
         self.assertFalse(store.obsolete)
@@ -202,6 +300,21 @@ class StoqlibStoreTest(DomainTest):
         self.assertRaises(InterfaceError, store.fetch, None)
         self.assertRaises(InterfaceError, store.savepoint, 'XXX')
         self.assertRaises(InterfaceError, store.rollback_to_savepoint, 'XXX')
+
+    def test_autoreload(self):
+        # Create 3 stores.
+        store1 = new_store()
+        store2 = new_store()
+
+        obj1 = WillBeCommitted(store=store1, test_var='ID1')
+        store1.commit()
+
+        obj2 = store2.get(WillBeCommitted, obj1.id)
+        obj2
+
+        store2.close()
+
+        autoreload_object(obj1)
 
     def test_transaction_commit_hook(self):
         # Dummy will only be asserted for creation on the first commit.
@@ -328,8 +441,8 @@ class TestStoqlibResultSet(DomainTest):
         # Make sure there are results so the test makes sense
         assert results.count()
         for objs, tpls in zip(results, results.fast_iter()):
-            self.assertEquals(objs[0].id, tpls[0].id)
-            self.assertEquals(objs[1].id, tpls[1].id)
+            self.assertEqual(objs[0].id, tpls[0].id)
+            self.assertEqual(objs[1].id, tpls[1].id)
 
     def test_fast_iter_mixed(self):
         results = self.store.find((Person, Client.id),
@@ -338,8 +451,8 @@ class TestStoqlibResultSet(DomainTest):
         # Make sure there are results so the test makes sense
         assert results.count()
         for objs, tpls in zip(results, results.fast_iter()):
-            self.assertEquals(objs[0].id, tpls[0].id)
-            self.assertEquals(objs[1], tpls[1])
+            self.assertEqual(objs[0].id, tpls[0].id)
+            self.assertEqual(objs[1], tpls[1])
 
     def test_fast_iter_viewable(self):
         results = self.store.find(ClientView).order_by(Client.te_id)

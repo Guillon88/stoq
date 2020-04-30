@@ -35,26 +35,25 @@ from stoqlib.lib.translation import stoqlib_gettext as _
 
 # When changing something here, remember to update
 # the README and the debian control files
+# TODO: Add requests, weasyprint, lxml
 DATEUTIL_REQUIRED = (1, 4, 1)
-GTK_REQUIRED = (2, 20, 0)
+GTK_REQUIRED = (3, 14)
 GUDEV_REQUIRED = (147, )
-KIWI_REQUIRED = (1, 10)
+KIWI_REQUIRED = (1, 11, 1)
 MAKO_REQUIRED = (0, 2, 5)
-PIL_REQUIRED = (1, 1, 5)
+PIL_REQUIRED = (3, 1, 0)
 PYCAIRO_REQUIRED = (1, 8, 2)
 PYPOPPLER_REQUIRED = (0, 12, 1)
-PSQL_REQUIRED = (8, 4)
+PSQL_REQUIRED = (9, 6)
 PSYCOPG_REQUIRED = (2, 0, 9)
-PYGTK_REQUIRED = (2, 20, 0)
 PYGTKWEBKIT_REQUIRED = (1, 1, 7)
+PYINOTIFY_REQUIRED = (0, 9, 2)
 PYOBJC_REQUIRED = (2, 3)
 PYSERIAL_REQUIRED = (2, 1)
 REPORTLAB_REQUIRED = (2, 4)
 STORM_REQUIRED = (0, 19)
-STOQDRIVERS_REQUIRED = (1, 1)
-TWISTED_CORE_REQUIRED = (10, 0)
-TWISTED_WEB_REQUIRED = (10, 0)
-WEASYPRINT_REQUIRED = (0, 15)
+STOQDRIVERS_REQUIRED = (1, 3)
+WEASYPRINT_REQUIRED = (0, 34)
 XLWT_REQUIRED = (0, 7, 2)
 ZOPE_INTERFACE_REQUIRED = (3, 0)
 
@@ -73,17 +72,14 @@ class DependencyChecker(object):
     def check(self):
         # First make it possible to open up a graphical interface,
         # so we can display error messages
-        self._check_pygtk(PYGTK_REQUIRED, GTK_REQUIRED)
+        self._check_gtk(GTK_REQUIRED)
         self._check_kiwi(KIWI_REQUIRED)
         self._check_pycairo(PYCAIRO_REQUIRED)
-        if platform.system() != 'Windows':
-            self._check_pygtkwebkit(PYGTKWEBKIT_REQUIRED)
+        self._check_pygtkwebkit(PYGTKWEBKIT_REQUIRED)
         if platform.system() == 'Darwin':
             self._check_pyobjc(PYOBJC_REQUIRED)
         self._check_zope_interface(ZOPE_INTERFACE_REQUIRED)
         self._check_dateutil(DATEUTIL_REQUIRED)
-        self._check_twisted_core(TWISTED_CORE_REQUIRED)
-        self._check_twisted_web(TWISTED_WEB_REQUIRED)
         self._check_xlwt(XLWT_REQUIRED)
 
         # Database
@@ -100,38 +96,44 @@ class DependencyChecker(object):
         self._check_mako(MAKO_REQUIRED)
         if platform.system() not in ['Darwin', 'Windows']:
             self._check_pypoppler(PYPOPPLER_REQUIRED)
-
-        # This needs to be imported *after* poppler. Don't ask me why
-        self._check_weasyprint(WEASYPRINT_REQUIRED)
+            # This needs to be imported *after* poppler. Don't ask me why
+            self._check_weasyprint(WEASYPRINT_REQUIRED)
 
         # ECF
         # FIXME: makes sense to allow Stoq to run with all of these disabled.
         self._check_pyserial(PYSERIAL_REQUIRED)
         self._check_stoqdrivers(STOQDRIVERS_REQUIRED)
 
-    def _error(self, title, msg):
+        # Misc
+        # Inotify is not available on windows, and we dont really use it.
+        if platform.system() == 'Linux':
+            self._check_pyinotify(PYINOTIFY_REQUIRED)
+
+    def _error(self, title, msg, details=None):
         if self.text_mode:
             msg = msg.replace('<b>', '').replace('</b>', '')
             raise SystemExit("ERROR: %s\n\n%s" % (title, msg))
 
         # Can't use Kiwi here, so create a simple Gtk dialog
-        import gtk
-        dialog = gtk.MessageDialog(parent=None, flags=0,
-                                   type=gtk.MESSAGE_ERROR,
-                                   buttons=gtk.BUTTONS_OK,
-                                   message_format=title)
-        dialog.format_secondary_markup(msg)
+        from gi.repository import Gtk
+        dialog = Gtk.MessageDialog(parent=None, flags=0,
+                                   message_type=Gtk.MessageType.ERROR,
+                                   buttons=Gtk.ButtonsType.OK,
+                                   text=title)
+        dialog.set_markup(msg)
+        if details:
+            dialog.format_secondary_markup(details)
         dialog.run()
         raise SystemExit
 
-    def _missing(self, project, url=None, version=None):
+    def _missing(self, project, url=None, version=None, details=None):
         msg = _("<b>%s</b> could not be found on your system.\n"
                 "%s %s or higher is required for Stoq to run.\n\n"
                 "You can find a recent version of %s on it's homepage at\n%s") % (
             project, project, _tuple2str(version),
             project, url)
 
-        self._error(_("Missing dependency"), msg)
+        self._error(_("Missing dependency"), msg, details=details)
 
     def _too_old(self, project, url=None, required=None, found=None):
         msg = _("<b>%s</b> was found on your system, but it is\n"
@@ -153,32 +155,22 @@ class DependencyChecker(object):
 
         self._error(_("Incompatible dependency"), msg)
 
-    def _check_pygtk(self, pygtk_version, gtk_version):
+    def _check_gtk(self, gtk_version):
         try:
-            import gtk
-            gtk  # pylint: disable=W0104
-        except ImportError:
-            try:
-                import pygtk
-                # This modifies sys.path
-                pygtk.require('2.0')
-                # Try again now when pygtk is imported
-                import gtk
-            except ImportError as e:
-                # Can't display a dialog here since gtk is not available
-                raise SystemExit(
-                    "ERROR: PyGTK not found, can't start Stoq: %r" % (e, ))
+            import gi
+            gi.require_version('Gtk', '3.0')
+            gi.require_version('PangoCairo', '1.0')
+            from gi.repository import Gtk
+            Gtk  # pylint: disable=W0104
+        except (ValueError, ImportError) as e:
+            # Can't display a dialog here since gtk is not available
+            raise SystemExit(
+                "ERROR: GTK+ not found, can't start Stoq: %r" % (e, ))
 
-        if gtk.pygtk_version < pygtk_version:
-            self._too_old(project="PyGTK+",
-                          url="http://www.pygtk.org/",
-                          found=_tuple2str(gtk.pygtk_version),
-                          required=pygtk_version)
-
-        if gtk.gtk_version < gtk_version:
+        if (Gtk.MAJOR_VERSION, Gtk.MINOR_VERSION) < gtk_version:
             self._too_old(project="Gtk+",
                           url="http://www.gtk.org/",
-                          found=_tuple2str(gtk.gtk_version),
+                          found=_tuple2str(Gtk.gtk_version),
                           required=gtk_version)
 
     def _check_kiwi(self, version):
@@ -214,14 +206,16 @@ class DependencyChecker(object):
 
     def _check_pypoppler(self, version):
         try:
-            import poppler
-        except ImportError:
+            import gi
+            gi.require_version('Poppler', '0.18')
+            from gi.repository import Poppler
+        except (ValueError, ImportError):
             self._missing(project="Pypoppler",
                           url='https://launchpad.net/poppler-python',
                           version=version)
             return
 
-        pypoppler_version = poppler.pypoppler_version
+        pypoppler_version = (Poppler.MAJOR_VERSION, Poppler.MINOR_VERSION)
         if pypoppler_version < version:
             self._too_old(project="Pypoppler",
                           url='https://launchpad.net/poppler-python',
@@ -230,9 +224,11 @@ class DependencyChecker(object):
 
     def _check_pygtkwebkit(self, version):
         try:
-            import webkit
-            webkit  # pylint: disable=W0104
-        except ImportError:
+            import gi
+            gi.require_version('WebKit', '3.0')
+            from gi.repository import WebKit
+            WebKit  # pylint: disable=W0104
+        except (ValueError, ImportError):
             self._missing(project='pywebkitgtk',
                           url='http://code.google.com/p/pywebkitgtk/',
                           version=version)
@@ -246,7 +242,19 @@ class DependencyChecker(object):
                           url='http://www.zope.org/Products/ZopeInterface',
                           version=version)
 
+    def _check_pyinotify(self, version):
+        try:
+            import pyinotify
+            pyinotify  # pylint: disable=W0104
+        except ImportError:
+            self._missing(project='PyInotify',
+                          url='https://github.com/seb-m/pyinotify/wiki',
+                          version=version)
+
     def _check_psql(self, version):
+        if 'WINEPREFIX' in os.environ:
+            return
+
         executable = 'psql'
         paths = os.environ['PATH'].split(os.pathsep)
         if platform.system() == 'Windows':
@@ -314,18 +322,17 @@ class DependencyChecker(object):
     def _check_pil(self, version):
         try:
             import PIL
-            import PIL.Image
         except ImportError:
             self._missing(project='Python Imaging Library (PIL)',
                           url='http://www.pythonware.com/products/pil/',
                           version=version)
             return
 
-        if list(map(int, PIL.Image.VERSION.split('.'))) < list(version):
-            self._too_old(project='Python Imaging Library (PIL)',
-                          url='http://www.pythonware.com/products/pil/',
+        if list(map(int, PIL.PILLOW_VERSION.split('.'))) < list(version):
+            self._too_old(project='Pillow - The friendly PIL fork',
+                          url='https://python-pillow.org/',
                           required=version,
-                          found=PIL.Image.VERSION)
+                          found=PIL.PILLOW_VERSION)
 
     def _check_reportlab(self, version):
         try:
@@ -353,7 +360,7 @@ class DependencyChecker(object):
             return
 
         if (not hasattr(dateutil, "__version__") or
-            list(map(int, dateutil.__version__.split('.'))) < list(version)):
+                list(map(int, dateutil.__version__.split('.'))) < list(version)):
             self._too_old(project="Dateutil",
                           url='http://labix.org/python-dateutil/',
                           required=version,
@@ -383,45 +390,17 @@ class DependencyChecker(object):
                           url='http://pyserial.sourceforge.net/',
                           version=version)
 
-    def _check_twisted_core(self, version):
-        try:
-            import twisted
-            twisted  # pylint: disable=W0104
-        except ImportError:
-            self._missing(project='TwistedCore',
-                          url='http://twistedmatrix.com/',
-                          version=version)
-            return
-
-        if list(map(int, twisted.version.base().split('.'))) < list(version):
-            self._too_old(project="TwistedCore",
-                          url='http://www.twistedmatrix.com/',
-                          required=version,
-                          found=twisted.version.base())
-
-    def _check_twisted_web(self, version):
-        try:
-            import twisted.web
-        except ImportError:
-            self._missing(project='TwistedWeb',
-                          url='http://twistedmatrix.com/',
-                          version=version)
-            return
-
-        if list(map(int, twisted.web.version.base().split('.'))) < list(version):
-            self._too_old(project="TwistedWeb",
-                          url='http://www.twistedmatrix.com/',
-                          required=version,
-                          found=twisted.web.version.base())
-
     def _check_weasyprint(self, version):
         try:
             import weasyprint
             weasyprint  # pylint: disable=W0104
-        except ImportError:
+        except ImportError as e:
+            # Weasyprint might have missing dependencies. Display more details
+            # about the import error.
             self._missing(project='weasyprint',
                           url='http://weasyprint.org/',
-                          version=version)
+                          version=version,
+                          details=str(e))
             return
 
         if list(map(int, weasyprint.VERSION.split('.'))) < list(version):

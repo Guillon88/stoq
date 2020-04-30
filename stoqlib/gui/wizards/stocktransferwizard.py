@@ -25,14 +25,12 @@
 
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
-from kiwi.datatypes import ValidationError
 from kiwi.ui.objectlist import Column
 from storm.expr import And
 
 from stoqlib.api import api
-from stoqlib.domain.fiscal import Invoice
 from stoqlib.domain.person import Branch, Employee
 from stoqlib.domain.sellable import Sellable
 from stoqlib.domain.transfer import TransferOrder, TransferOrderItem
@@ -44,7 +42,9 @@ from stoqlib.gui.dialogs.batchselectiondialog import BatchDecreaseSelectionDialo
 from stoqlib.gui.dialogs.missingitemsdialog import (get_missing_items,
                                                     MissingItemsDialog)
 from stoqlib.gui.editors.transfereditor import TransferItemEditor
-from stoqlib.gui.events import StockTransferWizardFinishEvent
+from stoqlib.gui.events import (StockTransferWizardFinishEvent, InvoiceSetupEvent,
+                                WizardAddSellableEvent,
+                                StockOperationPersonValidationEvent)
 from stoqlib.gui.utils.printing import print_report
 from stoqlib.gui.wizards.abstractwizard import SellableItemStep
 from stoqlib.lib.formatters import format_sellable_description
@@ -66,7 +66,6 @@ class StockTransferInitialStep(WizardEditorStep):
     proxy_widgets = ['open_date',
                      'destination_branch',
                      'source_responsible',
-                     'invoice_number',
                      'comments']
 
     def __init__(self, wizard, store, model):
@@ -83,19 +82,12 @@ class StockTransferInitialStep(WizardEditorStep):
         self.destination_branch.update(None)
 
     def _setup_widgets(self):
-        branches = Branch.get_active_remote_branches(self.store)
+        branches = Branch.get_active_remote_branches(self.store, api.get_current_branch(self.store))
         self.destination_branch.prefill(api.for_person_combo(branches))
         self.source_branch.set_text(self.branch.get_description())
 
         employees = self.store.find(Employee)
         self.source_responsible.prefill(api.for_person_combo(employees))
-
-        self.invoice_number.set_property('mandatory', self._nfe_is_active)
-
-        # Set an initial invoice number to TransferOrder and Invoice
-        if not self.model.invoice_number:
-            new_invoice_number = Invoice.get_next_invoice_number(self.store)
-            self.model.invoice_number = new_invoice_number
 
     def _validate_destination_branch(self):
         if not self._nfe_is_active:
@@ -126,15 +118,12 @@ class StockTransferInitialStep(WizardEditorStep):
     def validate_step(self):
         return self._validate_destination_branch()
 
-    def on_invoice_number__validate(self, widget, value):
-        if not 0 < value <= 999999999:
-            return ValidationError(
-                _("Invoice number must be between 1 and 999999999"))
+    #
+    # Callbacks
+    #
 
-        invoice = self.model.invoice
-        branch = self.model.branch
-        if invoice.check_unique_invoice_number_by_branch(value, branch):
-            return ValidationError(_(u'Invoice number already used.'))
+    def on_destination_branch__validate(self, widget, branch):
+        return StockOperationPersonValidationEvent.emit(branch.person, type(branch))
 
 
 class StockTransferItemStep(SellableItemStep):
@@ -145,6 +134,7 @@ class StockTransferItemStep(SellableItemStep):
     validate_stock = True
     cost_editable = False
     item_editor = TransferItemEditor
+    check_item_taxes = True
 
     def __init__(self, wizard, previous, store, model):
         manager = get_plugin_manager()
@@ -167,7 +157,9 @@ class StockTransferItemStep(SellableItemStep):
         return list(self.model.get_items())
 
     def get_order_item(self, sellable, cost, quantity, batch=None, parent=None):
-        return self.model.add_sellable(sellable, batch, quantity, cost)
+        item = self.model.add_sellable(sellable, batch, quantity, cost)
+        WizardAddSellableEvent.emit(self.wizard, item)
+        return item
 
     def get_columns(self):
         return [
@@ -252,15 +244,18 @@ class StockTransferWizard(BaseWizard):
     def _create_model(self, store):
         user = api.get_current_user(store)
         source_responsible = store.find(Employee, person=user.person).one()
+        dest_branch = Branch.get_active_remote_branches(store,
+                                                        api.get_current_branch(store))[0]
         return TransferOrder(
-            source_branch=api.get_current_branch(store),
+            branch=api.get_current_branch(store),
+            station=api.get_current_station(store),
             source_responsible=source_responsible,
-            destination_branch=Branch.get_active_remote_branches(store)[0],
+            destination_branch=dest_branch,
             store=store)
 
     def _receipt_dialog(self, order):
         msg = _('Would you like to print a receipt for this transfer?')
-        if yesno(msg, gtk.RESPONSE_YES, _("Print receipt"), _("Don't print")):
+        if yesno(msg, Gtk.ResponseType.YES, _("Print receipt"), _("Don't print")):
             print_report(TransferOrderReceipt, order)
 
     def finish(self):
@@ -269,7 +264,25 @@ class StockTransferWizard(BaseWizard):
             run_dialog(MissingItemsDialog, self, self.model, missing)
             return False
 
-        self.model.send()
+        invoice_ok = InvoiceSetupEvent.emit()
+        if invoice_ok is False:
+            # If there is any problem with the invoice, the event will display an error
+            # message and the dialog is kept open so the user can fix whatever is wrong.
+            return
+
+        # FIXME: If any issue happen at any point of the "send process",
+        # trying to issue it again would make some products have their stock
+        # decreased twice. Make sure we undo it first.
+        # The issue itself was related to missing stock. Why get_missing_items
+        # failed above?
+        self.store.savepoint('before_send_transfer')
+        try:
+            self.model.send(api.get_current_user(self.store))
+        except Exception as e:
+            warning(_("An error happened when trying to confirm the transfer"),
+                    str(e))
+            self.store.rollback_to_savepoint('before_send_transfer')
+            raise
 
         self.retval = self.model
         self.close()

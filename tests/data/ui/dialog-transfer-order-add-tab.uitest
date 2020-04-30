@@ -1,0 +1,44 @@
+dialog: TransferOrderDetailsDialog
+GtkBox(toplevel, orientation=vertical):
+  GtkTable(table1, fill=True, padding=6):
+    GtkLabel(label1): 'Status:'
+    GtkLabel(status): 'Pending'
+    GtkButton(receive_button): 'Receive', hidden
+    GtkButton(cancel_button): 'Cancel'
+    ProxyLabel(kiwilabel7): 'Invoice number:'
+    ProxyLabel(invoice_number): '<span ></span>'
+    ProxyLabel(kiwilabel1): 'Open date:'
+    ProxyLabel(open_date): '<span >YYYY-MM-DD</span>'
+    ProxyLabel(close_date_lbl): '<span ></span>'
+    ProxyLabel(receival_date): '<span ></span>'
+    ProxyLabel(kiwilabel3): 'Source:'
+    ProxyLabel(source_branch_name): '<span >Source shop</span>'
+    ProxyLabel(kiwilabel4): 'Destination:'
+    ProxyLabel(destination_branch_name): '<span >Dest shop</span>'
+    ProxyLabel(kiwilabel5): 'Responsible:'
+    ProxyLabel(source_responsible_name): '<span >Ipswich</span>'
+    ProxyLabel(kiwilabel6): 'Responsible:'
+    ProxyLabel(destination_responsible_name): '<span >Bolton</span>'
+  GtkNotebook(details_notebook, expand=True, fill=True):
+    GtkBox(products_vbox, orientation=vertical):
+      ObjectList(product_list, expand=True, fill=True):
+        column: title='Code'
+        column: title='Description', expand
+        column: title='Quantity'
+        column: title='Cost'
+        column: title='Total Cost'
+      SummaryLabel(fill=True):
+        GtkLabel(expand=True, fill=True, padding=6): '<b>Total:</b>'
+        GtkLabel(): '<b>$0.00</b>'
+    GtkBox(hbox1, orientation=horizontal):
+      GtkScrolledWindow(scrolledwindow1, expand=True, fill=True):
+        ProxyTextView(comments):
+    GtkEventBox():
+      GtkEventBox(): slave BasicForm is attached
+        GtkAlignment(toplevel):
+          GtkTable():
+            ProxyLabel(field_name_lbl): 'Slave field:'
+            ProxyEntry(field_name): ''
+            GtkBox(orientation=horizontal):
+  GtkButtonBox(hbuttonbox1, orientation=horizontal, expand=True, fill=True):
+    GtkButton(print_button): 'gtk-print'

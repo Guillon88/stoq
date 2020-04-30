@@ -52,11 +52,11 @@ class TestBooklet(ReportTest):
 
     def test_booklet_with_sale_pdf(self):
         due_dates = [
-            datetime.datetime(2012, 01, 05),
-            datetime.datetime(2012, 02, 05),
-            datetime.datetime(2012, 03, 05),
-            datetime.datetime(2012, 04, 05),
-            datetime.datetime(2012, 05, 05),
+            datetime.datetime(2012, 1, 5),
+            datetime.datetime(2012, 2, 5),
+            datetime.datetime(2012, 3, 5),
+            datetime.datetime(2012, 4, 5),
+            datetime.datetime(2012, 5, 5),
         ]
         items = [
             (u"Batata", 2, decimal.Decimal('10')),
@@ -75,14 +75,12 @@ class TestBooklet(ReportTest):
             sellable = self.add_product(sale, price, quantity)
             sellable.description = description
 
-        sale.order()
+        sale.order(self.current_user)
         method = PaymentMethod.get_by_name(self.store, u'store_credit')
         method.max_installments = 12
-        method.create_payments(Payment.TYPE_IN,
-                               sale.group, sale.branch,
-                               value=sale.get_total_sale_amount(),
-                               due_dates=due_dates)
-        sale.confirm()
+        method.create_payments(sale.branch, sale.station, Payment.TYPE_IN, sale.group,
+                               value=sale.get_total_sale_amount(), due_dates=due_dates)
+        sale.confirm(self.current_user)
         sale.identifier = 123
 
         for i, payment in enumerate(sale.group.payments):
@@ -96,7 +94,7 @@ class TestBooklet(ReportTest):
         method.max_installments = 12
         group = self.create_payment_group()
         payment = self.create_payment(payment_type=Payment.TYPE_IN,
-                                      date=datetime.datetime(2012, 03, 03),
+                                      date=datetime.datetime(2012, 3, 3),
                                       value=decimal.Decimal('10.5'),
                                       method=method)
         payment.group = group

@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
 # vi:si:et:sw=4:sts=4:ts=4
 
-##
-## Copyright (C) 2005-2014 Async Open Source <http://www.async.com.br>
-## All rights reserved
-##
-## This program is free software; you can redistribute it and/or modify
-## it under the terms of the GNU Lesser General Public License as published by
-## the Free Software Foundation; either version 2 of the License, or
-## (at your option) any later version.
-##
-## This program is distributed in the hope that it will be useful,
-## but WITHOUT ANY WARRANTY; without even the implied warranty of
-## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-## GNU Lesser General Public License for more details.
-##
-## You should have received a copy of the GNU Lesser General Public License
-## along with this program; if not, write to the Free Software
-## Foundation, Inc., or visit: http://www.gnu.org/.
-##
-## Author(s): Stoq Team <stoq-devel@async.com.br>
-##
+#
+# Copyright (C) 2005-2014 Async Open Source <http://www.async.com.br>
+# All rights reserved
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., or visit: http://www.gnu.org/.
+#
+# Author(s): Stoq Team <stoq-devel@async.com.br>
+#
 """
 Domain objects related to the sale process in Stoq.
 
@@ -34,22 +34,20 @@ from decimal import Decimal
 from kiwi.currency import currency
 from kiwi.python import Settable
 from stoqdrivers.enum import TaxType
-from storm.expr import (And, Avg, Count, LeftJoin, Join, Max,
-                        Or, Sum, Alias, Select, Cast, Eq, Coalesce)
+from storm.expr import (And, Avg, Count, LeftJoin, Join, Max, In,
+                        Or, Sum, Alias, Select, Cast, Eq, Coalesce, Ne)
 from storm.info import ClassAlias
 from storm.references import Reference, ReferenceSet
 from zope.interface import implementer
 
 from stoqlib.database.expr import (Concat, Date, Distinct, Field, NullIf,
-                                   TransactionTimestamp)
+                                   Round, TransactionTimestamp)
 from stoqlib.database.properties import (UnicodeCol, DateTimeCol, IntCol,
                                          PriceCol, QuantityCol, IdentifierCol,
-                                         IdCol, BoolCol, EnumCol)
-from stoqlib.database.runtime import (get_current_user,
-                                      get_current_branch)
+                                         IdCol, BoolCol, EnumCol, TimeCol)
 from stoqlib.database.viewable import Viewable
 from stoqlib.domain.address import Address, CityLocation
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
 from stoqlib.domain.costcenter import CostCenter
 from stoqlib.domain.event import Event
 from stoqlib.domain.events import (SaleStatusChangedEvent,
@@ -58,7 +56,9 @@ from stoqlib.domain.events import (SaleStatusChangedEvent,
                                    SaleItemBeforeDecreaseStockEvent,
                                    SaleItemBeforeIncreaseStockEvent,
                                    SaleItemAfterSetBatchesEvent,
-                                   DeliveryStatusChangedEvent)
+                                   DeliveryStatusChangedEvent,
+                                   StockOperationConfirmedEvent,
+                                   ECFGetPrinterUserNumberEvent)
 from stoqlib.domain.fiscal import FiscalBookEntry, Invoice
 from stoqlib.domain.interfaces import IContainer, IInvoice, IInvoiceItem
 from stoqlib.domain.payment.payment import Payment
@@ -71,10 +71,11 @@ from stoqlib.domain.product import (Product, ProductHistory, Storable,
 from stoqlib.domain.returnedsale import ReturnedSale, ReturnedSaleItem
 from stoqlib.domain.sellable import Sellable, SellableCategory
 from stoqlib.domain.service import Service
+from stoqlib.domain.station import BranchStation
 from stoqlib.domain.taxes import check_tax_info_presence, InvoiceItemIpi
 from stoqlib.exceptions import SellError, StockError, DatabaseInconsistency
 from stoqlib.lib.dateutils import localnow
-from stoqlib.lib.defaults import quantize
+from stoqlib.lib.defaults import quantize, DECIMAL_PRECISION
 from stoqlib.lib.formatters import format_quantity
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
@@ -141,7 +142,7 @@ class SaleItem(Domain):
 
     delivery_id = IdCol(default=None)
 
-    #: |delivery| or None
+    #: The |delivery| this sale_item *is in* or None
     delivery = Reference(delivery_id, 'Delivery.id')
 
     cfop_id = IdCol(default=None)
@@ -189,31 +190,29 @@ class SaleItem(Domain):
 
     parent_item = Reference(parent_item_id, 'SaleItem.id')
 
-    #: A list of children of self
+    # : A list of children of self
     children_items = ReferenceSet('id', 'SaleItem.parent_item_id')
 
-    def __init__(self, store=None, **kw):
+    def __init__(self, store, sale: 'Sale', sellable: 'sellable', **kw):
         if not 'kw' in kw:
-            if not 'sellable' in kw:
-                raise TypeError('You must provide a sellable argument')
-            base_price = kw['sellable'].price
+            base_price = sellable.price
             kw['base_price'] = base_price
             if not kw.get('cfop'):
-                kw['cfop'] = kw['sellable'].default_sale_cfop
+                kw['cfop'] = sellable.default_sale_cfop
             if not kw.get('cfop'):
                 kw['cfop'] = sysparam.get_object(store, 'DEFAULT_SALES_CFOP')
 
             store = kw.get('store', store)
             check_tax_info_presence(kw, store)
-        Domain.__init__(self, store=store, **kw)
+        Domain.__init__(self, store=store, sale=sale, sellable=sellable, **kw)
 
         product = self.sellable.product
         if product:
             # Set ipi details before icms, since icms may depend on the ipi
             self.ipi_info.set_item_tax(self)
             self.icms_info.set_item_tax(self)
-            self.pis_info.set_item_tax(self)
-            self.cofins_info.set_item_tax(self)
+        self.pis_info.set_item_tax(self)
+        self.cofins_info.set_item_tax(self)
 
     #
     #  Properties
@@ -221,9 +220,13 @@ class SaleItem(Domain):
 
     @property
     def returned_quantity(self):
-        # FIXME: Verificar status do ReturnedSale
-        return self.store.find(ReturnedSaleItem,
-                               sale_item=self).sum(ReturnedSaleItem.quantity) or Decimal('0')
+        tables = [ReturnedSale,
+                  Join(ReturnedSaleItem, ReturnedSale.id == ReturnedSaleItem.returned_sale_id)]
+        query = And(ReturnedSaleItem.sale_item == self,
+                    Or(ReturnedSale.status == ReturnedSale.STATUS_CONFIRMED,
+                       ReturnedSale.status == ReturnedSale.STATUS_PENDING))
+        return self.store.using(*tables).find(
+            ReturnedSaleItem, query).sum(ReturnedSaleItem.quantity) or Decimal('0')
 
     @property
     def sale_discount(self):
@@ -258,7 +261,7 @@ class SaleItem(Domain):
         # Dont use self.sale.(surcharge/discount)_percentage here since they are
         # already quantized, and we may lose even more precision.
         percentage = diff / self.sale.get_sale_subtotal()
-        return currency(quantize(self.price * (1 - percentage)))
+        return currency(self.price * (1 - percentage))
 
     #
     # Invoice implementation
@@ -266,38 +269,31 @@ class SaleItem(Domain):
 
     @property
     def item_discount(self):
-        if self.price < self.base_price:
-            return self.base_price - self.price
-        return Decimal('0')
+        product = self.sellable.product
+        if product and product.is_package:
+            price = sum([quantize(child.price * child.quantity)
+                         for child in self.children_items])
+            discount = max(0, self.base_price * self.quantity - price)
+        else:
+            discount = self.base_price - self.price
+
+        return Decimal(discount)
 
     @property
     def parent(self):
         return self.sale
 
     @property
-    def nfe_cfop_code(self):
+    def cfop_code(self):
         """Returns the cfop code to be used on the NF-e
 
         If the sale was also printed on a ECF, then the cfop should be:
           * 5.929: if sold to a |Client| in the same state or
-          * 6-929: if sold to a |Client| in a different state.
 
         :returns: the cfop code
         """
         if self.sale.coupon_id:
-            # find out if the client is in the same state as we are.
-            client_address = self.sale.client.person.get_main_address()
-            our_address = self.sale.branch.person.get_main_address()
-
-            same_state = True
-            if (our_address.city_location.state !=
-                    client_address.city_location.state):
-                same_state = False
-
-            if same_state:
-                return u'5929'
-            else:
-                return u'6929'
+            return u'5929'
 
         if self.cfop:
             return self.cfop.code.replace(u'.', u'')
@@ -305,19 +301,21 @@ class SaleItem(Domain):
         # FIXME: remove sale cfop?
         return self.sale.cfop.code.replace(u'.', u'')
 
+    @property
+    def delivery_adaptor(self):
+        """Get the delivery whose service item is self, if exists"""
+        delivery_item = self.sale.get_delivery_item()
+        if delivery_item:
+            return Delivery.get_by_service_item(self.store, self)
+
+        return None
+
     #
     #  Public API
     #
 
-    def sell(self, branch):
-        store = self.store
-        if not (branch and
-                branch.id == get_current_branch(store).id):
-            raise SellError(_(u"Stoq still doesn't support sales for "
-                              u"branch companies different than the "
-                              u"current one"))
-
-        if not self.sellable.is_available():
+    def sell(self, user: LoginUser):
+        if not self.sellable.is_available(branch=self.sale.branch):
             raise SellError(_(u"%s is not available for sale. Try making it "
                               u"available first and then try again.") % (
                 self.sellable.get_description()))
@@ -332,8 +330,8 @@ class SaleItem(Domain):
         if storable and quantity_to_decrease:
             try:
                 item = storable.decrease_stock(
-                    quantity_to_decrease, branch,
-                    StockTransactionHistory.TYPE_SELL, self.id,
+                    quantity_to_decrease, self.sale.branch,
+                    StockTransactionHistory.TYPE_SELL, self.id, user,
                     cost_center=self.sale.cost_center, batch=self.batch)
             except StockError as err:
                 raise SellError(str(err))
@@ -342,7 +340,7 @@ class SaleItem(Domain):
         self.quantity_decreased += quantity_to_decrease
         self.update_tax_values()
 
-    def cancel(self, branch):
+    def cancel(self, user: LoginUser):
         # This is emitted here instead of inside the if bellow because one can
         # connect on it and change this item in a way that, if it wasn't going
         # to increase stock before, it will after
@@ -351,13 +349,13 @@ class SaleItem(Domain):
         storable = self.sellable.product_storable
         if storable and self.quantity_decreased:
             storable.increase_stock(self.quantity_decreased,
-                                    branch,
+                                    self.sale.branch,
                                     StockTransactionHistory.TYPE_CANCELED_SALE,
-                                    self.id,
+                                    self.id, user,
                                     batch=self.batch)
         self.quantity_decreased = Decimal(0)
 
-    def reserve(self, quantity):
+    def reserve(self, user: LoginUser, quantity):
         """Reserve some quantity of this this item from stock
 
         This will remove the informed quantity from the stock.
@@ -367,10 +365,10 @@ class SaleItem(Domain):
         if storable:
             storable.decrease_stock(quantity, self.sale.branch,
                                     StockTransactionHistory.TYPE_SALE_RESERVED,
-                                    self.id, batch=self.batch)
+                                    self.id, user, batch=self.batch)
         self.quantity_decreased += quantity
 
-    def return_to_stock(self, quantity):
+    def return_to_stock(self, quantity, user: LoginUser):
         """Return some reserved quantity to stock
 
         This will return a previously reserved quantity to stock, so that it can
@@ -380,8 +378,8 @@ class SaleItem(Domain):
         storable = self.sellable.product_storable
         if storable:
             storable.increase_stock(quantity, self.sale.branch,
-                                    StockTransactionHistory.TYPE_SALE_RESERVED,
-                                    self.id, batch=self.batch)
+                                    StockTransactionHistory.TYPE_SALE_RETURN_TO_STOCK,
+                                    self.id, user, batch=self.batch)
         self.quantity_decreased -= quantity
 
     def set_batches(self, batches):
@@ -449,9 +447,15 @@ class SaleItem(Domain):
         :param decimal.Decimal discount: the discount to be applied
             as a percentage, e.g. 10.0, 22.5
         """
-        discount_value = quantize(self.base_price * discount / 100)
-        # The value cannot be <= 0
-        self.price = max(self.base_price - discount_value, Decimal('0.01'))
+        if self.parent_item:
+            component = self.get_component(self.parent_item)
+            discount_value = quantize(component.price * discount / 100)
+            base_price = component.price
+        else:
+            discount_value = quantize(self.base_price * discount / 100)
+            base_price = self.base_price
+
+        self.price = max(base_price - discount_value, Decimal('0.01'))
 
     def get_total(self):
         # Sale items are suposed to have only 2 digits, but the value price
@@ -507,15 +511,16 @@ class SaleItem(Domain):
     def has_children(self):
         return self.children_items.count() > 0
 
-    def get_component_quantity(self, parent):
+    def get_component(self, parent):
         """Get the quantity of a component.
 
         :param parent: the |sale_item| parent_item of self
-        :returns: the quantity of the component
+        :returns: the |product_component|
         """
         for component in parent.sellable.product.get_components():
             if self.sellable.product == component.component:
-                return component.quantity
+                return component
+        return None
 
 
 @implementer(IContainer)
@@ -533,8 +538,17 @@ class Delivery(Domain):
 
     __storm_table__ = 'delivery'
 
-    #: The delivery was created
+    #: The delivery was created and is waiting to be picked
     STATUS_INITIAL = u'initial'
+
+    #: The delivery was cancelled
+    STATUS_CANCELLED = u'cancelled'
+
+    #: The delivery was picked and is waiting to be packed
+    STATUS_PICKED = u'picked'
+
+    #: The delivery was packed and is waiting to be packed
+    STATUS_PACKED = u'packed'
 
     #: sent to deliver
     STATUS_SENT = u'sent'
@@ -542,18 +556,53 @@ class Delivery(Domain):
     #: received by the |client|
     STATUS_RECEIVED = u'received'
 
-    statuses = {STATUS_INITIAL: _(u"Waiting"),
-                STATUS_SENT: _(u"Sent"),
-                STATUS_RECEIVED: _(u"Received")}
+    #: CIF (Cost, Insurance and Freight): The freight is responsibility of
+    #: the receiver (i.e. the client)
+    FREIGHT_TYPE_CIF = u'cif'
+
+    #: CIF (Free on Board): The freight is responsibility of the sender
+    #: (i.e. the branch)
+    FREIGHT_TYPE_FOB = u'fob'
+
+    #: 3rd party: The freight is responsibility of a third party
+    FREIGHT_TYPE_3RDPARTY = u'3rdparty'
+
+    #: No freight: There's no freight
+    FREIGHT_TYPE_NONE = None
+
+    statuses = collections.OrderedDict([
+        (STATUS_INITIAL, _(u"Waiting")),
+        (STATUS_CANCELLED, _(u"Cancelled")),
+        (STATUS_PICKED, _(u"Picked")),
+        (STATUS_PACKED, _(u"Packed")),
+        (STATUS_SENT, _(u"Sent")),
+        (STATUS_RECEIVED, _(u"Received")),
+    ])
+
+    freights = collections.OrderedDict([
+        (FREIGHT_TYPE_NONE, _(u"No freight")),
+        (FREIGHT_TYPE_CIF, _(u"CIF")),
+        (FREIGHT_TYPE_FOB, _(u"FOB")),
+        (FREIGHT_TYPE_3RDPARTY, _(u"Third party")),
+    ])
 
     #: the delivery status
     status = EnumCol(allow_none=False, default=STATUS_INITIAL)
 
     #: the date which the delivery was created
-    open_date = DateTimeCol(default=None)
+    open_date = DateTimeCol(default_factory=TransactionTimestamp)
+
+    #: The date that the delivery was cancelled
+    cancel_date = DateTimeCol(default=None)
+
+    #: The date that the delivery was picked
+    pick_date = DateTimeCol(default=None)
+
+    #: The date that the delivery was packed
+    pack_date = DateTimeCol(default=None)
 
     #: the date which the delivery sent to deliver
-    deliver_date = DateTimeCol(default=None)
+    send_date = DateTimeCol(default=None)
 
     #: the date which the delivery received by the |client|
     receive_date = DateTimeCol(default=None)
@@ -561,6 +610,30 @@ class Delivery(Domain):
     #: the delivery tracking code, a transporter specific identifier that
     #: can be used to look up the status of the delivery
     tracking_code = UnicodeCol(default=u'')
+
+    #: The type of the freight
+    freight_type = EnumCol(default=FREIGHT_TYPE_CIF)
+
+    #: The kind of the volumes
+    volumes_kind = UnicodeCol(default=u'')
+
+    #: The quantity of volumes in this freight
+    volumes_quantity = IntCol()
+
+    #: The gross weight of the volumes in this freight
+    volumes_gross_weight = QuantityCol()
+
+    #: The net weight of the volumes in this freight
+    volumes_net_weight = QuantityCol()
+
+    #: The transporter vehicle license plate
+    vehicle_license_plate = UnicodeCol()
+
+    #: The transporter vehicle registration state
+    vehicle_state = UnicodeCol()
+
+    #: The transporter vehicle RNTC (Registro Nacional de Transportador de Carga)
+    vehicle_registration = UnicodeCol()
 
     address_id = IdCol(default=None)
 
@@ -572,19 +645,25 @@ class Delivery(Domain):
     #: the |transporter| for this delivery
     transporter = Reference(transporter_id, 'Transporter.id')
 
-    service_item_id = IdCol(default=None)
+    cancel_responsible_id = IdCol(default=None)
+    #: The responsible for cancelling the products for delivery
+    cancel_responsible = Reference(cancel_responsible_id, 'LoginUser.id')
 
-    #: the |saleitem| for the delivery itself
-    service_item = Reference(service_item_id, 'SaleItem.id')
+    pick_responsible_id = IdCol(default=None)
+    #: The responsible for picking the products for delivery
+    pick_responsible = Reference(pick_responsible_id, 'LoginUser.id')
 
-    #: the |saleitems| for the items to deliver
-    delivery_items = ReferenceSet('id', 'SaleItem.delivery_id')
+    pack_responsible_id = IdCol(default=None)
+    #: The responsible for packing the products for delivery
+    pack_responsible = Reference(pack_responsible_id, 'LoginUser.id')
 
-    def __init__(self, store=None, **kwargs):
-        if not 'open_date' in kwargs:
-            kwargs['open_date'] = TransactionTimestamp()
+    send_responsible_id = IdCol(default=None)
+    #: The responsible for delivering the products to the |transporter|
+    send_responsible = Reference(send_responsible_id, 'LoginUser.id')
 
-        super(Delivery, self).__init__(store=store, **kwargs)
+    invoice_id = IdCol(default=None)
+    #: The operation's invoice this delivery is for
+    invoice = Reference(invoice_id, 'Invoice.id')
 
     #
     #  Properties
@@ -601,24 +680,113 @@ class Delivery(Domain):
         return u''
 
     @property
-    def client_str(self):
-        client = self.service_item.sale.client
-        if client:
-            return client.get_description()
-        return u''
+    def recipient_str(self):
+        return self.address.person.get_description()
+
+    @property
+    def service_item(self):
+        delivery = sysparam.get_object(self.store, 'DELIVERY_SERVICE').sellable
+        operation = self.invoice.operation
+        for item in operation.get_items():
+            if item.sellable == delivery:
+                return item
+
+    @property
+    def delivery_items(self):
+        return self.invoice.operation.get_items().find(delivery_id=self.id)
+
+    #
+    # Classmethods
+    #
+
+    @classmethod
+    def get_by_service_item(cls, store, item):
+        return store.find(cls, invoice_id=item.parent.invoice_id).one()
 
     #
     #  Public API
     #
 
+    def can_cancel(self):
+        """Check if we can cancel the delivery.
+
+        Only initial, picked or packed deliveries can be cancelled.
+        """
+        return self.status in [self.STATUS_INITIAL,
+                               self.STATUS_PICKED,
+                               self.STATUS_PACKED]
+
+    def can_pick(self):
+        """Check if we can pick the delivery.
+
+        Only initial deliveries can be picked.
+        """
+        return self.status == self.STATUS_INITIAL
+
+    def can_pack(self):
+        """Check if we can pack the delivery.
+
+        Only picked deliveries can be packed.
+        """
+        return self.status == self.STATUS_PICKED
+
+    def can_send(self):
+        """Check if we can send the delivery.
+
+        Only packed deliveries can be sent.
+        """
+        # FIXME: In the future once pick & pack is implemented, should we only
+        # allow packed deliveries to be sent?
+        return self.status in [self.STATUS_INITIAL,
+                               self.STATUS_PICKED,
+                               self.STATUS_PACKED]
+
+    def can_receive(self):
+        """Check if we can receive the delivery.
+
+        Only sent deliveries can be received.
+        """
+        return self.status == self.STATUS_SENT
+
     def set_initial(self):
+        """Set the delivery in its initial state."""
+        # FIXME: This should be removed in the future once we implement
+        # the pick & pack structure
         self._set_delivery_status(self.STATUS_INITIAL)
 
-    def set_sent(self):
-        self._set_delivery_status(self.STATUS_SENT)
+    def cancel(self, responsible):
+        """Set the delivery as cancelled."""
+        assert self.can_cancel()
+        self.cancel_date = TransactionTimestamp()
+        self._set_delivery_status(self.STATUS_CANCELLED)
+        self.cancel_responsible = responsible
 
-    def set_received(self):
+    def pick(self, responsible):
+        """Set the delivery as picked."""
+        assert self.can_pick()
+        self._set_delivery_status(self.STATUS_PICKED)
+        self.pick_date = TransactionTimestamp()
+        self.pick_responsible = responsible
+
+    def pack(self, responsible):
+        """Set the delivery as packed."""
+        assert self.can_pack()
+        self._set_delivery_status(self.STATUS_PACKED)
+        self.pack_date = TransactionTimestamp()
+        self.pack_responsible = responsible
+
+    def send(self, responsible):
+        """Set the delivery as sent."""
+        assert self.can_send()
+        self._set_delivery_status(self.STATUS_SENT)
+        self.send_date = TransactionTimestamp()
+        self.send_responsible = responsible
+
+    def receive(self):
+        """Set the delivery as received."""
+        assert self.can_receive()
         self._set_delivery_status(self.STATUS_RECEIVED)
+        self.receive_date = TransactionTimestamp()
 
     #
     #  IContainer implementation
@@ -633,6 +801,10 @@ class Delivery(Domain):
     def remove_item(self, item):
         item.delivery = None
 
+    def remove_all_items(self):
+        for item in self.get_items():
+            self.remove_item(item)
+
     #
     #  Private
     #
@@ -643,9 +815,10 @@ class Delivery(Domain):
         self.status = status
 
 
-@implementer(IContainer)
+# remove_item takes an extra argument so we cant implement IContainer
+# @implementer(IContainer)
 @implementer(IInvoice)
-class Sale(Domain):
+class Sale(IdentifiableDomain):
     """Sale logic, the process of selling a |sellable| to a |client|.
 
     * calculates the sale price including discount/interest/markup
@@ -796,12 +969,8 @@ class Sale(Domain):
     #: :obj:`Sale.get_total_sale_amount()` at the time of confirming the sale,
     total_amount = PriceCol(default=0)
 
-    # FIXME: Duplicated from Invoice. Remove it
-    #: invoice number for this sale, appears on bills etc.
-    invoice_number = IntCol(default=None)
-
-    # FIXME: Duplicated from Invoice. Remove it
-    operation_nature = UnicodeCol(default=u'')
+    #: The reason the sale was cancelled
+    cancel_reason = UnicodeCol()
 
     cfop_id = IdCol()
 
@@ -822,6 +991,10 @@ class Sale(Domain):
 
     #: the |branch| this sale belongs to
     branch = Reference(branch_id, 'Branch.id')
+
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
 
     transporter_id = IdCol(default=None)
 
@@ -854,6 +1027,8 @@ class Sale(Domain):
     returned_sales = ReferenceSet('id', 'ReturnedSale.sale_id',
                                   order_by='ReturnedSale.return_date')
 
+    deliveries = ReferenceSet('invoice_id', 'Delivery.invoice_id')
+
     invoice_id = IdCol()
 
     #: The |sale_token| id
@@ -865,12 +1040,17 @@ class Sale(Domain):
     #: The |invoice| generated by the sale
     invoice = Reference(invoice_id, 'Invoice.id')
 
-    def __init__(self, store=None, **kw):
-        kw['invoice'] = Invoice(store=store, invoice_type=Invoice.TYPE_OUT)
-        super(Sale, self).__init__(store=store, **kw)
+    cancel_responsible_id = IdCol()
+    #: The responsible for cancelling the sale. At the moment, the
+    #: |loginuser| that cancelled the sale
+    cancel_responsible = Reference(cancel_responsible_id, 'LoginUser.id')
+
+    def __init__(self, store, branch: Branch, **kw):
+        kw['invoice'] = Invoice(store=store, invoice_type=Invoice.TYPE_OUT, branch=branch)
+        super(Sale, self).__init__(store=store, branch=branch, **kw)
         # Branch needs to be set before cfop, which triggers an
         # implicit flush.
-        self.branch = kw.pop('branch', None)
+        self.branch = branch
         if not 'cfop' in kw:
             self.cfop = sysparam.get_object(store, 'DEFAULT_SALES_CFOP')
 
@@ -884,16 +1064,6 @@ class Sale(Domain):
         if not status in cls.statuses:
             raise DatabaseInconsistency(_(u"Invalid status %d") % status)
         return cls.statuses[status]
-
-    @classmethod
-    def get_last_invoice_number(cls, store):
-        """Returns the last sale invoice number. If there is not an invoice
-        number used, the returned value will be zero.
-
-        :param store: a store
-        :returns: an integer representing the last sale invoice number
-        """
-        return store.find(cls).max(cls.invoice_number) or 0
 
     #
     # IContainer implementation
@@ -909,11 +1079,18 @@ class Sale(Domain):
         if not with_children:
             query = And(query,
                         Eq(SaleItem.parent_item_id, None))
-        return store.find(SaleItem, query)
+        return store.find(SaleItem, query).order_by(SaleItem.te_id)
 
-    def remove_item(self, sale_item):
+    def remove_item(self, sale_item, user: LoginUser):
         if sale_item.quantity_decreased > 0:
-            sale_item.return_to_stock(sale_item.quantity_decreased)
+            sale_item.return_to_stock(sale_item.quantity_decreased, user)
+
+        # If the item removed is the item corresponding to the delivery, we need to
+        # remove all items from the delivery, including the delivery itself
+        delivery = sale_item.delivery_adaptor
+        if delivery:
+            delivery.remove_all_items()
+            self.store.maybe_remove(delivery)
         sale_item.sale = None
         self.store.maybe_remove(sale_item)
 
@@ -942,9 +1119,11 @@ class Sale(Domain):
         if not self.coupon_id:
             return None
 
-        # FIXME: we still dont have the number of the ecf stored in stoq
-        # (note: this is not the serial number)
-        return Settable(number=u'',
+        # According to the "Cartilha do ECF Emissor de Cupom Fiscal - Perguntas e
+        # respostas, versão 3.2 - Abril 2016 da Sefaz de MG", the ECF serial number
+        # is the number attributed by the establishment/user
+        number = ECFGetPrinterUserNumberEvent.emit() or u''
+        return Settable(number=number,
                         coo=self.coupon_id)
 
     # Status
@@ -1009,7 +1188,7 @@ class Sale(Domain):
         return self.payments.find(
             Payment.status == Payment.STATUS_PENDING).count() > 0
 
-    def can_cancel(self):
+    def can_cancel(self, user: LoginUser):
         """Only ordered, confirmed, paid and quoting sales can be cancelled.
 
         :returns: ``True`` if the sale can be cancelled
@@ -1018,13 +1197,28 @@ class Sale(Domain):
         if SaleCanCancelEvent.emit(self) is False:
             return False
 
-        # If ALLOW_CANCEL_CONFIRMED_SALES is not set, we can only cancel
-        # quoting sales
-        if not sysparam.get_bool("ALLOW_CANCEL_CONFIRMED_SALES"):
-            return self.status == self.STATUS_QUOTE
+        if self.status in (Sale.STATUS_INITIAL, Sale.STATUS_CANCELLED,
+                           Sale.STATUS_RETURNED, Sale.STATUS_RENEGOTIATED):
+            return False
 
-        return self.status in (Sale.STATUS_CONFIRMED, Sale.STATUS_ORDERED,
-                               Sale.STATUS_QUOTE)
+        # Can aways cancel a quote
+        if self.status == Sale.STATUS_QUOTE:
+            return True
+
+        # When ALLOW_CANCEL_CONFIRMED_SALES is True, any sale can be cancelled
+        # Admin user can always cancel as well
+        if (sysparam.get_bool("ALLOW_CANCEL_CONFIRMED_SALES")
+                or user.profile.check_app_permission(u'admin')):
+            return True
+
+        # If a sale is external, let the user cancel if its ordered (it might
+        # have been cancelled in the external store).
+        if (sysparam.get_bool("ALLOW_CANCEL_ORDERED_SALES") or
+                self.is_external()):
+            return self.status == Sale.STATUS_ORDERED
+
+        # If we reached here, the sale is either ORDERED or CONFIRMED
+        return False
 
     def can_return(self):
         """Only confirmed (with or without payment) sales can be returned
@@ -1057,7 +1251,7 @@ class Sale(Domain):
     def is_returned(self):
         return self.status == Sale.STATUS_RETURNED
 
-    def order(self):
+    def order(self, user: LoginUser):
         """Orders the sale
 
         Ordering a sale is the first step done after creating it.
@@ -1072,9 +1266,9 @@ class Sale(Domain):
             raise SellError(_('Unable to make sales for clients with status '
                               '%s') % self.client.get_status_string())
 
-        self._set_sale_status(Sale.STATUS_ORDERED)
+        self._set_sale_status(Sale.STATUS_ORDERED, user)
 
-    def confirm(self, till=None):
+    def confirm(self, user: LoginUser, till=None):
         """Confirms the sale
 
         Confirming a sale means that the customer has confirmed the sale.
@@ -1089,25 +1283,20 @@ class Sale(Domain):
         assert self.can_confirm()
         assert self.branch
 
-        # FIXME: We should use self.branch, but it's not supported yet
-        store = self.store
-        branch = get_current_branch(store)
         for item in self.get_items():
             self.validate_batch(item.batch, sellable=item.sellable)
             if item.sellable.product:
-                ProductHistory.add_sold_item(store, branch, item)
-            item.sell(branch)
+                ProductHistory.add_sold_item(self.store, self.branch, item)
+            item.sell(user)
 
         self.total_amount = self.get_total_sale_amount()
 
         self.group.confirm()
         self._add_inpayments(till=till)
-        self._create_fiscal_entries()
+        self._create_fiscal_entries(user)
 
-        # Save invoice number, operation_nature and branch in Invoice table.
-        self.invoice.invoice_number = self.invoice_number
-        self.invoice.operation_nature = self.operation_nature
-        self.invoice.branch = branch
+        # Save operation_nature and branch in Invoice table.
+        self.invoice.branch = self.branch
 
         if self._create_commission_at_confirm():
             for payment in self.payments:
@@ -1122,14 +1311,19 @@ class Sale(Domain):
         # automatically paid.
         # Since some plugins may listen to the sale status change event, we should
         # set payments as paid before the status change.
+        source_account = sysparam.get_object(self.store, 'SALES_ACCOUNT')
+        destination_account = sysparam.get_object(self.store, 'TILLS_ACCOUNT')
         for method in self.store.find(PaymentMethod):
             if method.operation.pay_on_sale_confirm():
-                self.group.pay_method_payments(method.method_name)
+                self.group.pay_method_payments(method.method_name,
+                                               source_account=source_account,
+                                               destination_account=destination_account)
 
-        self._set_sale_status(Sale.STATUS_CONFIRMED)
+        old_status = self.status
+        self._set_sale_status(Sale.STATUS_CONFIRMED, user)
 
-        if self.sale_token:
-            self.sale_token.close_token()
+        if self.current_sale_token:
+            self.current_sale_token.close_token()
 
         # do not log money payments twice
         if not self.only_paid_with_money():
@@ -1145,6 +1339,8 @@ class Sale(Domain):
                     sale_number=self.identifier,
                     total_value=self.get_total_sale_amount())
             Event.log(self.store, Event.TYPE_SALE, msg)
+
+        StockOperationConfirmedEvent.emit(self, old_status)
 
     def set_paid(self):
         """Mark the sale as paid
@@ -1200,43 +1396,44 @@ class Sale(Domain):
         self.close_date = None
         self.paid = False
 
-    def set_renegotiated(self):
+    def set_renegotiated(self, user: LoginUser):
         """Set the sale as renegotiated. The sale payments have been
         renegotiated and the operations will be done in
         another |paymentgroup|."""
         assert self.can_set_renegotiated()
 
         self.close_date = TransactionTimestamp()
-        self._set_sale_status(Sale.STATUS_RENEGOTIATED)
+        self._set_sale_status(Sale.STATUS_RENEGOTIATED, user)
 
-    def set_not_returned(self):
+    def set_not_returned(self, user: LoginUser):
         """Sets a sale as not returnd
 
         This will reset the sale status to confirmed (once you can only returna
         confirmed sale). Also, the return_date will be reset.
         """
-        self._set_sale_status(Sale.STATUS_CONFIRMED)
+        self._set_sale_status(Sale.STATUS_CONFIRMED, user)
         self.return_date = None
 
-    def cancel(self, force=False):
+    def cancel(self, user: LoginUser, reason: str, force=False):
         """Cancel the sale
 
         You can only cancel an ordered sale. This will also cancel
         all the payments related to it.
 
+        :param reason: A short text describing the cancellation reason.
         :param force: if ``True``, :meth:`.can_cancel` will not be asserted.
             Only use this if you really need to (for example, when canceling
             the last sale on the ecf)
         """
         if not force:
-            assert self.can_cancel()
+            assert self.can_cancel(user)
 
-        branch = get_current_branch(self.store)
         for item in self.get_items():
-            item.cancel(branch)
+            item.cancel(user)
 
         self.cancel_date = TransactionTimestamp()
-        self._set_sale_status(Sale.STATUS_CANCELLED)
+        self.cancel_reason = reason
+        self.cancel_responsible = user
         self.paid = False
 
         # Cancel payments
@@ -1244,7 +1441,12 @@ class Sale(Domain):
             if payment.can_cancel():
                 payment.cancel()
 
-    def return_(self, returned_sale):
+        if self.current_sale_token:
+            self.current_sale_token.close_token()
+
+        self._set_sale_status(Sale.STATUS_CANCELLED, user)
+
+    def return_(self, returned_sale: ReturnedSale):
         """Returns a sale
         Returning a sale means that all the items are returned to the stock.
         A renegotiation object needs to be supplied which
@@ -1260,7 +1462,7 @@ class Sale(Domain):
                                 sale_item in self.get_items()])
         if totally_returned:
             self.return_date = TransactionTimestamp()
-            self._set_sale_status(Sale.STATUS_RETURNED)
+            self._set_sale_status(Sale.STATUS_RETURNED, returned_sale.responsible)
             self.paid = False
 
         if self.client:
@@ -1298,20 +1500,24 @@ class Sale(Domain):
             as a percentage, e.g. 10.0, 22.5
         """
         new_total = currency(0)
-        # We should not set the discount for the components of a package
-        items = [item for item in self.get_items(with_children=False)]
-
-        for item in items:
+        items = []
+        for item in self.get_items():
+            sellable = item.sellable
+            if sellable.product and sellable.product.is_package:
+                # We should not set discount for package_products
+                continue
+            items.append(item)
             item.set_discount(discount)
-            new_total += item.price * item.quantity
+            new_total += quantize(item.price * item.quantity)
 
         # Since we apply the discount percentage above, items can generate a
         # 3rd decimal place, that will be rounded to the 2nd, making the value
         # differ. Find that difference and apply it to a sale item. The sale
         # item that will be used for this rounding is the first one that the
         # quantity can divide the diff.
-        discount_value = quantize((self.get_sale_base_subtotal() * discount) / 100)
-        diff = new_total - self.get_sale_base_subtotal() + discount_value
+        sale_base_subtotal = self.get_sale_base_subtotal()
+        discount_value = quantize((sale_base_subtotal * discount) / 100)
+        diff = new_total - sale_base_subtotal + discount_value
 
         if diff:
             # The value cannot be <= 0
@@ -1354,8 +1560,8 @@ class Sale(Domain):
         :returns: subtotal
         """
         total = 0
-        for i in self.get_items():
-            total += i.get_total()
+        for sale_item in self.get_items():
+            total += sale_item.get_total()
 
         return currency(total)
 
@@ -1367,7 +1573,18 @@ class Sale(Domain):
 
         :returns: the base subtotal
         """
-        subtotal = self.get_items().sum(SaleItem.quantity * SaleItem.base_price)
+        items = self.get_items()
+        subtotal = 0
+        for item in items:
+            sellable = item.sellable
+            if sellable.product and sellable.product.is_package:
+                # We should not sum package_product
+                continue
+            if item.parent_item:
+                component = item.get_component(item.parent_item)
+                subtotal += quantize(item.quantity * component.price)
+            else:
+                subtotal += quantize(item.quantity * item.base_price)
         return currency(subtotal)
 
     def get_items_total_quantity(self):
@@ -1379,6 +1596,7 @@ class Sale(Domain):
 
     def get_total_paid(self):
         """Return the total amount already paid for this sale
+
         :returns: the total amount paid
         """
         total_paid = 0
@@ -1444,6 +1662,18 @@ class Sale(Domain):
             available_discount += item.base_price * max_discount
 
         return available_discount - used_discount
+
+    def get_kitchen_items(self):
+        """Returns sale items that require kitchen production
+
+        This method checks firstly for the sellable_branch_override table,
+        and if the sellable is not found there, it moves to sellable. It
+        then returns a list of items whose sellable needs kitchen production.
+
+        :returns: list of sale items that need kitchen production
+        """
+        return [item for item in self.get_items()
+                if item.sellable.get_requires_kitchen_production(self.branch)]
 
     def get_details_str(self):
         """Returns the sale details
@@ -1619,14 +1849,14 @@ class Sale(Domain):
                         price=price,
                         parent_item=parent)
 
-    def create_sale_return_adapter(self):
+    def create_sale_return_adapter(self, branch: Branch, user: LoginUser, station: BranchStation):
         store = self.store
-        current_user = get_current_user(store)
         returned_sale = ReturnedSale(
             store=store,
             sale=self,
-            branch=get_current_branch(store),
-            responsible=current_user,
+            branch=branch,
+            responsible=user,
+            station=station,
         )
         for sale_item in self.get_items(with_children=False):
             if sale_item.is_totally_returned():
@@ -1681,6 +1911,13 @@ class Sale(Domain):
             return first_comment.comment
         return u''
 
+    def get_delivery_item(self):
+        delivery_service_id = sysparam.get_object_id('DELIVERY_SERVICE')
+        for item in self.get_items():
+            if item.sellable.id == delivery_service_id:
+                return item
+        return None
+
     #
     # Properties
     #
@@ -1688,6 +1925,11 @@ class Sale(Domain):
     @property
     def status_str(self):
         return self.get_status_name(self.status)
+
+    @property
+    def current_sale_token(self):
+        """The current token attached to this sale."""
+        return self.store.find(SaleToken, sale=self).one()
 
     @property
     def products(self):
@@ -1784,11 +2026,11 @@ class Sale(Domain):
     # Private API
     #
 
-    def _set_sale_status(self, status):
+    def _set_sale_status(self, status, user: LoginUser):
         old_status = self.status
         self.status = status
 
-        SaleStatusChangedEvent.emit(self, old_status)
+        SaleStatusChangedEvent.emit(self, old_status, user)
 
     def _get_percentage_value(self, percentage):
         if not percentage:
@@ -1853,7 +2095,7 @@ class Sale(Domain):
             if tax_constant is None or tax_constant.tax_type != TaxType.CUSTOM:
                 continue
             icms_tax = tax_constant.tax_value / Decimal(100)
-            icms_total += icms_tax * (price * item.quantity)
+            icms_total += icms_tax * quantize(price * item.quantity)
 
         return icms_total
 
@@ -1869,7 +2111,7 @@ class Sale(Domain):
         iss_tax = sysparam.get_decimal('ISS_TAX') / Decimal(100)
         for item in self.services:
             price = item.price + av_difference
-            iss_total += iss_tax * (price * item.quantity)
+            iss_total += iss_tax * quantize(price * item.quantity)
         return iss_total
 
     def _get_average_difference(self):
@@ -1894,7 +2136,7 @@ class Sale(Domain):
             self.store, self.group,
             FiscalBookEntry.TYPE_SERVICE)
 
-    def _create_fiscal_entries(self):
+    def _create_fiscal_entries(self, user: LoginUser):
         """A Brazil-specific method
         Create new ICMS and ISS entries in the fiscal book
         for a given sale.
@@ -1907,13 +2149,13 @@ class Sale(Domain):
 
         if not self.products.is_empty():
             FiscalBookEntry.create_product_entry(
-                self.store,
+                self.store, self.branch, user,
                 self.group, self.cfop, self.coupon_id,
                 self._get_icms_total(av_difference))
 
         if not self.services.is_empty() and self.service_invoice_number:
             FiscalBookEntry.create_service_entry(
-                self.store,
+                self.store, self.branch, user,
                 self.group, self.cfop, self.service_invoice_number,
                 self._get_iss_total(av_difference))
 
@@ -1930,8 +2172,10 @@ class SaleToken(Domain):
     STATUS_AVAILABLE = u'available'
     STATUS_OCCUPIED = u'occupied'
 
-    statuses = {STATUS_AVAILABLE: _(u'Available'),
-                STATUS_OCCUPIED: _(u'Occupied')}
+    statuses = collections.OrderedDict([
+        (STATUS_AVAILABLE, _(u'Available')),
+        (STATUS_OCCUPIED, _(u'Occupied')),
+    ])
 
     #: the status of the sale_token
     status = EnumCol(allow_none=False, default=STATUS_AVAILABLE)
@@ -1939,43 +2183,97 @@ class SaleToken(Domain):
     #: the code that used to identify the token
     code = UnicodeCol()
 
-    #
-    # Class methods
-    #
+    #: The name of the token
+    name = UnicodeCol()
 
-    @classmethod
-    def get_status_name(cls, status):
-        return cls.statuses[status]
+    sale_id = IdCol()
+    #: The |sale| that this token is attached to
+    sale = Reference(sale_id, 'Sale.id')
 
-    #
-    # Properties
-    #
+    branch_id = IdCol()
+    #: The |branch| that this token belongs
+    branch = Reference(branch_id, 'Branch.id')
 
     @property
     def status_str(self):
-        return self.get_status_name(self.status)
+        return self.statuses[self.status]
+
+    @property
+    def description(self):
+        return "[{}] {}".format(self.code, self.name)
 
     #
     # Public API
     #
 
-    def open_token(self):
-        assert self._can_open()
+    @classmethod
+    def find_by_client(cls, store, client):
+        tables = [cls, Join(Sale, cls.sale_id == Sale.id)]
+        return store.using(*tables).find(cls, Sale.client == client)
+
+    def open_token(self, sale):
+        assert self.can_open()
+        self.sale = sale
+        sale.sale_token = self
         self.status = SaleToken.STATUS_OCCUPIED
 
     def close_token(self):
-        assert self._can_close()
+        assert self.can_close()
+        self.sale = None
         self.status = SaleToken.STATUS_AVAILABLE
 
-    #
-    # Private API
-    #
-
-    def _can_open(self):
+    def can_open(self):
         return self.status == SaleToken.STATUS_AVAILABLE
 
-    def _can_close(self):
+    def can_close(self):
         return self.status == SaleToken.STATUS_OCCUPIED
+
+
+class SaleTokenView(Viewable):
+    """Sale token view."""
+
+    ClientPerson = ClassAlias(Person, 'client_person')
+    ClientCompany = ClassAlias(Company, 'client_company')
+    BranchPerson = ClassAlias(Person, 'branch_person')
+    BranchCompany = ClassAlias(Company, 'branch_company')
+
+    sale_token = SaleToken
+    sale = Sale
+    client = Client
+    branch = Branch
+
+    id = SaleToken.id
+    name = SaleToken.name
+    code = SaleToken.code
+    status = SaleToken.status
+
+    client_id = Client.id
+    client_name = Coalesce(NullIf(ClientCompany.fancy_name, u''), ClientPerson.name)
+    branch_id = Branch.id
+    branch_name = Coalesce(NullIf(BranchCompany.fancy_name, u''), BranchPerson.name)
+    sale_identifier = Sale.identifier
+    sale_identifier_str = Cast(Sale.identifier, 'text')
+
+    tables = [
+        SaleToken,
+
+        # Sale
+        LeftJoin(Sale, SaleToken.sale_id == Sale.id),
+
+        # Client
+        LeftJoin(Client, Sale.client_id == Client.id),
+        LeftJoin(ClientPerson, Client.person_id == ClientPerson.id),
+        LeftJoin(ClientCompany, ClientCompany.person_id == ClientPerson.id),
+
+        # Branch
+        LeftJoin(Branch, SaleToken.branch_id == Branch.id),
+        LeftJoin(BranchPerson, Branch.person_id == BranchPerson.id),
+        LeftJoin(BranchCompany, BranchCompany.person_id == BranchPerson.id),
+    ]
+
+    @property
+    def status_str(self):
+        return SaleToken.statuses[self.status]
 
 
 class SaleComment(Domain):
@@ -2021,7 +2319,7 @@ class ReturnedSaleItemsView(Viewable):
     _sale_id = Sale.id
     _new_sale_id = ReturnedSale.new_sale_id
     returned_identifier = ReturnedSale.identifier
-    invoice_number = ReturnedSale.invoice_number
+    invoice_number = Invoice.invoice_number
     return_date = ReturnedSale.return_date
     reason = ReturnedSale.reason
 
@@ -2034,7 +2332,7 @@ class ReturnedSaleItemsView(Viewable):
     batch_date = StorableBatch.create_date
 
     # summaries
-    total = ReturnedSaleItem.price * ReturnedSaleItem.quantity
+    total = Round(ReturnedSaleItem.price * ReturnedSaleItem.quantity, DECIMAL_PRECISION)
 
     tables = [
         ReturnedSaleItem,
@@ -2042,6 +2340,7 @@ class ReturnedSaleItemsView(Viewable):
         Join(SaleItem, SaleItem.id == ReturnedSaleItem.sale_item_id),
         Join(Sellable, Sellable.id == ReturnedSaleItem.sellable_id),
         Join(ReturnedSale, ReturnedSale.id == ReturnedSaleItem.returned_sale_id),
+        LeftJoin(Invoice, Invoice.id == ReturnedSale.invoice_id),
         Join(Sale, Sale.id == ReturnedSale.sale_id),
         # Note that the sale branch may be different than the returned sale
         # branch
@@ -2083,34 +2382,60 @@ class ReturnedSaleItemsView(Viewable):
         product = self.store.get(Product, self.sellable.product.id)
         return product.is_package
 
+
 _SaleItemSummary = Select(columns=[SaleItem.sale_id,
                                    Alias(Sum(InvoiceItemIpi.v_ipi), 'v_ipi'),
                                    Alias(Sum(SaleItem.quantity), 'total_quantity'),
-                                   Alias(Sum(SaleItem.quantity *
-                                             SaleItem.price), 'subtotal')],
+                                   Alias(Sum(Round(SaleItem.quantity * SaleItem.price,
+                                                   DECIMAL_PRECISION)), 'subtotal')],
                           tables=[SaleItem,
                                   LeftJoin(InvoiceItemIpi,
                                            InvoiceItemIpi.id == SaleItem.ipi_info_id)],
                           group_by=[SaleItem.sale_id])
 SaleItemSummary = Alias(_SaleItemSummary, '_sale_item')
 
+_TradeAndCreditTotal = Select(columns=[Payment.group_id,
+                                       Alias(Sum(Payment.value), 'total')],
+                              tables=[Payment,
+                                      LeftJoin(PaymentMethod,
+                                               PaymentMethod.id == Payment.method_id)],
+                              where=And(In(PaymentMethod.method_name, ['credit', 'trade']),
+                                        Payment.payment_type == Payment.TYPE_IN),
+                              group_by=[Payment.group_id])
+TradeAndCreditTotal = Alias(_TradeAndCreditTotal, '_trade_credit_total')
+
+_PaymentTotal = Select(columns=[Payment.group_id,
+                                Alias(Sum(Payment.value), 'total')],
+                       tables=[Payment],
+                       where=(Payment.status != Payment.STATUS_CANCELLED),
+                       group_by=[Payment.group_id])
+PaymentTotal = Alias(_PaymentTotal, '_payment_total')
+
 
 class SaleView(Viewable):
-    """Stores general informatios about sales
+    """Stores general information about sales
     """
 
     Person_Branch = ClassAlias(Person, 'person_branch')
     Person_Client = ClassAlias(Person, 'person_client')
     Person_SalesPerson = ClassAlias(Person, 'person_sales_person')
+    Company_Branch = ClassAlias(Company, 'company_branch')
+    Company_Client = ClassAlias(Company, 'company_client')
 
     #: the |sale| of the view
-    sale = Sale
+    sale = Sale  # type: Sale
 
     #: the |client| of the view
     client = Client
 
     #: The branch this sale was sold
     branch = Branch
+
+    #: The |invoice| of the view
+    invoice = Invoice
+
+    #: The token referencing this sale
+    token = SaleToken
 
     #: the id of the sale table
     id = Sale.id
@@ -2121,8 +2446,16 @@ class SaleView(Viewable):
     #: unique numeric identifier for the sale, text representation
     identifier_str = Cast(Sale.identifier, 'text')
 
+    #: The code of the current token holding the sale
+    token_code = SaleToken.code
+
+    #: The name of the current token holding the sale
+    token_name = SaleToken.name
+
+    token_str = Concat('[', token_code, '] ', token_name)
+
     #: the sale invoice number
-    invoice_number = Sale.invoice_number
+    invoice_number = Invoice.invoice_number
 
     #: the id generated by the fiscal printer
     coupon_id = Sale.coupon_id
@@ -2172,8 +2505,11 @@ class SaleView(Viewable):
     #: the |sale| client name
     client_name = Coalesce(Person_Client.name, u'')
 
+    #: the |sale| client fancy name
+    client_fancy_name = Company_Client.fancy_name
+
     #: name of the |branch| this |sale| was sold
-    branch_name = Coalesce(NullIf(Company.fancy_name, u''), Person_Branch.name)
+    branch_name = Coalesce(NullIf(Company_Branch.fancy_name, u''), Person_Branch.name)
 
     # Summaries
     v_ipi = Coalesce(Field('_sale_item', 'v_ipi'), 0)
@@ -2188,23 +2524,36 @@ class SaleView(Viewable):
     _total = Coalesce(Field('_sale_item', 'subtotal'), 0) - \
         Sale.discount_value + Sale.surcharge_value + v_ipi
 
+    #: the total of the sale without trades and credit values
+    _net_total = _total - Coalesce(Field('_trade_credit_total', 'total'), 0)
+
+    #: the total of the sale without trades and credit values
+    missing_payment = _total - Coalesce(Field('_payment_total', 'total'), 0)
+
     tables = [
         Sale,
         LeftJoin(SaleItemSummary, Field('_sale_item', 'sale_id') == Sale.id),
+        LeftJoin(TradeAndCreditTotal, Field('_trade_credit_total', 'group_id') == Sale.group_id),
+        LeftJoin(PaymentTotal, Field('_payment_total', 'group_id') == Sale.group_id),
         LeftJoin(Branch, Sale.branch_id == Branch.id),
         LeftJoin(Client, Sale.client_id == Client.id),
         LeftJoin(SalesPerson, Sale.salesperson_id == SalesPerson.id),
+        LeftJoin(Invoice, Sale.invoice_id == Invoice.id),
 
         LeftJoin(Person_Branch, Branch.person_id == Person_Branch.id),
-        LeftJoin(Company, Company.person_id == Person_Branch.id),
+        LeftJoin(Company_Branch, Company_Branch.person_id == Person_Branch.id),
         LeftJoin(Person_Client, Client.person_id == Person_Client.id),
+        LeftJoin(Company_Client, Company_Client.person_id == Person_Client.id),
         LeftJoin(Person_SalesPerson, SalesPerson.person_id == Person_SalesPerson.id),
+
+        LeftJoin(SaleToken, SaleToken.id == Sale.sale_token_id),
     ]
 
     @classmethod
     def post_search_callback(cls, sresults):
-        select = sresults.get_select_expr(Count(1), Sum(cls._total))
-        return ('count', 'sum'), select
+        select = sresults.get_select_expr(Count(1), Sum(cls._total),
+                                          Sum(cls._net_total))
+        return ('count', 'sum', 'net_sum'), select
 
     #
     # Class methods
@@ -2241,8 +2590,8 @@ class SaleView(Viewable):
     def can_confirm(self):
         return self.sale.can_confirm()
 
-    def can_cancel(self):
-        return self.sale.can_cancel()
+    def can_cancel(self, user: LoginUser):
+        return self.sale.can_cancel(user)
 
     def can_edit(self):
         return self.sale.can_edit()
@@ -2256,6 +2605,10 @@ class SaleView(Viewable):
     @property
     def total(self):
         return currency(self._total)
+
+    @property
+    def net_total(self):
+        return currency(self._net_total)
 
     @property
     def open_date_as_string(self):
@@ -2310,101 +2663,75 @@ class SaleCommentsView(Viewable):
 class ReturnedSaleView(Viewable):
     """Stores general informatios about returned sales."""
 
-    #: alias for Branch Person Object
     Person_Branch = ClassAlias(Person, 'person_branch')
-
-    #: alias for Client Person Object
     Person_Client = ClassAlias(Person, 'person_client')
-
-    #: alias for Sales Person Sales Object
     Person_SalesPerson = ClassAlias(Person, 'person_sales_person')
-
-    #: alias for Login User Person Object
     Person_LoginUser = ClassAlias(Person, 'person_login_user')
 
-    #: the |sale|
     sale = Sale
-
-    #: the |client|
     client = Client
-
     branch = Branch
-
-    #: the |returnedsale|
     returned_sale = ReturnedSale
+    returned_item = ReturnedSaleItem
 
-    #: the id of the returned_sale table
-    id = ReturnedSale.id
-
-    #: a unique numeric identifer for the returned sale
-    identifier = ReturnedSale.identifier
-
-    #: the identifier as a string
-    identifier_str = Cast(ReturnedSale.identifier, 'text')
-
-    #: invoice of the returned sale
-    invoice_number = ReturnedSale.invoice_number
-
-    #: date of the return product
-    return_date = ReturnedSale.return_date
-
-    #: reason to return the sale
-    reason = ReturnedSale.reason
-
-    #: person_id of the responsible for return the sale
-    responsible_id = ReturnedSale.responsible_id
-
-    #: id of the sales branch
-    branch_id = ReturnedSale.branch_id
-
-    #: id of the new sale, if exist, an exchange of product or something else
-    new_sale_id = ReturnedSale.new_sale_id
-
-    #: Sale id
+    # Sale
     sale_id = Sale.id
 
-    #: value of the total of returned sale
-    total = Sum(ReturnedSaleItem.price * ReturnedSaleItem.quantity)
+    # Returned Sale
+    id = ReturnedSaleItem.id
+    identifier = ReturnedSale.identifier
+    identifier_str = Cast(ReturnedSale.identifier, 'text')
+    invoice_number = Invoice.invoice_number
+    return_date = ReturnedSale.return_date
+    reason = ReturnedSale.reason
+    responsible_id = ReturnedSale.responsible_id
+    branch_id = ReturnedSale.branch_id
+    new_sale_id = ReturnedSale.new_sale_id
 
-    #: Client id
-    client_id = Client.id
+    # Returned Sale Item
+    price = ReturnedSaleItem.price
+    quantity = ReturnedSaleItem.quantity
+    total = Round(ReturnedSaleItem.price * ReturnedSaleItem.quantity, DECIMAL_PRECISION)
 
-    #: Name of Sales Person Sales
+    # Sellable
+    product_name = Sellable.description
+
+    # Person
     salesperson_name = Person_SalesPerson.name
-
-    #: Name of Client Person
     client_name = Person_Client.name
-
-    #: Name of Branch Person
-    branch_name = Coalesce(NullIf(Company.fancy_name, u''), Person_Branch.name)
-
-    # Name of Responsible for Returned Sale
     responsible_name = Person_LoginUser.name
 
-    # Tables Queries
+    # Branch
+    branch_name = Coalesce(NullIf(Company.fancy_name, u''), Person_Branch.name)
+
+    # Client
+    client_id = Client.id
+
     tables = [
         ReturnedSale,
         Join(Sale, Sale.id == ReturnedSale.sale_id),
-        LeftJoin(ReturnedSaleItem,
-                 ReturnedSaleItem.returned_sale_id == ReturnedSale.id),
-        LeftJoin(Sellable, Sellable.id == ReturnedSaleItem.sellable_id),
-        LeftJoin(Branch, ReturnedSale.branch_id == Branch.id),
+        Join(ReturnedSaleItem,
+             ReturnedSaleItem.returned_sale_id == ReturnedSale.id),
+        Join(Sellable, Sellable.id == ReturnedSaleItem.sellable_id),
+
+        Join(Branch, ReturnedSale.branch_id == Branch.id),
+        Join(Person_Branch, Branch.person_id == Person_Branch.id),
+        Join(Company, Company.person_id == Person_Branch.id),
+        Join(SalesPerson, Sale.salesperson_id == SalesPerson.id),
+        Join(Person_SalesPerson,
+             SalesPerson.person_id == Person_SalesPerson.id),
+        Join(LoginUser, LoginUser.id == ReturnedSale.responsible_id),
+        Join(Person_LoginUser, Person_LoginUser.id == LoginUser.person_id),
+        LeftJoin(Invoice, Sale.invoice_id == Invoice.id),
         LeftJoin(Client, Sale.client_id == Client.id),
-        LeftJoin(SalesPerson, Sale.salesperson_id == SalesPerson.id),
-        LeftJoin(LoginUser, LoginUser.id == ReturnedSale.responsible_id),
-        LeftJoin(Person_Branch, Branch.person_id == Person_Branch.id),
-        LeftJoin(Company, Company.person_id == Person_Branch.id),
         LeftJoin(Person_Client, Client.person_id == Person_Client.id),
-        LeftJoin(Person_SalesPerson,
-                 SalesPerson.person_id == Person_SalesPerson.id),
-        LeftJoin(Person_LoginUser, Person_LoginUser.id == LoginUser.person_id)
     ]
 
-    group_by = [id, sale_id, Sellable.id, client_id, branch_id, branch_name,
-                salesperson_name, client_name, LoginUser.id,
-                Person_LoginUser.name, branch]
-    #: Name of Sellable product
-    product_name = Sellable.description
+    def get_children_items(self):
+        query = And(ReturnedSaleView.client_id == self.client_id,
+                    ReturnedSaleItem.id.is_in([child.id
+                                               for child in self.returned_item.children_items]))
+        return self.store.find(ReturnedSaleView, query)
 
 
 class SalePaymentMethodView(SaleView):
@@ -2421,7 +2748,8 @@ class SalePaymentMethodView(SaleView):
     @classmethod
     def find_by_payment_method(cls, store, method):
         if method:
-            results = store.find(cls, Payment.method == method)
+            results = store.find(cls, And(Payment.method == method,
+                                          Payment.status != Payment.STATUS_CANCELLED))
         else:
             results = store.find(cls)
 
@@ -2432,19 +2760,25 @@ class SalePaymentMethodView(SaleView):
 class SoldSellableView(Viewable):
     Person_Client = ClassAlias(Person, 'person_client')
     Person_SalesPerson = ClassAlias(Person, 'person_sales_person')
+    sale_item = SaleItem
 
+    # Sellable
     id = Sellable.id
     code = Sellable.code
     description = Sellable.description
 
+    # SaleItem
+    sale_item_id = SaleItem.id
+
+    # Client
     client_id = Sale.client_id
     client_name = Person_Client.name
 
     # Aggregates
     total_quantity = Sum(SaleItem.quantity)
-    subtotal = Sum(SaleItem.quantity * SaleItem.price)
+    subtotal = Sum(Round(SaleItem.quantity * SaleItem.price, DECIMAL_PRECISION))
 
-    group_by = [id, code, description, client_id, client_name]
+    group_by = [id, code, description, client_id, client_name, sale_item]
 
     tables = [
         Sellable,
@@ -2469,14 +2803,22 @@ class SoldServicesView(SoldSellableView):
 
 
 class SoldProductsView(SoldSellableView):
-    # Aggregates
-    last_date = Max(Sale.open_date)
-    avg_value = Avg(SaleItem.price)
-    quantity = Sum(SaleItem.quantity)
-    total_value = Sum(SaleItem.quantity * SaleItem.price)
+
+    value = SaleItem.price
+    quantity = SaleItem.quantity
+    total_value = Round(SaleItem.quantity * SaleItem.price, DECIMAL_PRECISION)
+    sale_date = Sale.open_date
 
     tables = SoldSellableView.tables[:]
     tables.append(Join(Product, Sellable.id == Product.id))
+
+    group_by = SoldSellableView.group_by[:]
+    group_by.append(sale_date)
+
+    def get_children_items(self):
+        query = And(SoldProductsView.client_id == self.client_id,
+                    SaleItem.id.is_in([child.id for child in self.sale_item.children_items]))
+        return self.store.find(SoldProductsView, query)
 
 
 # FIXME: This needs some more work, as currently, this viewable is:
@@ -2501,7 +2843,7 @@ class SalesPersonSalesView(Viewable):
     total_amount = Sum(Sale.total_amount)
     total_quantity = Sum(Field('_sale_item', 'total_quantity'))
     total_sales = Count(Sale.id)
-    #paid_value = Field('_paid_sale', 'paid_value')
+    # paid_value = Field('_paid_sale', 'paid_value')
 
     group_by = [id, name]
 
@@ -2510,7 +2852,7 @@ class SalesPersonSalesView(Viewable):
         LeftJoin(Sale, Sale.salesperson_id == SalesPerson.id),
         LeftJoin(SaleItemSummary, Field('_sale_item', 'sale_id') == Sale.id),
         LeftJoin(Person, Person.id == SalesPerson.person_id),
-        #LeftJoin(PaidSale, Field('_paid_sale', 'salesperson_id') == SalesPerson.id),
+        # LeftJoin(PaidSale, Field('_paid_sale', 'salesperson_id') == SalesPerson.id),
     ]
 
     clause = Sale.status == Sale.STATUS_CONFIRMED
@@ -2550,7 +2892,7 @@ class ClientsWithSaleView(Viewable):
 
     sales = Count(Distinct(Sale.id))
     sale_items = Sum(SaleItem.quantity)
-    total_amount = Sum(SaleItem.price * SaleItem.quantity)
+    total_amount = Sum(Round(SaleItem.price * SaleItem.quantity, DECIMAL_PRECISION))
     last_purchase = Max(Sale.confirm_date)
 
     tables = [
@@ -2611,7 +2953,7 @@ class SoldItemsByClient(Viewable):
     base_price = Avg(SaleItem.base_price)
     quantity = Sum(SaleItem.quantity)
     price = Avg(SaleItem.price)
-    total = Sum(SaleItem.quantity * SaleItem.price)
+    total = Sum(Round(SaleItem.quantity * SaleItem.price, DECIMAL_PRECISION))
 
     tables = [
         Sellable,
@@ -2627,3 +2969,74 @@ class SoldItemsByClient(Viewable):
                 Sale.status == Sale.STATUS_ORDERED)
 
     group_by = [id, Person.id, Product, sellable_category, Sellable.id]
+
+
+_Payments = Select(
+    columns=[Payment.group_id,
+             Alias(Sum(Payment.value), 'value')],
+    tables=[Payment, Join(PaymentMethod, PaymentMethod.id == Payment.method_id)],
+    where=And(Payment.status != Payment.STATUS_CANCELLED,
+              Payment.payment_type == Payment.TYPE_IN,
+              PaymentMethod.method_name == u'credit'),
+    group_by=[Payment.group_id])
+
+
+class SoldItemsBySalesperson(Viewable):
+    id = Sellable.id
+    code = Sellable.code
+    description = Sellable.description
+
+    category = SellableCategory.description
+    batch_number = Coalesce(StorableBatch.batch_number, u'')
+
+    brand = Product.brand
+
+    branch_name = Company.fancy_name
+    salesperson_name = Person.name
+
+    quantity = Sum(SaleItem.quantity)
+    total = Sum(SaleItem.quantity * SaleItem.price)
+
+    tables = [
+        Sellable,
+        LeftJoin(Product, Product.id == Sellable.id),
+        LeftJoin(SellableCategory, Sellable.category_id == SellableCategory.id),
+        Join(SaleItem, SaleItem.sellable_id == Sellable.id),
+        Join(Sale, SaleItem.sale_id == Sale.id),
+        LeftJoin(StorableBatch, StorableBatch.id == SaleItem.batch_id),
+        Join(Branch, Sale.branch_id == Branch.id),
+        Join(Company, Branch.person_id == Company.person_id),
+        Join(SalesPerson, SalesPerson.id == Sale.salesperson_id),
+        Join(Person, Person.id == SalesPerson.person_id),
+    ]
+
+    clause = And(Ne(Sale.confirm_date, None),
+                 Sale.status != Sale.STATUS_CANCELLED)
+    group_by = [id, branch_name, code, description, category, batch_number,
+                salesperson_name, brand]
+
+
+class Context(Domain):
+    __storm_table__ = 'context'
+
+    name = UnicodeCol(allow_none=False)
+
+    start_time = TimeCol()
+
+    end_time = TimeCol()
+
+    branch_id = IdCol(allow_none=False)
+
+    branch = Reference(branch_id, 'Branch.id')
+
+
+class SaleContext(Domain):
+    __storm_table__ = 'sale_context'
+
+    sale_id = IdCol(allow_none=False)
+
+    sale = Reference(sale_id, 'Sale.id')
+
+    context_id = IdCol(allow_none=False)
+
+    context = Reference(context_id, 'Context.id')

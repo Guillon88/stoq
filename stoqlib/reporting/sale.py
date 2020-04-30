@@ -43,7 +43,7 @@ class SaleOrderReport(HTMLReport):
 
     template_filename = 'sale/sale.html'
     title = _("Sale Order")
-    complete_header = False
+    complete_header = True
 
     def __init__(self, filename, order):
         self.order = order
@@ -159,7 +159,7 @@ class SalesPersonReport(TableReport):
         return columns
 
     def get_row(self, obj):
-        data = [unicode(obj.identifier),
+        data = [str(obj.identifier),
                 get_formatted_price(obj.total_amount),
                 get_formatted_price(obj.payment_amount),
                 get_formatted_percentage(obj.commission_percentage),

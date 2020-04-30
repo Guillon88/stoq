@@ -1,13 +1,13 @@
 dialog: InitialStockDialog
-GtkVBox(toplevel):
+GtkBox(vbox1, orientation=vertical):
   GtkAlignment(alignment1, fill=True):
-    GtkHBox(hbox1):
+    GtkBox(hbox1, orientation=horizontal):
       GtkLabel(label1, fill=True): 'Branch:'
       ProxyComboEntry(branch, fill=True):
         item: 'Moda Stoq', selected
         item: 'Stoq Elite Fashion'
   GtkEventBox(on_slave_holder, expand=True, fill=True): slave ListSlave is attached
-    kiwi+ui+listdialog+ListContainer(listcontainer):
+    ListContainer(toplevel):
       ObjectList(storables, expand=True, fill=True):
         column: title='Code'
         column: title='Barcode'
@@ -17,8 +17,8 @@ GtkVBox(toplevel):
         column: title='Model', hidden
         column: title='Initial Stock'
         column: title='Unit Cost'
-        row: u'100', u'0000000', u'', u'desc', None, None, 0, <currency $15>
-      GtkVBox(fill=True):
+        row: '100', '0000000', '', 'desc', None, None, 0, <currency $15>
+      GtkBox(orientation=vertical, fill=True):
         GtkButton(fill=True): 'gtk-add', hidden
         GtkButton(fill=True): 'gtk-remove', hidden, insensitive
         GtkButton(fill=True): 'gtk-edit', hidden, insensitive

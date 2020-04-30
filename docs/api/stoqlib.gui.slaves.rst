@@ -65,10 +65,10 @@ slaves Package
     :undoc-members:
     :show-inheritance:
 
-:mod:`imageslaveslave` Module
------------------------------
+:mod:`imageslave` Module
+------------------------
 
-.. automodule:: stoqlib.gui.slaves.imageslaveslave
+.. automodule:: stoqlib.gui.slaves.imageslave
     :members:
     :undoc-members:
     :show-inheritance:
@@ -133,6 +133,14 @@ slaves Package
 ---------------------------
 
 .. automodule:: stoqlib.gui.slaves.sellableslave
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`serviceslave` Module
+--------------------------
+
+.. automodule:: stoqlib.gui.slaves.serviceslave
     :members:
     :undoc-members:
     :show-inheritance:

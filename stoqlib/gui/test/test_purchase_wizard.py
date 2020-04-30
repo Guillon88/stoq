@@ -77,7 +77,8 @@ class TestPurchaseWizard(GUITest):
         with self.sysparam(MANDATORY_CHECK_NUMBER=True):
             self.wizard = PurchaseWizard(self.store)
             purchase_branch = self.create_branch()
-            purchase_order = PurchaseOrder(branch=purchase_branch)
+            purchase_order = PurchaseOrder(branch=purchase_branch, station=self.current_station,
+                                           store=self.store)
             sellable = self.create_sellable()
             purchase_order.add_item(sellable=sellable)
             self.wizard.model.identifier = 12345
@@ -107,9 +108,9 @@ class TestPurchaseWizard(GUITest):
 
         wizard = PurchaseWizard(self.store)
         step = wizard.get_current_step()
-        self.assertEquals(step.edit_supplier.get_sensitive(), False)
+        self.assertEqual(step.edit_supplier.get_sensitive(), False)
         step.supplier.set_text('Invalid supplier')
-        self.assertEquals(step.edit_supplier.get_sensitive(), False)
+        self.assertEqual(step.edit_supplier.get_sensitive(), False)
 
         # Activating the suppliers back
         for supplier in suppliers:
@@ -122,7 +123,7 @@ class TestPurchaseWizard(GUITest):
         self.wizard = PurchaseWizard(self.store, purchase_order)
         start_step = self.wizard.get_current_step()
         start_step.open_date.update(None)
-        self.assertEquals(start_step.open_date.mandatory, True)
+        self.assertEqual(start_step.open_date.mandatory, True)
         self.assertNotSensitive(self.wizard, ['next_button'])
 
     def test_create_and_receive(self):
@@ -159,6 +160,7 @@ class TestPurchaseWizard(GUITest):
 
             receive = self.wizard.receiving_model
             models.append(receive)
+            models.append(receive.receiving_invoice)
             models.extend(receive.get_items())
             for item in receive.get_items():
                 models.extend(

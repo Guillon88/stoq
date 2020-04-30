@@ -17,6 +17,14 @@ lib Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`asyncrequests` Module
+---------------------------
+
+.. automodule:: stoqlib.lib.asyncrequests
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 :mod:`appinfo` Module
 ---------------------
 
@@ -45,6 +53,14 @@ lib Package
 --------------------
 
 .. automodule:: stoqlib.lib.boleto
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`certutils` Module
+-----------------------
+
+.. automodule:: stoqlib.lib.certutils
     :members:
     :undoc-members:
     :show-inheritance:
@@ -177,6 +193,14 @@ lib Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`filizola` Module
+----------------------
+
+.. automodule:: stoqlib.lib.filizola
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 :mod:`formatters` Module
 ------------------------
 
@@ -205,6 +229,14 @@ lib Package
 ---------------------
 
 .. automodule:: stoqlib.lib.invoice
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`imageutils` Module
+------------------------
+
+.. automodule:: stoqlib.lib.imageutils
     :members:
     :undoc-members:
     :show-inheritance:
@@ -297,6 +329,22 @@ lib Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`services` Module
+----------------------
+
+.. automodule:: stoqlib.lib.services
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`session` Module
+---------------------
+
+.. automodule:: stoqlib.lib.session
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 :mod:`settings` Module
 ----------------------
 
@@ -317,6 +365,14 @@ lib Package
 -------------------------------
 
 .. automodule:: stoqlib.lib.sintegragenerator
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`status` Module
+--------------------
+
+.. automodule:: stoqlib.lib.status
     :members:
     :undoc-members:
     :show-inheritance:
@@ -389,6 +445,14 @@ lib Package
 ------------------
 
 .. automodule:: stoqlib.lib.ibpt
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`xmlutils` Module
+----------------------
+
+.. automodule:: stoqlib.lib.xmlutils
     :members:
     :undoc-members:
     :show-inheritance:

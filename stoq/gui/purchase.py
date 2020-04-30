@@ -26,15 +26,15 @@
 import datetime
 from decimal import Decimal
 
-import pango
-import gtk
+from gi.repository import Gtk, Pango
 from kiwi.currency import currency
 from kiwi.python import all
+
 from stoqlib.api import api
 from stoqlib.domain.purchase import PurchaseOrder, PurchaseOrderView
 from stoqlib.enums import SearchFilterPosition
 from stoqlib.gui.dialogs.purchasedetails import PurchaseDetailsDialog
-from stoqlib.gui.dialogs.sellablepricedialog import SellablePriceDialog
+from stoqlib.gui.dialogs.sellabledialog import SellableMassEditorDialog
 from stoqlib.gui.dialogs.stockcostdialog import StockCostDialog
 from stoqlib.gui.dialogs.manufacturerdialog import ProductManufacturerDialog
 from stoqlib.gui.search.categorysearch import SellableCategorySearch
@@ -49,7 +49,6 @@ from stoqlib.gui.search.searchcolumns import IdentifierColumn, SearchColumn
 from stoqlib.gui.search.searchfilters import ComboSearchFilter, DateSearchFilter
 from stoqlib.gui.search.sellableunitsearch import SellableUnitSearch
 from stoqlib.gui.search.servicesearch import ServiceSearch
-from stoqlib.gui.stockicons import (STOQ_PRODUCTS, STOQ_SUPPLIERS)
 from stoqlib.gui.utils.keybindings import get_accels
 from stoqlib.gui.wizards.consignmentwizard import (ConsignmentWizard,
                                                    CloseInConsignmentWizard)
@@ -58,8 +57,10 @@ from stoqlib.gui.wizards.purchasefinishwizard import PurchaseFinishWizard
 from stoqlib.gui.wizards.purchasequotewizard import (QuotePurchaseWizard,
                                                      ReceiveQuoteWizard)
 from stoqlib.gui.wizards.purchasewizard import PurchaseWizard
+from stoqlib.gui.wizards.reconciliationwizard import PurchaseReconciliationWizard
+from stoqlib.lib.filizola import generate_filizola_file
 from stoqlib.lib.formatters import format_quantity
-from stoqlib.lib.message import warning, yesno
+from stoqlib.lib.message import warning, yesno, info
 from stoqlib.lib.permissions import PermissionManager
 from stoqlib.lib.translation import stoqlib_ngettext, stoqlib_gettext as _
 from stoqlib.reporting.purchase import PurchaseReport
@@ -68,8 +69,6 @@ from stoq.gui.shell.shellapp import ShellApp
 
 
 class PurchaseApp(ShellApp):
-
-    # TODO: Change all widget.set_sensitive to self.set_sensitive([widget])
 
     app_title = _('Purchase')
     gladefile = "purchase"
@@ -93,10 +92,10 @@ class PurchaseApp(ShellApp):
         actions = [
             # File
             ("OrderMenu", None, _("Order")),
-            ("NewOrder", gtk.STOCK_NEW, _("Order..."),
+            ("NewOrder", Gtk.STOCK_NEW, _("Order..."),
              group.get('new_order'),
              _("Create a new purchase order")),
-            ("NewQuote", gtk.STOCK_INDEX, _("Quote..."),
+            ("NewQuote", Gtk.STOCK_INDEX, _("Quote..."),
              group.get('new_quote'),
              _("Create a new purchase quote")),
             ("NewConsignment", None, _("Consignment..."),
@@ -105,7 +104,10 @@ class PurchaseApp(ShellApp):
             ("NewProduct", None, _("Product..."),
              group.get('new_product'),
              _("Create a new product")),
+            ('Reconciliation', None, _('Purchase reconciliation...'),
+             group.get('new_reconciliation')),
             ("CloseInConsignment", None, _("Close consigment...")),
+            ("ExportFilizola", None, _("Export Filizola File...")),
 
             # Edit
             ("StockCost", None, _("_Stock cost...")),
@@ -113,7 +115,7 @@ class PurchaseApp(ShellApp):
             # Search
             ("Categories", None, _("Categories..."),
              group.get("search_categories")),
-            ("Products", STOQ_PRODUCTS, _("Products..."),
+            ("Products", None, _("Products..."),
              group.get("search_products")),
             ("ProductUnits", None, _("Product units..."),
              group.get("search_product_units")),
@@ -125,7 +127,7 @@ class PurchaseApp(ShellApp):
              group.get("search_stock_items")),
             ("SearchClosedStockItems", None, _("Closed stock items..."),
              group.get("search_closed_stock_items")),
-            ("Suppliers", STOQ_SUPPLIERS, _("Suppliers..."),
+            ("Suppliers", None, _("Suppliers..."),
              group.get("search_suppliers")),
             ("Transporter", None, _("Transporters..."),
              group.get("search_transporters")),
@@ -141,63 +143,64 @@ class PurchaseApp(ShellApp):
              group.get("search_consignment_items")),
 
             # Order
-            ("Confirm", gtk.STOCK_APPLY, _("Confirm..."),
+            ("Confirm", Gtk.STOCK_APPLY, _("Confirm..."),
              group.get('order_confirm'),
              _("Confirm the selected order(s), marking it as sent to the "
                "supplier")),
-            ("Cancel", gtk.STOCK_CANCEL, _("Cancel..."),
+            ("Cancel", Gtk.STOCK_CANCEL, _("Cancel..."),
              group.get('order_cancel'),
              _("Cancel the selected order")),
-            ("Edit", gtk.STOCK_EDIT, _("Edit..."),
+            ("Edit", Gtk.STOCK_EDIT, _("Edit..."),
              group.get('order_edit'),
              _("Edit the selected order, allowing you to change it's details")),
-            ("Details", gtk.STOCK_INFO, _("Details..."),
+            ("Details", Gtk.STOCK_INFO, _("Details..."),
              group.get('order_details'),
              _("Show details of the selected order")),
-            ("Finish", gtk.STOCK_APPLY, _("Finish..."),
+            ("Finish", Gtk.STOCK_APPLY, _("Finish..."),
              group.get('order_finish'),
              _('Complete the selected partially received order')),
         ]
 
-        self.purchase_ui = self.add_ui_actions("", actions,
-                                               filename="purchase.xml")
-
-        self.Confirm.props.is_important = True
-
-        self.NewOrder.set_short_label(_("New order"))
-        self.NewQuote.set_short_label(_("New quote"))
-        self.Products.set_short_label(_("Products"))
-        self.Suppliers.set_short_label(_("Suppliers"))
-        self.Confirm.set_short_label(_("Confirm"))
-        self.Cancel.set_short_label(_("Cancel"))
-        self.Finish.set_short_label(_("Finish"))
-        self.Edit.set_short_label(_("Edit"))
-        self.Details.set_short_label(_("Details"))
-
+        self.purchase_ui = self.add_ui_actions(actions)
         self.set_help_section(_("Purchase help"), 'app-purchase')
-        self.popup = self.uimanager.get_widget('/PurchaseSelection')
 
     def create_ui(self):
         if api.sysparam.get_bool('SMART_LIST_LOADING'):
             self.search.enable_lazy_search()
 
+        self.window.add_print_items()
+        self.window.add_export_items([self.ExportFilizola])
+        self.window.add_extra_items([self.CloseInConsignment, self.StockCost])
+
         self.window.add_new_items([
             self.NewOrder,
             self.NewQuote,
             self.NewProduct,
-            self.NewConsignment])
+            self.NewConsignment,
+            self.Reconciliation])
         self.window.add_search_items([
             self.Products,
+            self.Services,
+            self.Categories,
+            self.ProductUnits,
+            self.ProductManufacturers,
+            self.SearchStockItems,
+            self.SearchClosedStockItems,
+            self.Transporter,
             self.Suppliers,
             self.SearchQuotes,
-            self.Services])
+            self.SearchPurchasedItems,
+            self.ProductsSoldSearch,
+            self.ProductsPriceSearch,
+            self.SearchInConsignmentItems,
+        ])
         self.search.set_summary_label(column='total',
                                       label=('<b>%s</b>' %
                                              api.escape(_('Orders total:'))),
                                       format='<b>%s</b>',
                                       parent=self.get_statusbar_message_area())
-        self.results.set_selection_mode(gtk.SELECTION_MULTIPLE)
-        self.Confirm.set_sensitive(False)
+        self.results.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
+        self.set_sensitive([self.Confirm], False)
 
         self._inventory_widgets = [self.NewConsignment,
                                    self.CloseInConsignment]
@@ -205,29 +208,25 @@ class PurchaseApp(ShellApp):
                                       lambda: not self.has_open_inventory())
 
     def activate(self, refresh=True):
-        self.window.NewToolItem.set_tooltip(
-            _("Create a new purchase order"))
-        self.window.SearchToolItem.set_tooltip(
-            _("Search for purchase orders"))
-        self.window.Print.set_tooltip(
-            _("Print a report of these orders"))
         if refresh:
             self.refresh()
 
         self._update_view()
-        self.results.set_selection_mode(gtk.SELECTION_MULTIPLE)
+        self.results.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         self.check_open_inventory()
 
         self.search.focus_search_entry()
 
-    def deactivate(self):
-        self.uimanager.remove_ui(self.purchase_ui)
+    def get_domain_options(self):
+        options = [
+            ('fa-info-circle-symbolic', _('Details'), 'purchase.Details', True),
+            ('fa-edit-symbolic', _('Edit'), 'purchase.Edit', True),
+            ('fa-check-symbolic', _('Confirm'), 'purchase.Confirm', True),
+            ('fa-ban-symbolic', _('Cancel'), 'purchase.Cancel', True),
+            ('', _('Finish'), 'purchase.Finish', False),
+        ]
 
-    def new_activate(self):
-        self._new_order()
-
-    def search_activate(self):
-        self.run_dialog(ProductSearch, self.store)
+        return options
 
     def search_completed(self, results, states):
         if len(results):
@@ -248,7 +247,8 @@ class PurchaseApp(ShellApp):
         self.set_sensitive(self._inventory_widgets, False)
 
     def create_filters(self):
-        self.set_text_field_columns(['supplier_name', 'identifier_str'])
+        self.set_text_field_columns(['supplier_name', 'identifier_str',
+                                     'invoice_numbers'])
         self.status_filter = ComboSearchFilter(_('Show orders'),
                                                self._get_status_values())
         self.add_filter(self.status_filter, SearchFilterPosition.TOP, ['status'])
@@ -260,13 +260,19 @@ class PurchaseApp(ShellApp):
                              data_type=str, search_attribute='status',
                              valid_values=self._get_status_values(),
                              visible=False),
+                SearchColumn('invoice_numbers', title=_('Invoice'), width=100,
+                             data_type=str, visible=False),
                 SearchColumn('open_date', title=_('Opened'),
                              long_title=_('Date Opened'), width=90,
                              data_type=datetime.date, sorted=True,
-                             order=gtk.SORT_DESCENDING),
+                             order=Gtk.SortType.DESCENDING),
+                SearchColumn('receival_date', title=_('Receival'),
+                             long_title=_('Received date'), width=90,
+                             data_type=datetime.date,
+                             order=Gtk.SortType.DESCENDING),
                 SearchColumn('supplier_name', title=_('Supplier'),
                              data_type=str, searchable=True, expand=True,
-                             ellipsize=pango.ELLIPSIZE_END),
+                             ellipsize=Pango.EllipsizeMode.END),
                 SearchColumn('ordered_quantity', title=_('Ordered'),
                              data_type=Decimal, width=90,
                              format_func=format_quantity),
@@ -297,8 +303,7 @@ class PurchaseApp(ShellApp):
         self._update_view()
 
     def _update_list_aware_widgets(self, has_items):
-        for widget in (self.Edit, self.Details):
-            widget.set_sensitive(has_items)
+        self.set_sensitive([self.Edit, self.Details], has_items)
 
     def _update_view(self):
         self._update_list_aware_widgets(len(self.results))
@@ -322,11 +327,11 @@ class PurchaseApp(ShellApp):
             can_finish = (selection[0].status == PurchaseOrder.ORDER_CONFIRMED and
                           selection[0].received_quantity > 0)
 
-        self.Cancel.set_sensitive(can_cancel)
-        self.Edit.set_sensitive(can_edit)
-        self.Confirm.set_sensitive(can_send_supplier)
-        self.Details.set_sensitive(one_selected)
-        self.Finish.set_sensitive(can_finish)
+        self.set_sensitive([self.Cancel], can_cancel)
+        self.set_sensitive([self.Edit], can_edit)
+        self.set_sensitive([self.Confirm], can_send_supplier)
+        self.set_sensitive([self.Details], one_selected)
+        self.set_sensitive([self.Finish], can_finish)
 
     def _new_order(self, order=None, edit_mode=False):
         with api.new_store() as store:
@@ -377,13 +382,13 @@ class PurchaseApp(ShellApp):
         confirm_label = stoqlib_ngettext(_("Confirm order"),
                                          _("Confirm orders"),
                                          len(valid_order_views))
-        if not yesno(msg, gtk.RESPONSE_YES, confirm_label, _("Don't confirm")):
+        if not yesno(msg, Gtk.ResponseType.YES, confirm_label, _("Don't confirm")):
             return
 
         with api.new_store() as store:
             for order_view in valid_order_views:
                 order = store.fetch(order_view.purchase)
-                order.confirm()
+                order.confirm(api.get_current_user(store))
         self.refresh()
         self.select_result(orders)
 
@@ -409,7 +414,7 @@ class PurchaseApp(ShellApp):
         select_label = stoqlib_ngettext(_('The selected order will be cancelled.'),
                                         _('The selected orders will be cancelled.'),
                                         len(order_views))
-        if not yesno(select_label, gtk.RESPONSE_YES,
+        if not yesno(select_label, Gtk.ResponseType.YES,
                      cancel_label, _("Don't cancel")):
             return
         with api.new_store() as store:
@@ -452,9 +457,6 @@ class PurchaseApp(ShellApp):
     # Kiwi Callbacks
     #
 
-    def on_results__right_click(self, results, result, event):
-        self.popup.popup(None, None, None, event.button, event.time)
-
     def on_results__row_activated(self, klist, purchase_order_view):
         self._run_details_dialog()
 
@@ -485,6 +487,10 @@ class PurchaseApp(ShellApp):
 
     def on_Finish__activate(self, action):
         self._finish_order()
+
+    def on_ExportFilizola__activate(self, action):
+        dest = generate_filizola_file(self.store)
+        info(_('File saved in %s') % dest)
 
     # Order
 
@@ -539,13 +545,8 @@ class PurchaseApp(ShellApp):
         self.run_dialog(ProductsSoldSearch, self.store)
 
     def on_ProductsPriceSearch__activate(self, action):
-        from stoqlib.domain.person import ClientCategory
-        if not self.store.find(ClientCategory).count():
-            warning(_("Can't use prices editor without client categories"))
-            return
-
         with api.new_store() as store:
-            self.run_dialog(SellablePriceDialog, store)
+            self.run_dialog(SellableMassEditorDialog, store)
 
     # Toolitem
 
@@ -560,3 +561,7 @@ class PurchaseApp(ShellApp):
 
     def on_NewConsignment__activate(self, action):
         self._new_consignment()
+
+    def on_Reconciliation__activate(self, button):
+        with api.new_store() as store:
+            self.run_dialog(PurchaseReconciliationWizard, store)

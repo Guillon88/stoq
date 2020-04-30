@@ -26,7 +26,7 @@
 
 import operator
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 from kiwi.python import Settable
 from kiwi.ui.objectlist import ObjectList, Column
@@ -66,7 +66,7 @@ class InvoiceLayoutEditor(BaseEditor):
         BaseEditor.__init__(self, store, model)
         self.enable_normal_window()
         self.text.set_sensitive(False)
-        self.preview_button = self.add_button(stock=gtk.STOCK_PRINT_PREVIEW)
+        self.preview_button = self.add_button(stock=Gtk.STOCK_PRINT_PREVIEW)
         self.preview_button.connect('clicked', self._on_preview_button__clicked)
 
     def create_model(self, store):
@@ -125,7 +125,7 @@ class InvoiceLayoutEditor(BaseEditor):
         self._print_preview()
 
     def on_text__changed(self, widget):
-        text = unicode(widget.get_text())
+        text = str(widget.get_text())
 
         self._selected_field.model.content = text
         self._selected_field.update_label(text)
@@ -138,11 +138,13 @@ class InvoiceLayoutEditor(BaseEditor):
         self.grid = InvoiceGrid('Monospace 8',
                                 self.model.width,
                                 self.model.height)
+        self.grid.set_hadjustment(self.sw.get_hadjustment())
+        self.grid.set_vadjustment(self.sw.get_vadjustment())
         self.grid.connect('field-added', self._on_grid__field_added)
         self.grid.connect('field-removed', self._on_grid__field_removed)
         self.grid.connect('selection-changed',
                           self._on_grid__selection_changed)
-        self.sw.add_with_viewport(self.grid)
+        self.sw.add(self.grid)
         self.grid.show()
 
     def _create_field_list(self):
@@ -162,7 +164,7 @@ class InvoiceLayoutEditor(BaseEditor):
                          category=invoice_field.category))
             descriptions[invoice_field.name] = invoice_field.description
         self._field_descriptions = descriptions
-        self.left_vbox.pack_end(items, True, True)
+        self.left_vbox.pack_end(items, True, True, 0)
         items.show()
 
     def _field_changed(self, grid_field):

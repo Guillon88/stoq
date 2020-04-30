@@ -22,9 +22,17 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
+import collections
+
+from kiwi.ui.forms import BoolField, ChoiceField, TextField
+from kiwi.python import Settable
+
+from stoqlib.api import api
+from stoqlib.domain.person import Supplier
 from stoqlib.domain.workorder import WorkOrder, WorkOrderHistory
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.gui.templates.persontemplate import BasePersonRoleEditor
+from stoqlib.lib.decorators import cached_property
 from stoqlib.lib.translation import stoqlib_gettext
 
 from .opticaldomain import OpticalMedic
@@ -92,3 +100,41 @@ class OpticalWorkOrderEditor(BaseEditor):
         WorkOrderHistory.add_entry(
             self.store, self.model, what=_(u"Optical details"),
             notes=_(u"Optical details updated..."))
+
+
+class OpticalSupplierEditor(BaseEditor):
+    """A simple editor to set the supplier and supplier order"""
+
+    model_type = Settable
+    title = _('Supplier information')
+
+    def __init__(self, store, order):
+        self.items = [(i.sellable.get_description(), i) for i in order.get_items()
+                      if not i.purchase_item]
+        super(OpticalSupplierEditor, self).__init__(store)
+
+    @cached_property()
+    def fields(self):
+        suppliers = api.for_combo(self.store.find(Supplier), empty='')
+
+        return collections.OrderedDict(
+            item=ChoiceField(_('Item'), mandatory=True, use_entry=True, proxy=True,
+                             values=self.items),
+            # FIXME change to an appropiate name
+            supplier=ChoiceField(_('Supplier'), mandatory=True, use_entry=True,
+                                 proxy=True, values=suppliers),
+            supplier_order=TextField(_('Supplier Order'), mandatory=True, proxy=True),
+            is_freebie=BoolField(_('Freebie'), proxy=True),
+        )
+    confirm_widgets = ('supplier_order', )
+
+    #
+    # BaseEditor Hooks
+    #
+
+    def create_model(self, store):
+        item = None
+        # If there is only one item, select it.
+        if len(self.items) == 1:
+            item = self.items[0][1]
+        return Settable(supplier=None, supplier_order="", item=item, is_freebie=False)

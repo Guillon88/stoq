@@ -17,19 +17,20 @@ class TestSintegraGenerator(DomainTest):
 
     def test_registers(self):
         order = self.create_receiving_order()
+        receiving_invoice = order.receiving_invoice
         order.receival_date = localdate(2007, 6, 1)
-        order.discount_value = 10
+        receiving_invoice.discount_value = 10
         # order.purchase.discount_value = 5
         # order.purchase.surcharge_value = 8
         # order.surcharge_value = 15
-        order.ipi_total = 10
-        order.freight_total = 6
-        order.secure_value = 6
-        order.expense_value = 12
+        receiving_invoice.ipi_total = 10
+        receiving_invoice.freight_total = 6
+        receiving_invoice.secure_value = 6
+        receiving_invoice.expense_value = 12
         supplier = self.create_supplier()
         company = supplier.person.has_individual_or_company_facets()
         company.state_registry = u'103238426117'
-        order.supplier = supplier
+        receiving_invoice.supplier = supplier
         employee = self.create_employee()
         branch = get_current_branch(self.store)
         branch.manager = employee
@@ -53,8 +54,8 @@ class TestSintegraGenerator(DomainTest):
             store=self.store)
         self.create_receiving_order_item(order, sellable=sellable2)
 
-        purchase.confirm()
-        order.confirm()
+        purchase.confirm(self.current_user)
+        order.confirm(self.current_user)
 
         sellable.code = u'9999'
         sellable2.code = u'10000'
@@ -74,13 +75,13 @@ class TestSintegraGenerator(DomainTest):
 
         self.create_storable(product, get_current_branch(self.store), stock=100)
 
-        sale.order()
+        sale.order(self.current_user)
 
         method = PaymentMethod.get_by_name(self.store, u'money')
-        method.create_payment(Payment.TYPE_IN, sale.group, sale.branch,
+        method.create_payment(sale.branch, sale.station, Payment.TYPE_IN, sale.group,
                               sale.get_sale_subtotal())
 
-        sale.confirm()
+        sale.confirm(self.current_user)
         sale.group.pay()
         sale.close_date = localdate(2007, 6, 10)
         sale.confirm_date = localdate(2007, 6, 10)
@@ -99,7 +100,7 @@ class TestSintegraGenerator(DomainTest):
         inventory_item.reason = u'Test'
         inventory_item.actual_quantity = 99
         inventory_item.counted_quantity = 99
-        inventory_item.adjust(invoice_number=999)
+        inventory_item.adjust(self.current_user, invoice_number=999)
         inventory.close()
         inventory.close_date = localdate(2007, 6, 15)
 

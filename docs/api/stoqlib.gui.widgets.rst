@@ -33,14 +33,6 @@ widgets Package
     :undoc-members:
     :show-inheritance:
 
-:mod:`hintedentry` Module
--------------------------
-
-.. automodule:: stoqlib.gui.widgets.hintedentry
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 :mod:`kanbanview` Module
 ------------------------
 
@@ -61,6 +53,14 @@ widgets Package
 ----------------------------
 
 .. automodule:: stoqlib.gui.widgets.notebookbutton
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`notification` Module
+--------------------------
+
+.. automodule:: stoqlib.gui.widgets.notification
     :members:
     :undoc-members:
     :show-inheritance:
@@ -97,6 +97,14 @@ widgets Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`section` Module
+---------------------
+
+.. automodule:: stoqlib.gui.widgets.section
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 :mod:`splash` Module
 --------------------
 
@@ -105,18 +113,18 @@ widgets Package
     :undoc-members:
     :show-inheritance:
 
-:mod:`toolmenuaction` Module
-----------------------------
-
-.. automodule:: stoqlib.gui.widgets.toolmenuaction
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 :mod:`webview` Module
 ---------------------
 
 .. automodule:: stoqlib.gui.widgets.webview
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`workorder` Module
+-----------------------
+
+.. automodule:: stoqlib.gui.widgets.workorder
     :members:
     :undoc-members:
     :show-inheritance:

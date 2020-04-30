@@ -22,7 +22,7 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
-import gobject
+from gi.repository import GObject
 from kiwi.ui.objectlist import ObjectList, ObjectTree
 from kiwi.utils import gsignal
 from zope.interface import implementer
@@ -56,7 +56,7 @@ class SearchResultListView(ObjectList):
     __gtype_name__ = 'SearchResultListView'
 
     gsignal("item-activated", object)
-    gsignal("item-popup-menu", object, object)
+    gsignal("item-popup-menu", object, object, object)
 
     def __init__(self):
         self._lazy_updater = None
@@ -105,6 +105,9 @@ class SearchResultListView(ObjectList):
     def get_selected_item(self):
         return self.get_selected()
 
+    def lazy_search_enabled(self):
+        return self._lazy_updater is not None
+
     #
     # Callbacks
     #
@@ -116,9 +119,9 @@ class SearchResultListView(ObjectList):
         self.emit('item-activated', item)
 
     def _on__right_click(self, object_list, results, event):
-        self.emit('item-popup-menu', results, event)
+        self.emit('item-popup-menu', object_list, results, event)
 
-gobject.type_register(SearchResultListView)
+GObject.type_register(SearchResultListView)
 
 
 # Used by SellableCategorySearch
@@ -129,7 +132,7 @@ class SearchResultTreeView(ObjectTree):
     __gtype_name__ = 'SearchResultTreeView'
 
     gsignal("item-activated", object)
-    gsignal("item-popup-menu", object, object)
+    gsignal("item-popup-menu", object, object, object)
 
     def __init__(self):
         ObjectTree.__init__(self)
@@ -191,4 +194,4 @@ class SearchResultTreeView(ObjectTree):
         self.emit('item-activated', item)
 
     def _on__right_click(self, object_list, results, event):
-        self.emit('item-popup-menu', results, event)
+        self.emit('item-popup-menu', object_list, results, event)

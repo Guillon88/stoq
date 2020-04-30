@@ -38,6 +38,7 @@ class TestDeliveryEditor(GUITest):
         sale = self.create_sale(client=client)
         self.add_product(sale)
         self.add_product(sale)
+        delivery.invoice = sale.invoice
 
         for i, item in enumerate(sale.get_items()):
             item.sellable.description = u"Delivery item %d" % (i + 1)
@@ -59,34 +60,34 @@ class TestDeliveryEditor(GUITest):
         self.assertEqual(delivery.status, Delivery.STATUS_INITIAL)
         self.assertSensitive(editor,
                              ['transporter_id', 'address',
-                              'was_received_check', 'was_delivered_check'])
+                              'is_received_check', 'is_sent_check'])
         self.assertNotSensitive(editor,
-                                ['deliver_date', 'tracking_code',
+                                ['send_date', 'tracking_code',
                                  'receive_date'])
-        self.assertFalse(editor.was_delivered_check.get_active())
-        self.assertFalse(editor.was_received_check.get_active())
+        self.assertFalse(editor.is_sent_check.get_active())
+        self.assertFalse(editor.is_received_check.get_active())
 
         # Sent state. Should not be possible to change
         # transporter and address anymore
-        editor.was_delivered_check.set_active(True)
+        editor.is_sent_check.set_active(True)
         self.assertEqual(delivery.status, Delivery.STATUS_SENT)
         self.assertSensitive(editor,
-                             ['was_received_check', 'deliver_date', 'tracking_code',
-                              'was_received_check', 'was_delivered_check'])
+                             ['is_received_check', 'send_date', 'tracking_code',
+                              'is_received_check', 'is_sent_check'])
         self.assertNotSensitive(editor,
                                 ['transporter_id', 'address', 'receive_date'])
 
         # Received state. Like sent above, but in addition, should
-        # not be possible to unmark was_delivered_check
-        editor.was_received_check.set_active(True)
+        # not be possible to unmark is_sent_check
+        editor.is_received_check.set_active(True)
         self.assertEqual(delivery.status, Delivery.STATUS_RECEIVED)
         self.assertSensitive(editor,
-                             ['was_received_check', 'deliver_date',
+                             ['is_received_check', 'send_date',
                               'receive_date', 'tracking_code',
-                              'was_received_check'])
+                              'is_received_check'])
         self.assertNotSensitive(editor,
                                 ['transporter_id', 'address',
-                                 'was_delivered_check'])
+                                 'is_sent_check'])
 
 
 class TestCreateDeliveryEditor(GUITest):
@@ -99,9 +100,9 @@ class TestCreateDeliveryEditor(GUITest):
             sale_items.append(sale_item)
         return sale_items
 
-    def test_create(self):
+    def test_create_recipient_client(self):
         sale_items = self._create_sale_items()
-        editor = CreateDeliveryEditor(self.store, sale_items=sale_items)
+        editor = CreateDeliveryEditor(self.store, items=sale_items)
         self.check_editor(editor, 'editor-createdelivery-create')
 
     def test_on_client_changed(self):
@@ -111,27 +112,71 @@ class TestCreateDeliveryEditor(GUITest):
         addres2 = self.create_address(person=client2.person)
         addres2.street = u"Mainstreet02"
         sale_items = self._create_sale_items()
-        editor = CreateDeliveryEditor(self.store, sale_items=sale_items)
+        editor = CreateDeliveryEditor(self.store, items=sale_items)
 
         # No client
-        no_client = editor.client_id.get_selected_data()
-        self.assertEqual(no_client, None)
+        self.assertIsNone(editor.recipient.read())
         no_address = editor.address.get_selected_data()
         self.assertEqual(no_address, None)
         self.check_editor(editor, 'editor-createdelivery-noclient')
 
         # Select a client
-        editor.client_id.select(client1.id)
-        first_client = editor.client_id.get_selected_data()
-        self.assertEqual(first_client, client1.id)
+        editor.fields['recipient'].set_value(client1)
+        first_client = editor.recipient.read()
+        self.assertEqual(first_client, client1)
         first_address = editor.address.get_selected_data()
         self.assertEqual(first_address, address1)
         self.check_editor(editor, 'editor-createdelivery-client')
 
         # Change client
-        editor.client_id.select(client2.id)
-        new_client = editor.client_id.get_selected_data()
-        self.assertNotEquals(first_client, new_client)
+        editor.fields['recipient'].set_value(client2)
+        new_client = editor.recipient.read()
+        self.assertNotEqual(first_client, new_client)
         new_address = editor.address.get_selected_data()
-        self.assertNotEquals(first_address, new_address)
+        self.assertNotEqual(first_address, new_address)
         self.check_editor(editor, 'editor-createdelivery-clientchanged')
+
+    def test_vehicle_plate_validation(self):
+        sale_items = self._create_sale_items()
+        editor = CreateDeliveryEditor(self.store, items=sale_items)
+
+        # Invalid cases
+        # String with less than 6 characters
+        editor.vehicle_license_plate.set_text('FOO21')
+        self.assertInvalid(editor, ['vehicle_license_plate'])
+
+        # String with more than 7 characters
+        editor.vehicle_license_plate.set_text('FOO20000')
+        self.assertInvalid(editor, ['vehicle_license_plate'])
+
+        # String starting with number
+        editor.vehicle_license_plate.set_text('2FOO20')
+        self.assertInvalid(editor, ['vehicle_license_plate'])
+
+        # String ending with a non-number
+        editor.vehicle_license_plate.set_text('FOO200r')
+        self.assertInvalid(editor, ['vehicle_license_plate'])
+
+        # Valid cases
+        # Uppercase
+        editor.vehicle_license_plate.set_text('FOO201')
+        self.assertValid(editor, ['vehicle_license_plate'])
+
+        # Lowcase
+        editor.vehicle_license_plate.set_text('foo201')
+        self.assertValid(editor, ['vehicle_license_plate'])
+
+        # Mixed Uppercase anda lowcase
+        editor.vehicle_license_plate.set_text('Foo201')
+        self.assertValid(editor, ['vehicle_license_plate'])
+
+        # 2 a-zA-Z characters followed by 4 numeric characters
+        editor.vehicle_license_plate.set_text('Fo2018')
+        self.assertValid(editor, ['vehicle_license_plate'])
+
+        # 4 a-zA-Z characters followed by 3 numeric characters
+        editor.vehicle_license_plate.set_text('Fooo201')
+        self.assertValid(editor, ['vehicle_license_plate'])
+
+        editor.vehicle_license_plate.set_text('FOO201')
+        self.assertValid(editor, ['vehicle_license_plate'])

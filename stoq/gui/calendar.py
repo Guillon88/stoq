@@ -27,12 +27,14 @@ stoq/gui/calendar.py:
     Calendar application.
 """
 
-import urllib
+import urllib.request
+import urllib.parse
+import urllib.error
 
 from dateutil.parser import parse
 from dateutil.relativedelta import MO, relativedelta
 from dateutil.tz import tzlocal, tzutc
-import gtk
+from gi.repository import Gtk, GLib
 
 from stoqlib.api import api
 from stoqlib.domain.person import Client
@@ -40,18 +42,17 @@ from stoqlib.gui.editors.callseditor import CallsEditor
 from stoqlib.gui.editors.paymenteditor import (InPaymentEditor,
                                                OutPaymentEditor)
 from stoqlib.gui.editors.workordereditor import WorkOrderEditor
-from stoqlib.gui.stockicons import (STOQ_CALENDAR_TODAY,
-                                    STOQ_CALENDAR_WEEK,
-                                    STOQ_CALENDAR_MONTH,
-                                    STOQ_CALENDAR_LIST)
 from stoqlib.gui.utils.keybindings import get_accels
 from stoqlib.gui.widgets.webview import WebView
 from stoqlib.lib import dateutils
 from stoqlib.lib.daemonutils import start_daemon
 from stoqlib.lib.defaults import get_weekday_start
+from stoqlib.lib.threadutils import (threadit,
+                                     schedule_in_main_thread)
 from stoqlib.lib.translation import stoqlib_gettext as _
 
 from stoq.gui.shell.shellapp import ShellApp
+from stoq.gui.widgets import ButtonGroup
 
 
 def parse_javascript_date(jsdate):
@@ -78,8 +79,8 @@ class CalendarView(WebView):
         self._loaded = True
         view = self.get_view()
         view.connect('size-allocate', self._on_view__size_allocate)
-        x, y, width, height = view.get_allocation()
-        self._update_calendar_size(width, height)
+        rect = view.get_allocation()
+        self._update_calendar_size(rect.width, rect.height)
 
     def _startup(self):
         options = {}
@@ -137,7 +138,7 @@ class CalendarView(WebView):
 
         options['firstDay'] = firstday
         options['isRTL'] = (
-            gtk.widget_get_default_direction() == gtk.TEXT_DIR_RTL)
+            Gtk.Widget.get_default_direction() == Gtk.TextDirection.RTL)
         options['data'] = self._show_events
         options['loading_msg'] = _('Loading calendar content, please wait...')
         self.js_function_call('startup', options)
@@ -191,8 +192,7 @@ class CalendarView(WebView):
         self._load_finished()
 
     def _on_view__size_allocate(self, widget, req):
-        x, y, width, height = req
-        self._update_calendar_size(width, height)
+        self._update_calendar_size(req.width, req.height)
 
     #
     # WebView
@@ -202,8 +202,8 @@ class CalendarView(WebView):
         if kwargs['method'] == 'changeView':
             view = kwargs['view']
             if view == 'basicDay':
-                self.app.ViewDay.set_active(True)
-                jsdate = urllib.unquote(kwargs['date'])
+                self.app.day_button.set_active(True)
+                jsdate = urllib.parse.unquote(kwargs['date'])
                 date = parse_javascript_date(jsdate)
                 self._calendar_run('gotoDate', date.year, date.month, date.day)
     #
@@ -214,7 +214,7 @@ class CalendarView(WebView):
         self._daemon_uri = uri
 
     def load(self):
-        self._load_daemon_path('web/static/calendar-app.html')
+        self._load_daemon_path('static/calendar-app.html')
 
     def go_prev(self):
         self._calendar_run('prev')
@@ -259,19 +259,16 @@ class CalendarApp(ShellApp):
     def __init__(self, window, store=None):
         # Create this here because CalendarView will update it.
         # It will only be shown on create_ui though
-        self.date_label = gtk.Label('')
+        self.date_label = Gtk.Label(label='')
         self._calendar = CalendarView(self)
         ShellApp.__init__(self, window, store=store)
-        self._setup_daemon()
+        threadit(self._setup_daemon)
 
-    @api.async
     def _setup_daemon(self):
-        daemon = yield start_daemon()
-        self._calendar.set_daemon_uri(daemon.base_uri)
-
-        proxy = daemon.get_client()
-        yield proxy.callRemote('start_webservice')
-        self._calendar.load()
+        daemon = start_daemon()
+        assert daemon.running
+        self._calendar.set_daemon_uri(daemon.server_uri)
+        schedule_in_main_thread(self._calendar.load)
 
     #
     # ShellApp overrides
@@ -290,17 +287,14 @@ class CalendarApp(ShellApp):
             ('NewWorkOrder', None, _("Work order"),
              group.get('new_work_order'), _("Add a new work order")),
             # View
-            ('Back', gtk.STOCK_GO_BACK, _("Back"),
+            ('Back', Gtk.STOCK_GO_BACK, _("Back"),
              group.get('go_back'), _("Go back")),
-            ('Forward', gtk.STOCK_GO_FORWARD, _("Forward"),
+            ('Forward', Gtk.STOCK_GO_FORWARD, _("Forward"),
              group.get('go_forward'), _("Go forward")),
-            ('Today', STOQ_CALENDAR_TODAY, _("Show today"),
+            ('Today', None, _("Show today"),
              group.get('show_today'), _("Show today")),
-            ('CalendarEvents', None, _("Calendar events")),
-            ('CurrentView', None, _("Display view as")),
         ]
-        self.calendar_ui = self.add_ui_actions('', actions,
-                                               filename='calendar.xml')
+        self.calendar_ui = self.add_ui_actions(actions)
         self.set_help_section(_("Calendar help"), 'app-calendar')
 
         toggle_actions = [
@@ -317,8 +311,7 @@ class CalendarApp(ShellApp):
             ('WorkOrderEvents', None, _("Work orders"),
              None, _("Show work orders in the list")),
         ]
-        self.add_ui_actions('', toggle_actions, 'ToggleActions',
-                            'toggle')
+        self.add_ui_actions(toggle_actions, 'ToggleActions')
 
         events_info = dict(
             in_payments=(self.AccountsReceivableEvents, self.NewReceivable,
@@ -335,90 +328,82 @@ class CalendarApp(ShellApp):
         events = self._calendar.get_events()
         for event_name, value in events_info.items():
             view_action, new_action, app = value
-            view_action.props.active = events[event_name]
+            view_action.set_state(GLib.Variant.new_boolean(events[event_name]))
+
             # Disable feature if user does not have acces to required
             # application
             if not user.profile.check_app_permission(app):
-                view_action.props.active = False
-                view_action.set_sensitive(False)
+                view_action.set_state(GLib.Variant.new_boolean(False))
+                self.set_sensitive([view_action], False)
                 if new_action:
-                    new_action.set_sensitive(False)
+                    self.set_sensitive([new_action], False)
 
-            view_action.connect('notify::active', self._update_events)
+            view_action.connect('change-state', self._view_option_state_changed)
         self._update_events()
 
-        radio_actions = [
-            ('ViewMonth', STOQ_CALENDAR_MONTH, _("View as month"),
-             '', _("Show one month")),
-            ('ViewWeek', STOQ_CALENDAR_WEEK, _("View as week"),
-             '', _("Show one week")),
-            ('ViewDay', STOQ_CALENDAR_LIST, _("View as day"),
-             '', _("Show one day")),
-        ]
-        self.add_ui_actions('', radio_actions, 'RadioActions',
-                            'radio')
-        self.ViewMonth.set_short_label(_("Month"))
-        self.ViewWeek.set_short_label(_("Week"))
-        self.ViewDay.set_short_label(_("Day"))
-        self.ViewMonth.props.is_important = True
-        self.ViewWeek.props.is_important = True
-        self.ViewDay.props.is_important = True
-
-        view = api.user_settings.get('calendar-view', 'month')
-        if view == 'month':
-            self.ViewMonth.props.active = True
-        elif view == 'basicWeek':
-            self.ViewWeek.props.active = True
-        else:
-            self.ViewDay.props.active = True
-
     def create_ui(self):
+        self.window.add_extra_items([
+            self.ClientCallEvents,
+            self.ClientBirthdaysEvents,
+            self.AccountsPayableEvents,
+            self.AccountsReceivableEvents,
+            self.PurchaseEvents,
+            self.WorkOrderEvents
+        ], label=_('View'))
         self.window.add_new_items([self.NewClientCall,
                                    self.NewPayable,
-                                   self.NewReceivable])
+                                   self.NewReceivable, self.NewWorkOrder])
 
         # Reparent the toolbar, to show the date next to it.
-        self.hbox = gtk.HBox()
-        toolbar = self.uimanager.get_widget('/toolbar')
-        toolbar.reparent(self.hbox)
+        self.hbox = Gtk.HBox()
 
-        # A label to show the current calendar date.
-        self.date_label.show()
-        self.hbox.pack_start(self.date_label, False, False, 6)
-        self.hbox.show()
+        self.date_label.set_xalign(0)
 
-        self.main_vbox.pack_start(self.hbox, False, False)
+        self.main_vbox.pack_start(self.hbox, False, False, 6)
+        self.main_vbox.pack_start(self._calendar, True, True, 0)
 
-        self.main_vbox.pack_start(self._calendar)
-        self._calendar.show()
-        self.window.Print.set_tooltip(_("Print this calendar"))
+        self.nav_header = ButtonGroup([
+            self.window.create_button('fa-arrow-left-symbolic', action='calendar.Back'),
+            self.window.create_button('fa-calendar-symbolic',
+                                      action='calendar.Today',
+                                      tooltip=_('Today')),
+            self.window.create_button('fa-arrow-right-symbolic', action='calendar.Forward')
+        ])
 
-    def activate(self, refresh=True):
-        self.window.SearchToolItem.set_sensitive(False)
-        # FIXME: Are we 100% sure we can always print something?
-        # self.window.Print.set_sensitive(True)
+        self.month_button = Gtk.ToggleButton.new_with_label(_('Month'))
+        self.week_button = Gtk.ToggleButton.new_with_label(_('Week'))
+        self.day_button = Gtk.ToggleButton.new_with_label(_('Day'))
+        self.view_header = ButtonGroup([
+            self.month_button,
+            self.week_button,
+            self.day_button,
+        ])
+        view = api.user_settings.get('calendar-view', 'month')
+        if view == 'basicDay':
+            self.day_button.set_active(True)
+        elif view == 'basicWeek':
+            self.week_button.set_active(True)
+        else:
+            self.month_button.set_active(True)
+
+        self.hbox.pack_start(self.nav_header, False, False, 6)
+        self.hbox.pack_start(self.date_label, True, True, 6)
+        self.hbox.pack_start(self.view_header, False, False, 6)
+        self.main_vbox.show_all()
 
     def deactivate(self):
-        # Put the toolbar back at where it was
-        main_vbox = self.window.main_vbox
-        toolbar = self.uimanager.get_widget('/toolbar')
-        self.hbox.remove(toolbar)
-        main_vbox.pack_start(toolbar, False, False)
-        main_vbox.reorder_child(toolbar, 1)
-
-        self.uimanager.remove_ui(self.calendar_ui)
-        self.window.SearchToolItem.set_sensitive(True)
+        self.window.header_bar.remove(self.nav_header)
 
     # Private
 
     def _update_events(self, *args):
         self._calendar.update_events(
-            out_payments=self.AccountsPayableEvents.get_active(),
-            in_payments=self.AccountsReceivableEvents.get_active(),
-            purchase_orders=self.PurchaseEvents.get_active(),
-            client_calls=self.ClientCallEvents.get_active(),
-            client_birthdays=self.ClientBirthdaysEvents.get_active(),
-            work_orders=self.WorkOrderEvents.get_active(),
+            out_payments=self.AccountsPayableEvents.get_state().get_boolean(),
+            in_payments=self.AccountsReceivableEvents.get_state().get_boolean(),
+            purchase_orders=self.PurchaseEvents.get_state().get_boolean(),
+            client_calls=self.ClientCallEvents.get_state().get_boolean(),
+            client_birthdays=self.ClientBirthdaysEvents.get_state().get_boolean(),
+            work_orders=self.WorkOrderEvents.get_state().get_boolean(),
         )
 
     def _new_client_call(self):
@@ -446,18 +431,11 @@ class CalendarApp(ShellApp):
     # Kiwi callbacks
     #
 
+    def _view_option_state_changed(self, action, value):
+        action.set_state(value)
+        self._update_events()
+
     # Toolbar
-
-    def new_activate(self):
-        if not self.NewClientCall.get_sensitive():
-            return
-        self._new_client_call()
-
-    def print_activate(self):
-        self._calendar.print_()
-
-    def export_spreadsheet_activate(self):
-        pass
 
     def on_NewClientCall__activate(self, action):
         self._new_client_call()
@@ -480,11 +458,22 @@ class CalendarApp(ShellApp):
     def on_Forward__activate(self, action):
         self._calendar.go_next()
 
-    def on_ViewMonth__activate(self, action):
-        self._calendar.change_view('month')
+    def _update_view_buttons(self, view):
+        views = ['month', 'basicWeek', 'basicDay']
+        self._calendar.change_view(view)
+        children = self.view_header.get_children()
+        index = views.index(view)
+        for i, widget in enumerate(children):
+            widget.set_active(i == index)
 
-    def on_ViewWeek__activate(self, action):
-        self._calendar.change_view('basicWeek')
+    def on_month_button__toggled(self, button):
+        if button.get_active():
+            self._update_view_buttons('month')
 
-    def on_ViewDay__activate(self, action):
-        self._calendar.change_view('basicDay')
+    def on_week_button__toggled(self, button):
+        if button.get_active():
+            self._update_view_buttons('basicWeek')
+
+    def on_day_button__toggled(self, button):
+        if button.get_active():
+            self._update_view_buttons('basicDay')

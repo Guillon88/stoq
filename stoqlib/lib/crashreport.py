@@ -29,10 +29,13 @@ import logging
 import sys
 import time
 import traceback
-from twisted.internet import reactor
 import os
 
-import gobject
+try:
+    from gi.repository import GObject
+    has_gi = True
+except ImportError:
+    has_gi = False
 from kiwi.component import get_utility
 from kiwi.utils import gsignal
 
@@ -42,6 +45,7 @@ try:
 except ImportError:
     has_raven = False
 
+import stoq
 from stoqlib.database.runtime import get_default_store
 from stoqlib.lib.environment import is_developer_mode
 from stoqlib.lib.interfaces import IAppInfo
@@ -49,6 +53,7 @@ from stoqlib.lib.osutils import get_product_key
 from stoqlib.lib.osutils import get_system_locale
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.pluginmanager import InstalledPlugin
+from stoqlib.lib.threadutils import schedule_in_main_thread
 from stoqlib.lib.uptime import get_uptime
 from stoqlib.lib.webservice import WebService, get_main_cnpj
 
@@ -71,6 +76,12 @@ def _get_revision(module):
     return revision
 
 
+def _fix_version(version):
+    if isinstance(version, (list, tuple)):
+        version = '.'.join(map(str, version))
+    return str(version)
+
+
 def collect_report():
     report_ = {}
 
@@ -82,40 +93,41 @@ def collect_report():
 
     # Python and System
     import platform
-    report_['architecture'] = platform.architecture()
-    report_['distribution'] = platform.dist()
-    report_['python_version'] = tuple(sys.version_info)
+    report_['architecture'] = ' '.join(platform.architecture())
+    report_['distribution'] = ' '.join(platform.dist())
+    report_['python_version'] = _fix_version(sys.version_info)
+    report_['uname'] = ' '.join(platform.uname())
     report_['system'] = platform.system()
-    report_['uname'] = platform.uname()
 
     # Stoq application
     info = get_utility(IAppInfo, None)
     if info and info.get('name'):
         report_['app_name'] = info.get('name')
-        report_['app_version'] = info.get('ver')
+        report_['app_version'] = _fix_version(info.get('ver'))
 
     # External dependencies
-    import gtk
-    report_['pygtk_version'] = gtk.pygtk_version
-    report_['gtk_version'] = gtk.gtk_version
+    import gi
+    report_['gtk_version'] = _fix_version(gi.version_info)
 
     import kiwi
-    report_['kiwi_version'] = kiwi.__version__.version + (_get_revision(kiwi),)
+    report_['kiwi_version'] = _fix_version(
+        kiwi.__version__.version + (_get_revision(kiwi), ))
 
     import psycopg2
     try:
         parts = psycopg2.__version__.split(' ')
         extra = ' '.join(parts[1:])
-        report_['psycopg_version'] = tuple(map(int, parts[0].split('.'))) + (extra,)
-    except:
-        report_['psycopg_version'] = psycopg2.__version__
+        report_['psycopg_version'] = _fix_version(
+            list(map(int, parts[0].split('.'))) + [extra])
+    except Exception:
+        report_['psycopg_version'] = _fix_version(psycopg2.__version__)
 
     import reportlab
-    report_['reportlab_version'] = reportlab.Version.split('.')
+    report_['reportlab_version'] = _fix_version(reportlab.Version)
 
     import stoqdrivers
-    report_['stoqdrivers_version'] = stoqdrivers.__version__ + (
-        _get_revision(stoqdrivers),)
+    report_['stoqdrivers_version'] = _fix_version(
+        stoqdrivers.__version__ + (_get_revision(stoqdrivers), ))
 
     report_['product_key'] = get_product_key()
 
@@ -129,10 +141,13 @@ def collect_report():
     try:
         from stoqlib.database.settings import get_database_version
         default_store = get_default_store()
-        report_['postgresql_version'] = get_database_version(default_store)
-        report_['plugins'] = InstalledPlugin.get_plugin_names(default_store)
+        report_['postgresql_version'] = _fix_version(
+            get_database_version(default_store))
         report_['demo'] = sysparam.get_bool('DEMO_MODE')
+        report_['hash'] = sysparam.get_string('USER_HASH')
         report_['cnpj'] = get_main_cnpj(default_store)
+        report_['plugins'] = ', '.join(
+            InstalledPlugin.get_plugin_names(default_store))
     except Exception:
         pass
 
@@ -141,7 +156,7 @@ def collect_report():
     for i, trace in enumerate(_tracebacks):
         t = ''.join(traceback.format_exception(*trace))
         # Eliminate duplicates:
-        md5sum = hashlib.md5(t).hexdigest()
+        md5sum = hashlib.md5(t.encode()).hexdigest()
         report_['tracebacks'][md5sum] = t
 
     if info and info.get('log'):
@@ -149,6 +164,30 @@ def collect_report():
         report_['log_name'] = info.get('log')
 
     return report_
+
+
+if has_raven:
+    class CustomRavenClient(raven.Client):
+        """Ignores exceptions by also taking their messages into consideration
+
+        Custom client made for ignoring certain exceptions when sending reports to
+        Sentry based not only on their exception classes but also on the messages
+        they return and not necessarily the whole exception class.
+        """
+        # When sending exceptions to Sentry, we want to ignore:
+        #   - Known colateral exceptions.
+        ignore = set([
+            ('InternalError', 'current transaction is aborted, commands ignored '
+             'until end of transaction block'),
+        ])
+
+        def should_capture(self, exc_info):
+            key = (exc_info[0].__name__, str(exc_info[1]))
+
+            if key in self.ignore:
+                return False
+
+            return super(CustomRavenClient, self).should_capture(exc_info)
 
 
 def collect_traceback(tb, output=True, submit=False):
@@ -166,12 +205,12 @@ def collect_traceback(tb, output=True, submit=False):
 
         sentry_url = os.environ.get(
             'STOQ_SENTRY_URL',
-            ('http://89169350b0c0434895e315aa6490341a:'
+            ('https://89169350b0c0434895e315aa6490341a:'
              '0f5dce716eb5497fbf75c52fe873b3e8@sentry.stoq.com.br/4'))
-        sentry_args = {}
-        if 'app_version' in sentry_args:
-            sentry_args['release'] = sentry_args['app_version']
-        client = raven.Client(sentry_url, **sentry_args)
+        client = CustomRavenClient(sentry_url, release=stoq.version)
+        if hasattr(client, 'user_context'):
+            client.user_context({'id': extra.get('hash', None),
+                                 'username': extra.get('cnpj', None)})
 
         # Don't sent logs to sentry
         if 'log' in extra:
@@ -189,64 +228,62 @@ def collect_traceback(tb, output=True, submit=False):
             if value is None:
                 continue
 
-            if isinstance(value, (tuple, list)):
-                chr_ = '.' if name.endswith('_version') else ' '
-                value = chr_.join(str(v) for v in value)
-
             tags[name] = value
 
         client.captureException(tb, tags=tags, extra=extra)
 
     if is_developer_mode() and submit:
-        report()
+        rs = ReportSubmitter()
+        r = rs.submit()
+        r.get_response()
 
 
 def has_tracebacks():
     return bool(_tracebacks)
 
 
-class ReportSubmitter(gobject.GObject):
-    gsignal('failed', object)
-    gsignal('submitted', object)
+if has_gi:
+    class ReportSubmitter(GObject.GObject):
+        gsignal('failed', object)
+        gsignal('submitted', object)
 
-    def __init__(self):
-        gobject.GObject.__init__(self)
+        def __init__(self):
+            GObject.GObject.__init__(self)
 
-        self._api = WebService()
-        self._report = collect_report()
+            self._count = 0
+            self._api = WebService()
+            self.report = collect_report()
 
-    def _done(self, args):
-        self.emit('submitted', args)
+        def _done(self, args):
+            self.emit('submitted', args)
 
-    def _error(self, args):
-        self.emit('failed', args)
+        def _error(self, args):
+            self.emit('failed', args)
 
-    @property
-    def report(self):
-        return self._report
+        def submit(self):
+            return self._api.bug_report(self.report,
+                                        callback=self._on_report__callback,
+                                        errback=self._on_report__errback)
 
-    def submit(self):
-        response = self._api.bug_report(self._report)
-        response.addCallback(self._on_report__callback)
-        response.addErrback(self._on_report__errback)
-        return response
+        def _on_report__callback(self, response):
+            if response.status_code == 200:
+                self._on_success(response.json())
+            else:
+                self._on_error()
 
-    def _on_report__callback(self, data):
-        log.info('Finished sending bugreport: %r' % (data, ))
-        self._done(data)
+        def _on_report__errback(self, failure):
+            self._on_error(failure)
 
-    def _on_report__errback(self, failure):
-        log.info('Failed to report bug: %r count=%d' % (failure, self._count))
-        if self._count < _N_TRIES:
-            self.submit()
-        else:
-            self._error(failure)
-        self._count += 1
+        def _on_error(self, data=None):
+            log.info('Failed to report bug: %r count=%d' % (data, self._count))
+            if self._count < _N_TRIES:
+                self.submit()
+            else:
+                schedule_in_main_thread(self.emit, 'failed', data)
+            self._count += 1
 
-
-def report():
-    # This is only called if we are in developer mode
-    rs = ReportSubmitter()
-    d = rs.submit()
-    while not d.called:
-        reactor.iterate(delay=1)
+        def _on_success(self, data):
+            log.info('Finished sending bugreport: %r' % (data, ))
+            schedule_in_main_thread(self.emit, 'submitted', data)
+else:
+    ReportSubmitter = None

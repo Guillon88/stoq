@@ -31,8 +31,8 @@ from stoqlib.domain.person import (Client, Employee, EmployeeRoleHistory,
                                    Supplier, Transporter, EmployeeRole)
 from stoqlib.domain.product import ProductSupplierInfo
 from stoqlib.domain.purchase import PurchaseOrder, PurchaseItem
-from stoqlib.domain.receiving import (ReceivingOrderItem, ReceivingOrder,
-                                      PurchaseReceivingMap)
+from stoqlib.domain.receiving import (ReceivingOrderItem, ReceivingInvoice,
+                                      PurchaseReceivingMap, ReceivingOrder)
 from stoqlib.domain.sale import Sale, SaleItem
 from stoqlib.domain.transfer import TransferOrder, TransferOrderItem
 from stoqlib.gui.search.personsearch import (ClientSearch, EmployeeSearch,
@@ -63,8 +63,8 @@ class TestPersonSearch(GUITest):
 
     def test_supplier_search(self):
         self.clean_domain([ReceivingOrderItem, PurchaseReceivingMap,
-                           ReceivingOrder, PurchaseItem, PurchaseOrder,
-                           ProductSupplierInfo, Supplier])
+                           ReceivingOrder, ReceivingInvoice, PurchaseItem,
+                           PurchaseOrder, ProductSupplierInfo, Supplier])
 
         self.create_supplier(u'Eric S. Raymond', u'River Roupas')
         self.create_supplier(u'Guido van Rossum', u'Las Vegas Moda')
@@ -85,6 +85,8 @@ class TestPersonSearch(GUITest):
         client.person.individual.birth_date = datetime.date(1989, 3, 4)
         client = self.create_client(u'Junio C. Hamano')
         client.person.individual.birth_date = datetime.date(1972, 10, 15)
+        client = self.create_client(name=u'Mary Jordan')
+        client.person.email = u'm.jordan@mail'
 
         search = ClientSearch(self.store)
 
@@ -94,6 +96,10 @@ class TestPersonSearch(GUITest):
         search.set_searchbar_search_string(u'ham')
         search.search.refresh()
         self.check_search(search, 'client-string-filter')
+
+        search.set_searchbar_search_string(u'Jordan')
+        search.search.refresh()
+        self.check_search(search, 'client-email-string-filter')
 
         column = search.search.get_column_by_attribute('birth_date')
         search_title = column.get_search_label() + ':'
@@ -116,10 +122,24 @@ class TestPersonSearch(GUITest):
         search.search.refresh()
         self.check_search(search, 'client-birthday-interval-filter')
 
+    def test_client_as_company(self):
+        self.clean_domain([Commission, SaleItem, Sale, Client])
+
+        person = self.create_person(name=u'Agatha Christie')
+
+        self.create_client(person=person)
+        self.create_company(person=person)
+
+        search = ClientSearch(self.store)
+
+        search.set_searchbar_search_string(u'dum')
+        search.search.refresh()
+        self.check_search(search, 'client-company-string-filter')
+
     def test_transporter_search(self):
         self.clean_domain([ReceivingOrderItem, PurchaseReceivingMap,
-                           ReceivingOrder, PurchaseItem, PurchaseOrder,
-                           Transporter])
+                           ReceivingOrder, ReceivingInvoice, PurchaseItem,
+                           PurchaseOrder, Transporter])
 
         self.create_transporter(u'Peter Pan')
         self.create_transporter(u'Captain Hook')
@@ -187,8 +207,8 @@ class TestClientsWithSaleSearch(GUITest):
         sale = self.create_sale(client=client, branch=current_branch)
         sale.add_sellable(sellable, quantity=3)
         self.add_payments(sale)
-        sale.order()
-        sale.confirm()
+        sale.order(self.current_user)
+        sale.confirm(self.current_user)
         sale.confirm_date = datetime.date.today()
 
         search = ClientsWithSaleSearch(self.store)

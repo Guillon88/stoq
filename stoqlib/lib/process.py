@@ -24,6 +24,7 @@
 
 """Platform abstracted Process utilitites"""
 
+import os
 import platform
 import subprocess
 import sys
@@ -34,11 +35,11 @@ PIPE = subprocess.PIPE
 class Process(subprocess.Popen):
     def __init__(self, args, bufsize=0, executable=None, stdin=None,
                  stdout=None, stderr=None, shell=False, cwd=None, env=None,
-                 quiet=True):
+                 quiet=True, universal_newlines=True):
 
         if quiet and platform.system() == 'Windows':
             startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess._subprocess.STARTF_USESHOWWINDOW
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             # Workaround for problem described here:
             # http://www.py2exe.org/index.cgi/Py2ExeSubprocessInteractions
             # http://bytes.com/topic/python/answers/634409-subprocess-handle-invalid-error
@@ -57,6 +58,12 @@ class Process(subprocess.Popen):
         else:
             startupinfo = None
 
+        if env is None:
+            env = os.environ.copy()
+        # Make sure stdout/stderr will not be buffered
+        env['PYTHONUNBUFFERED'] = '1'
+
         subprocess.Popen.__init__(self, args, bufsize, executable, stdin=stdin,
                                   stdout=stdout, stderr=stderr, shell=shell, cwd=cwd,
-                                  env=env, startupinfo=startupinfo)
+                                  env=env, startupinfo=startupinfo,
+                                  universal_newlines=universal_newlines)

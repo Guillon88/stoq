@@ -26,7 +26,7 @@ import datetime
 
 import mock
 
-from stoqlib.domain.payment.card import CreditProvider
+from stoqlib.domain.payment.card import CreditProvider, CreditCardData
 from stoqlib.domain.sale import SaleView
 from stoqlib.gui.dialogs.renegotiationdetails import RenegotiationDetailsDialog
 from stoqlib.gui.dialogs.saledetails import SaleDetailsDialog
@@ -45,7 +45,7 @@ class TestPaymentSearch(GUITest):
 
     def _create_domain(self):
         pay = self.create_card_payment(date=datetime.datetime(2012, 1, 1),
-                                       provider_id=u'VISANET')
+                                       provider_id=u'VISA')
         client = self.create_client(name=u'Dane Cook')
         sale = self.create_sale(client=client)
         self.create_sale_item(sale=sale)
@@ -61,12 +61,12 @@ class TestPaymentSearch(GUITest):
         pay.identifier = 66666
 
         pay = self.create_card_payment(date=datetime.datetime(2012, 3, 3),
-                                       provider_id=u'VISANET')
+                                       provider_id=u'VISA')
         self.create_payment_renegotiation(group=pay.group)
         pay.identifier = 77777
 
         pay = self.create_card_payment(date=datetime.datetime(2012, 4, 4),
-                                       provider_id=u'VISANET')
+                                       provider_id=u'VISA')
         pay.identifier = 88888
 
     def test_card_payment_search(self):
@@ -123,3 +123,8 @@ class TestPaymentSearch(GUITest):
         print_report.assert_called_once_with(CardPaymentReport, search.results,
                                              list(search.results),
                                              filters=search.search.get_search_filters())
+
+    def test_format_card_type(self):
+        search = CardPaymentSearch(self.store)
+        self.assertEqual(search._format_card_type(CreditCardData.TYPE_CREDIT), u'Credit')
+        self.assertEqual(search._format_card_type(None), u'')

@@ -1,28 +1,29 @@
 # -*- coding: utf-8 -*-
 # vi:si:et:sw=4:sts=4:ts=4
 
-##
-## Copyright (C) 2005-2013 Async Open Source
-##
-## This program is free software; you can redistribute it and/or
-## modify it under the terms of the GNU Lesser General Public License
-## as published by the Free Software Foundation; either version 2
-## of the License, or (at your option) any later version.
-##
-## This program is distributed in the hope that it will be useful,
-## but WITHOUT ANY WARRANTY; without even the implied warranty of
-## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-## GNU Lesser General Public License for more details.
-##
-## You should have received a copy of the GNU Lesser General Public License
-## along with this program; if not, write to the Free Software
-## Foundation, Inc., or visit: http://www.gnu.org/.
-##
-##
-## Author(s): Stoq Team <stoq-devel@async.com.br>
-##
+#
+# Copyright (C) 2005-2013 Async Open Source
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., or visit: http://www.gnu.org/.
+#
+#
+# Author(s): Stoq Team <stoq-devel@async.com.br>
+#
 """ Parameters and system data for applications"""
 
+import collections
 from decimal import Decimal
 from uuid import uuid4
 import logging
@@ -43,7 +44,8 @@ from stoqlib.lib.translation import stoqlib_gettext
 from stoqlib.lib.validators import (validate_int,
                                     validate_decimal,
                                     validate_area_code,
-                                    validate_percentage)
+                                    validate_percentage,
+                                    validate_cnpj)
 
 _ = stoqlib_gettext
 log = logging.getLogger(__name__)
@@ -61,10 +63,17 @@ def _credit_limit_salary_changed(new_value, store):
 
 
 class ParameterDetails(object):
+
     def __init__(self, key, group, short_desc, long_desc, type,
                  initial=None, options=None, combo_data=None, range=None,
-                 multiline=False, validator=None, onupgrade=None,
-                 change_callback=None, editor=None, wrap=True, allow_none=False):
+                 multiline=False, validator=None,
+                 change_callback=None, editor=None, wrap=True,
+                 allow_none=False, is_editable=True, check_missing=None):
+        """
+        :param check_missing: A callable that should return True or False
+          indicating if the parameter is missing configuration. If missing, it
+          will be highlighted in the parameters search
+        """
         self.key = key
         self.group = group
         self.short_desc = short_desc
@@ -76,20 +85,19 @@ class ParameterDetails(object):
         self.range = range
         self.multiline = multiline
         self.validator = validator
-        if onupgrade is None:
-            onupgrade = initial
-        self.onupgrade = onupgrade
         self.change_callback = change_callback
         self.editor = editor
         self.wrap = wrap
         self.allow_none = allow_none
+        self.is_editable = is_editable
+        self.check_missing = check_missing
 
     #
     #  Public API
     #
 
     def get_parameter_type(self):
-        if isinstance(self.type, basestring):
+        if isinstance(self.type, str):
             return namedAny('stoqlib.domain.' + self.type)
         else:
             return self.type
@@ -130,6 +138,11 @@ class ParameterDetails(object):
                                    % value)
 
     @staticmethod
+    def validate_cnpj(value):
+        if not validate_cnpj(value):
+            return ValidationError(_("'%s' is not a valid CNPJ"))
+
+    @staticmethod
     def validate_state(value):
         state_l10n = get_l10n_field('state')
         if not state_l10n.validate(value):
@@ -159,6 +172,14 @@ class ParameterDetails(object):
             return ParameterDetails.validate_decimal
 
 
+DEFAULT_LOAN_NOTICE = _(
+    'I inform and sign up to receive the items in full '
+    'working order and I am aware of the responsability '
+    'that I have for returning them, as well as the '
+    'return of the amounts involved, in case of loss, '
+    'damage or any event that make the product unusable.')
+
+
 _details = [
     ParameterDetails(
         u'EDIT_CODE_PRODUCT',
@@ -166,6 +187,43 @@ _details = [
         _(u'Disable edit code products'),
         _(u'Disable edit code products on purchase application'),
         bool, initial=False),
+
+    ParameterDetails(
+        u'SUGGEST_PRODUCT_CODE_BASED_CATEGORY',
+        _(u'Products'),
+        _(u'Suggest product code based on the selected category'),
+        _(u'If the next product code should be based on the category selected or not'),
+        bool, initial=False),
+
+    ParameterDetails(
+        u'BARCODE_MAX_SIZE',
+        _(u'Products'),
+        _(u'Max size for product barcodes'),
+        _(u'Max number of digits for product barcodes'),
+        int, initial=14),
+
+    ParameterDetails(
+        u'DEFAULT_PRODUCT_PIS_TEMPLATE',
+        _('Products'),
+        _('Default PIS template'),
+        _('Use this information when try to emmit a fiscal document and the '
+          'product has no configured PIS'),
+        'taxes.ProductPisTemplate'),
+
+    ParameterDetails(
+        u'DEFAULT_PRODUCT_COFINS_TEMPLATE',
+        _('Products'),
+        _('Default COFINS template'),
+        _('Use this information when try to emmit a fiscal document and the '
+          'product has no configured COFINS'),
+        'taxes.ProductCofinsTemplate'),
+
+    ParameterDetails(
+        u'LABEL_COLUMNS',
+        _(u'Products'),
+        _(u'Label columns'),
+        _(u'Which columns we should print on label'),
+        str, initial=u'code,barcode,description,price'),
 
     ParameterDetails(
         u'MAIN_COMPANY',
@@ -234,6 +292,14 @@ _details = [
         _(u'The default delivery service in the system.'),
         u'service.Service'),
 
+    ParameterDetails(
+        u'DEFAULT_SCALE_TOKEN_PRODUCT',
+        _(u'Sales'),
+        _(u'Default Scale Token Product'),
+        _(u'Default product that will be automatically added to a sale token '
+          'when the sale token is read'),
+        u'product.Product', initial=None),
+
     # XXX This parameter is POS-specific. How to deal with that
     # in a better way?
     ParameterDetails(
@@ -255,11 +321,12 @@ _details = [
         bool, initial=False),
 
     ParameterDetails(
-        u'ENABLE_DOCUMENT_ON_INVOICE',
-        _(u'ECF'),
-        _(u'Enable document on invoice'),
-        _(u'Once this parameter is set, we will confirm the client document '
-          u'when  registering a fiscal coupon.'),
+        u'USE_SALE_TOKEN',
+        _(u'Sales'),
+        _(u'Use tokens to control sales'),
+        _(u'A token is a phisical object that will be attached to a sale '
+          u'during its lifetime. For example, it can be a bar table, a '
+          u'hotel room, a real token in a convenience store and so on. '),
         bool, initial=False),
 
     ParameterDetails(
@@ -278,12 +345,20 @@ _details = [
         bool, initial=False),
 
     ParameterDetails(
+        u'ALLOW_CANCEL_ORDERED_SALES',
+        _(u'Sales'),
+        _(u'Allow to cancel ordered sales'),
+        _(u'When this parameter is True, allow the user to cancel ordered and'
+          u' paid sales'),
+        bool, initial=False),
+
+    ParameterDetails(
         u'CITY_SUGGESTED',
         _(u'General'),
         _(u'Default city'),
         _(u'When adding a new address for a certain person we will always '
           u'suggest this city.'),
-        unicode, initial=u'São Carlos',
+        str, initial=u'São Carlos',
         validator=ParameterDetails.validate_city),
 
     ParameterDetails(
@@ -292,7 +367,7 @@ _details = [
         _(u'Default state'),
         _(u'When adding a new address for a certain person we will always '
           u'suggest this state.'),
-        unicode, initial=u'SP', validator=ParameterDetails.validate_state),
+        str, initial=u'SP', validator=ParameterDetails.validate_state),
 
     ParameterDetails(
         u'COUNTRY_SUGGESTED',
@@ -301,7 +376,7 @@ _details = [
         _(u'When adding a new address for a certain person we will always '
           u'suggest this country.'),
         # FIXME: When fixing bug 5100, change this to BR
-        unicode, initial=u'Brazil', combo_data=get_countries),
+        str, initial=u'Brazil', combo_data=get_countries),
 
     ParameterDetails(
         u'ALLOW_REGISTER_NEW_LOCATIONS',
@@ -337,6 +412,29 @@ _details = [
         int, initial=600, range=(1, MAX_INT)),
 
     ParameterDetails(
+        u'TILL_TOLERANCE_FOR_CLOSING',
+        _(u'Till'),
+        _(u'Till tolerance for closing'),
+        _(u'Tolerance time for closing the till'),
+        int, initial=0, range=(0, 22)),
+
+    ParameterDetails(
+        u'INCLUDE_CASH_FUND_ON_TILL_CLOSING',
+        _(u'Till'),
+        _(u'Include cash fund on till closing'),
+        _(u'Makes stoq expects to include the cash fund on till closing'),
+        bool, initial=False),
+
+    ParameterDetails(
+        u'TILL_BLIND_CLOSING',
+        _('Till'),
+        _('Use blind closing for till'),
+        _('When set, the user will perform a blind till closing, ie, he will not know '
+          'the values that are supposed to be in the till and will only inform the '
+          'quantity he counted for each payment method'),
+        bool, initial=False),
+
+    ParameterDetails(
         u'CONFIRM_SALES_ON_TILL',
         _(u'Sales'),
         _(u'Confirm sales in Till'),
@@ -348,10 +446,29 @@ _details = [
     ParameterDetails(
         u'CONFIRM_QTY_ON_BARCODE_ACTIVATE',
         _(u'Sales'),
-        _(u'Requires confirmation of quantity after barcode activation'),
+        _(u'Requires quantity confirmation after barcode activation'),
         _(u'The system will always require the quantity of products '
           u'before adding a sale item on Point of Sale'),
         bool, initial=False),
+
+    ParameterDetails(
+        u'DEFAULT_TABLE_PRICE',
+        _('Sales'),
+        _('Default table price'),
+        _('Default table price that will be used when selling products. This table price will be '
+          'used instead of the default price configured in the product/service. Useful when a '
+          'branch should have a special price for the products.'),
+        'person.ClientCategory', allow_none=True),
+
+    ParameterDetails(
+        u'POS_ALLOW_CHANGE_PRICE',
+        _(u'POS'),
+        _(u'Allow to change sellable price in POS app'),
+        _(u'When adding a sellable do a sale in the POS app, should the user be '
+          u'allowed to edit the sale price of the selected sellable. This '
+          u'depends on the parameter "Require quantity confirmation after '
+          u'barcode activation"'),
+        bool, initial=True),
 
     ParameterDetails(
         u'ACCEPT_CHANGE_SALESPERSON',
@@ -397,7 +514,7 @@ _details = [
         _(u'Sales'),
         _(u'Max discount for sales'),
         _(u'The max discount for salesperson in a sale'),
-        Decimal, initial=5, range=(0, 100),
+        Decimal, initial=Decimal(5), range=(0, 100),
         validator=ParameterDetails.validate_percentage),
 
     ParameterDetails(
@@ -447,7 +564,7 @@ _details = [
         _(u'Default operation nature'),
         _(u'When adding a new sale quote, we will always suggest '
           u'this operation nature'),
-        unicode, initial=_(u'Sale')),
+        str, initial=_(u'Sale')),
 
     ParameterDetails(
         u'ASK_SALES_CFOP',
@@ -533,6 +650,14 @@ _details = [
         u'fiscal.CfopData'),
 
     ParameterDetails(
+        u'DEFAULT_PURCHASE_RETURN_CFOP',
+        _(u'Purchase'),
+        _(u'Default Purchase Return C.F.O.P.'),
+        _(u'Default C.F.O.P. (Fiscal Code of Operations) used when returning '
+          u'a purchase in the stock application.'),
+        u'fiscal.CfopData'),
+
+    ParameterDetails(
         u'DEFAULT_STOCK_DECREASE_CFOP',
         _(u'Stock'),
         _(u'Default C.F.O.P. for Stock Decreases'),
@@ -547,7 +672,7 @@ _details = [
         _(u'Default ICMS to be applied on all the products of a sale. ') + u' ' +
         _(u'This is a percentage value and must be between 0 and 100.') + u' ' +
         _(u'E.g: 18, which means 18% of tax.'),
-        Decimal, initial=18, range=(0, 100),
+        Decimal, initial=Decimal(18), range=(0, 100),
         validator=ParameterDetails.validate_percentage),
 
     ParameterDetails(
@@ -557,7 +682,7 @@ _details = [
         _(u'Default ISS to be applied on all the services of a sale. ') + u' ' +
         _(u'This is a percentage value and must be between 0 and 100.') + u' ' +
         _(u'E.g: 12, which means 12% of tax.'),
-        Decimal, initial=18, range=(0, 100),
+        Decimal, initial=Decimal(18), range=(0, 100),
         validator=ParameterDetails.validate_percentage),
 
     ParameterDetails(
@@ -568,7 +693,7 @@ _details = [
         u' ' +
         _(u'This is a percentage value and must be between 0 and 100.') + u' ' +
         _(u'E.g: 16, which means 16% of tax.'),
-        Decimal, initial=18, range=(0, 100),
+        Decimal, initial=Decimal(18), range=(0, 100),
         validator=ParameterDetails.validate_percentage),
 
     ParameterDetails(
@@ -587,7 +712,7 @@ _details = [
         _(u"This is used to calculate the client's credit limit according"
           u"to the client's salary. If this percent is changed it will "
           u"automatically recalculate the credit limit for all clients."),
-        Decimal, initial=0, range=(0, 100),
+        Decimal, initial=Decimal(0), range=(0, 100),
         validator=ParameterDetails.validate_percentage,
         change_callback=_credit_limit_salary_changed),
 
@@ -616,14 +741,7 @@ _details = [
         _(u'Glabels template file'),
         _(u'The glabels file that will be used to print the labels. Check the '
           u'documentation to see how to setup this file.'),
-        unicode, initial=u"", editor='file-chooser'),
-
-    ParameterDetails(
-        u'CAT52_DEST_DIR',
-        _(u'General'),
-        _(u'Cat 52 destination directory'),
-        _(u'Where the file generated after a Z-reduction should be saved.'),
-        unicode, initial=u'~/.stoq/cat52', editor='directory-chooser'),
+        str, initial=u"", editor='file-chooser'),
 
     ParameterDetails(
         u'COST_PRECISION_DIGITS',
@@ -643,33 +761,6 @@ _details = [
           u' configuration to see the best option.'),
         int, initial=0,
         options=BarcodeInfo.options),
-
-    ParameterDetails(
-        u'NFE_SERIAL_NUMBER',
-        _(u'NF-e'),
-        _(u'Fiscal document serial number'),
-        _(u'Fiscal document serial number. Fill with 0 if the NF-e have no '
-          u'series. This parameter only has effect if the nfe plugin is enabled.'),
-        int, initial=1),
-
-    ParameterDetails(
-        u'NFE_DANFE_ORIENTATION',
-        _(u'NF-e'),
-        _(u'Danfe printing orientation'),
-        _(u'Orientation to use for printing danfe. Portrait or Landscape'),
-        int, initial=0,
-        options={0: _(u'Portrait'),
-                 1: _(u'Landscape')}),
-
-    ParameterDetails(
-        u'NFE_FISCO_INFORMATION',
-        _(u'NF-e'),
-        _(u'Additional Information for the Fisco'),
-        _(u'Additional information to add to the NF-e for the Fisco'), unicode,
-        initial=(u'Documento emitido por ME ou EPP optante pelo SIMPLES '
-                 u'NACIONAL. Não gera Direito a Crédito Fiscal de ICMS e de '
-                 u'ISS. Conforme Lei Complementar 123 de 14/12/2006.'),
-        multiline=True),
 
     ParameterDetails(
         u'BANKS_ACCOUNT',
@@ -693,10 +784,25 @@ _details = [
         u'account.Account'),
 
     ParameterDetails(
+        u'SALES_ACCOUNT',
+        _(u'Accounts'),
+        _(u"Sales' payments account"),
+        _(u'Receivable payments originated from sales will default to this account'),
+        u'account.Account'),
+
+    ParameterDetails(
         u'DEMO_MODE',
         _(u'General'),
         _(u'Demonstration mode'),
         _(u'If Stoq is used in a demonstration mode'),
+        bool, initial=False, is_editable=False),
+
+    ParameterDetails(
+        'BLOCK_PAYMENT_FOR_IMBALANCE_ACCOUNT',
+        _('Payments'),
+        _('Block payments from/to the imbalance account'),
+        _('When set, the user will be required to inform both source and destination '
+          'accounts that are different than the imbalance account'),
         bool, initial=False),
 
     ParameterDetails(
@@ -733,7 +839,7 @@ _details = [
         _(u'Online services'),
         _(u'If online services such as upgrade notifications, automatic crash reports '
           u'should be enabled.'),
-        bool, initial=True, onupgrade=u''),
+        bool, initial=True),
 
     ParameterDetails(
         u'BILL_INSTRUCTIONS',
@@ -750,7 +856,14 @@ _details = [
           u'$INTEREST: The calculated interest based on the parameter aliquot\n'
           u'$DISCOUNT: The calculated discount based on the parameter aliquot\n'
           u'$INVOICE_NUMBER: The sale invoice number\n'),
-        unicode, multiline=True, initial=u""),
+        str, multiline=True, initial=u""),
+
+    ParameterDetails(
+        u'BILL_PAYMENT_PLACE',
+        _(u'Sales'),
+        _(u'Bill payment place'),
+        _(u'Payment place instructions to be printed on bill slip'),
+        str, multiline=True, initial=_(u'Payable in any bank until due date')),
 
     ParameterDetails(
         u'BILL_INTEREST',
@@ -759,7 +872,7 @@ _details = [
         _(u'The aliquot to calculate the daily interest on the bill. '
           u'See "Bill instructions" parameter for more information on how '
           u'this is used'),
-        Decimal, initial=0, range=(0, 100),
+        Decimal, initial=Decimal(0), range=(0, 100),
         validator=ParameterDetails.validate_percentage),
 
     ParameterDetails(
@@ -769,7 +882,7 @@ _details = [
         _(u'The aliquot to calculate the penalty on the bill. '
           u'See "Bill instructions" parameter for more information on how '
           u'this is used'),
-        Decimal, initial=0, range=(0, 100),
+        Decimal, initial=Decimal(0), range=(0, 100),
         validator=ParameterDetails.validate_percentage),
 
     ParameterDetails(
@@ -779,7 +892,7 @@ _details = [
         _(u'The aliquot to calculate the discount on the bill. '
           u'See "Bill instructions" parameter for more information on how '
           u'this is used'),
-        Decimal, initial=0, range=(0, 100),
+        Decimal, initial=Decimal(0), range=(0, 100),
         validator=ParameterDetails.validate_percentage),
 
     ParameterDetails(
@@ -789,7 +902,7 @@ _details = [
         _(u'When printing booklets, include the first 4 lines of these on it. '
           u'This usually includes instructions on how to pay the booklet and '
           u'the validity and the terms.'),
-        unicode, multiline=True,
+        str, multiline=True,
         initial=_(u"Payable at any branch on presentation of this booklet")),
 
     ParameterDetails(
@@ -809,7 +922,7 @@ _details = [
         _(u'Current branch for this database'),
         _(u'When operating with synchronized databases, this parameter will be '
           u'used to restrict the data that will be sent to this database.'),
-        u'person.Branch'),
+        u'person.Branch', is_editable=False),
 
     ParameterDetails(
         u'SYNCHRONIZED_MODE',
@@ -819,7 +932,7 @@ _details = [
           u'databases. When using synchronized databases, some operations with '
           u'branches different than the current one will be restriced.'),
         bool,
-        initial=False),
+        initial=False, is_editable=False),
 
     ParameterDetails(
         u'PRINT_PROMISSORY_NOTES_ON_BOOKLETS',
@@ -832,11 +945,19 @@ _details = [
 
     ParameterDetails(
         u'PRINT_PROMISSORY_NOTE_ON_LOAN',
-        _(u'Sales'),
+        _(u'Loan'),
         _(u'Printing of promissory notes on loans'),
         _(u'This parameter indicates if Stoq should print a promissory note '
           u'when printing a loan receipt.'),
         bool, initial=False),
+
+    ParameterDetails(
+        u'LOAN_NOTICE',
+        _(u'Loan'),
+        _(u'Notice that will be added to the loan report'),
+        _(u'This notice will be added to the loan receipt and can be used to '
+          'warn the client that he is responsible for the items he is loaning'),
+        str, multiline=True, initial=DEFAULT_LOAN_NOTICE),
 
     ParameterDetails(
         u'PRINT_SALE_DETAILS_ON_POS',
@@ -855,11 +976,19 @@ _details = [
         bool, initial=False),
 
     ParameterDetails(
+        u'ALLOW_CREATE_PAYMENT_ON_SALE_QUOTE',
+        _(u'Sales'),
+        _(u'Allow to add payment on sale quote'),
+        _(u'When enabled, the sale quote wizard will have an extra step to '
+          u'configure the payments for the sale.'),
+        bool, initial=False),
+
+    ParameterDetails(
         u'MANDATORY_CARD_AUTH_NUMBER',
         _(u'Sales'),
         _(u'Set authorization number mandatory'),
         _(u'Set the authorization number on card payments as mandatory or not.'),
-        bool, initial=True),
+        bool, initial=False),
 
     ParameterDetails(
         u'DEFECT_DETECTED_TEMPLATE',
@@ -867,7 +996,15 @@ _details = [
         _(u'Defect detected template for work orders'),
         _(u'A template to be used to fill the "Defect detected" field when '
           u'creating a new work order.'),
-        unicode, multiline=True, initial=u""),
+        str, multiline=True, initial=u""),
+
+    ParameterDetails(
+        u'WORK_ORDER_NOTICE',
+        _(u'Work order'),
+        _(u'Notice that will be added to the work order report'),
+        _(u'This notice will be added to the work order receipt and can be used to '
+          'warn the client about warranties and limitations'),
+        str, multiline=True, initial=u''),
 
     ParameterDetails(
         u'AUTOMATIC_LOGOUT',
@@ -879,14 +1016,6 @@ _details = [
         int, initial=0),
 
     ParameterDetails(
-        u'ALLOW_CANCEL_LAST_COUPON',
-        _(u'ECF'),
-        _(u'Allow to cancel the last fiscal coupon'),
-        _(u'When set to false, the user will not be able to cancel the last coupon, '
-          u'only return it.'),
-        bool, initial=True),
-
-    ParameterDetails(
         u'UPDATE_PRODUCTS_COST_ON_PURCHASE',
         _(u'Purchase'),
         _(u'Automatic update of products cost when making a new purchase.'),
@@ -894,19 +1023,23 @@ _details = [
           u'the purchase\'s items cost.'),
         bool, initial=False),
 
-    # Some fiscal printers can print up to 8 rows and 70 characters each row.
-    # But we want to write an documentation to make sure it will work
-    # on every fiscal printer
     ParameterDetails(
-        u'ADDITIONAL_INFORMATION_ON_COUPON',
-        _(u'ECF'),
-        _(u'Additional information on fiscal coupon'),
-        _(u'This will be printed in the promotional message area of the fiscal coupon\n'
-          u'IMPORTANT NOTE:\n'
-          u'This template cannot have more than 2 line, and each line more '
-          u'than 50 characters, and you have to break it manually using the characters '
-          u'"\\n" or (enter key) or the fiscal printer may not print it correctly.'),
-        unicode, multiline=True, initial=u'', wrap=False),
+        u'UPDATE_PRODUCT_COST_ON_COMPONENT_UPDATE',
+        _(u'Production'),
+        _(u'Automatic update the cost of a production product'),
+        _(u'When the list of components is updated or the cost of a component '
+          'is updated, the cost of a production product will be automatically '
+          'updated'),
+        bool, initial=True),
+
+    ParameterDetails(
+        u'UPDATE_PRODUCT_COST_ON_PACKAGE_UPDATE',
+        _(u'Product'),
+        _(u'Automatic update the cost of a product'),
+        _(u'When a package product cost is updated, the cost of the component '
+          'will be automatically updated. Note that it will work only if the '
+          'package has only one component.'),
+        bool, initial=True),
 
     ParameterDetails(
         u'BIRTHDAY_NOTIFICATION',
@@ -924,7 +1057,32 @@ _details = [
           u'and stoq link. It will be added on ping requests, tef requests and '
           u'feedbacks data sent to stoq api and on the stoq statistics data sent '
           u'to stoq link lite.'),
-        unicode, initial=unicode(uuid4().get_hex()))
+        str, initial=uuid4().hex),
+
+    ParameterDetails(
+        u'ALLOW_SAME_SELLABLE_IN_A_ROW',
+        _(u'Inventory'),
+        _(u'This will indicates if an assisted inventory should allow the same '
+          u'sellable to be read in a row'),
+        _(u'If this parameter is not set, it wont let the user to count any '
+          u'sellable twice in a row when using assisted count inventory'),
+        bool, initial=True),
+
+    ParameterDetails(
+        u'SHOW_FULL_DATETIME_ON_RECEIVABLE',
+        _(u'Receivable'),
+        _(u'Show full time of the sale on receivable payments'),
+        _(u'Beyond date, display exactly the hour and minute of the sale on the '
+          u'receivable payments list.'),
+        bool, initial=False),
+
+    ParameterDetails(
+        'REQUIRE_PRODUCT_BRANCH_OVERRIDE',
+        _('POS'),
+        _('Require override for products in mobile pos'),
+        _('When this is true, only products that have an override for the selected branch will be '
+          'available for sale in a given branch'),
+        bool, initial=False),
 ]
 
 
@@ -935,7 +1093,9 @@ class ParameterAccess(object):
 
     def __init__(self):
         # Mapping of details, name -> ParameterDetail
-        self._details = dict((detail.key, detail) for detail in _details)
+        self._details = collections.OrderedDict()
+        for detail in _details:
+            self.register_param(detail)
 
         self._values_cache = None
 
@@ -949,13 +1109,8 @@ class ParameterAccess(object):
         return self._values_cache
 
     def _create_default_values(self, store):
-        # Create default values for parameters that take objects
-        self.set_object_default(store, "CUSTOM_LOGO_FOR_REPORTS", None)
-        self.set_object_default(store, "LOCAL_BRANCH", None, is_editable=False)
-        self.set_object_default(store, "MAIN_COMPANY", None)
-        self.set_object_default(store, "SUGGESTED_SUPPLIER", None)
-        self.set_object_default(store, "SUGGESTED_UNIT", None)
-
+        """Create default values for parameters that take objects"""
+        self._set_default_value(store, u'USER_HASH')
         self._set_default_method_default(store)
 
         self._set_cfop_default(store,
@@ -964,8 +1119,8 @@ class ParameterAccess(object):
                                u"5.102")
         self._set_cfop_default(store,
                                u"DEFAULT_RETURN_SALES_CFOP",
-                               u"Devolucao",
-                               u"5.202")
+                               u"Devolução de Venda de Mercadoria Adquirida",
+                               u"1.202")
         self._set_cfop_default(store,
                                u"DEFAULT_RECEIVING_CFOP",
                                u"Compra para Comercializacao",
@@ -975,6 +1130,10 @@ class ParameterAccess(object):
                                u"Outra saída de mercadoria ou "
                                u"prestação de serviço não especificado",
                                u"5.949")
+        self._set_cfop_default(store,
+                               u"DEFAULT_PURCHASE_RETURN_CFOP",
+                               u"Devolução de compra para comercialização",
+                               u"5.202")
         self._set_delivery_default(store)
         self._set_sales_person_role_default(store)
         self._set_product_tax_constant_default(store)
@@ -992,18 +1151,19 @@ class ParameterAccess(object):
             return
         data = self.get_object(store, param_name)
         if not data:
-            data = CfopData(code=code, description=description,
-                            store=store)
+            # There is no unique code constraint in the cfop_data table!
+            data = store.find(CfopData, code=code).any()
+            if data is None:
+                data = CfopData(code=code, description=description,
+                                store=store)
             self.set_object(store, param_name, data)
 
     def _set_sales_person_role_default(self, store):
         if self.has_object("DEFAULT_SALESPERSON_ROLE"):
             return
         from stoqlib.domain.person import EmployeeRole
-        role = EmployeeRole(name=_(u'Salesperson'),
-                            store=store)
-        self.set_object(store, "DEFAULT_SALESPERSON_ROLE", role,
-                        is_editable=False)
+        role = EmployeeRole.get_or_create(store, name=_(u'Salesperson'))
+        self.set_object(store, "DEFAULT_SALESPERSON_ROLE", role)
 
     def _set_product_tax_constant_default(self, store):
         if self.has_object("DEFAULT_PRODUCT_TAX_CONSTANT"):
@@ -1020,10 +1180,11 @@ class ParameterAccess(object):
                                              SellableTaxConstant)
         from stoqlib.domain.service import Service
         tax_constant = SellableTaxConstant.get_by_type(TaxType.SERVICE, store)
-        sellable = Sellable(store=store,
-                            description=_(u'Delivery'))
+        sellable = store.find(Sellable, description=_(u'Delivery')).any()
+        if not sellable:
+            sellable = Sellable(store=store, description=_(u'Delivery'))
         sellable.tax_constant = tax_constant
-        service = Service(sellable=sellable, store=store)
+        service = sellable.service or Service(sellable=sellable, store=store)
         self.set_object(store, "DELIVERY_SERVICE", service)
 
     def _verify_detail(self, field_name, expected_type=None):
@@ -1038,39 +1199,45 @@ class ParameterAccess(object):
         return detail
 
     def _set_param_internal(self, store, param_name, value, expected_type):
-        param = store.find(ParameterData, field_name=unicode(param_name)).one()
-        if param is None:
-            raise ValueError("param_name %s is not a valid parameter" % (
-                param_name, ))
+        self._verify_detail(param_name, expected_type)
+        param = ParameterData.get_or_create(store, field_name=str(param_name))
 
-        if value is not None and not type(value) is expected_type:
-            raise TypeError("%s must be a decimal, not %r" % (
-                param_name, type(value).__name__))
+        if value is not None and not isinstance(value, expected_type):
+            raise TypeError("%s must be a %s, not %r" % (
+                param_name, expected_type, type(value).__name__))
 
         # bool are represented as 1/0
         if expected_type is bool:
             value = int(value)
-        self._values[param_name] = param.field_value = unicode(value)
 
-    def _set_default_value(self, store, detail, value):
+        param.field_value = str(value)
+        self.set_value_generic(param_name, param.field_value)
+
+    def _set_default_value(self, store, param_name):
+        """Sets the default initial value for a param in the database
+
+        If the param is not present in the ParameterData table, it will be
+        created with the default initial value.
+        """
+        if self._values.get(param_name, None) is not None:
+            return
+
+        detail = self.get_detail_by_name(param_name)
+        value = detail.initial
         if value is None:
             return
 
         if detail.type is bool:
             value = int(value)
         if value is not None:
-            value = unicode(value)
+            value = str(value)
 
-        param_name = detail.key
-        data = self._values.get(param_name)
-        if data is None:
-            data = ParameterData(store=store,
-                                 field_name=param_name,
-                                 field_value=value,
-                                 is_editable=True)
-            self._values[param_name] = data.field_value
-
-        data.field_value = value
+        data = ParameterData(store=store,
+                             field_name=param_name,
+                             field_value=value,
+                             is_editable=detail.is_editable)
+        self._values[param_name] = data.field_value
+        return data.field_value
 
     def _remove_unused_parameters(self, store):
         """
@@ -1087,18 +1254,12 @@ class ParameterAccess(object):
     # Public API
     #
 
+    def register_param(self, detail):
+        self._details[detail.key] = detail
+
     def clear_cache(self):
         """Clears the internal cache so it can be rebuilt on next access"""
         self._values_cache = None
-
-    def check_parameter_presence(self):
-        """
-        Check so the number of installed parameters are equal to
-        the number of available ones
-
-        :returns: ``True`` if they're up to date, ``False`` otherwise
-        """
-        return len(self._values) == len(self._details)
 
     def ensure_system_parameters(self, store, update=False):
         """
@@ -1113,18 +1274,34 @@ class ParameterAccess(object):
         # will differ from database.
         if update:
             self.clear_cache()
-        self._remove_unused_parameters(store)
-
-        for detail in self._details.values():
-            if update and detail.key in self._values:
-                continue
-
-            if update:
-                default = detail.onupgrade
-            else:
-                default = detail.initial
-            self._set_default_value(store, detail, default)
         self._create_default_values(store)
+
+    def get(self, param_name, expected_type=None, store=None):
+        detail = self._verify_detail(param_name, expected_type)
+        value = self._values.get(param_name)
+        if value is None:
+            # This parameter should be created on read and not on edit.
+            if param_name == 'USER_HASH':
+                from stoqlib.database.runtime import new_store
+                new_store = new_store()
+                value = self._set_default_value(new_store, u'USER_HASH')
+                new_store.commit()
+                return value
+            # initial value is already of the correct type
+            return detail.initial
+
+        if expected_type is bool:
+            return value == u'1'
+        elif expected_type in (Decimal, int):
+            try:
+                return expected_type(value)
+            except ValueError:
+                return expected_type(detail.initial)
+        elif isinstance(expected_type, str):
+            field_type = detail.get_parameter_type()
+            return store.get(field_type, str(value))
+
+        return value
 
     def set_bool(self, store, param_name, value):
         """
@@ -1135,7 +1312,6 @@ class ParameterAccess(object):
         :param value: the value to set
         :type value: bool
         """
-        self._verify_detail(param_name, bool)
         self._set_param_internal(store, param_name, value, bool)
 
     def get_bool(self, param_name):
@@ -1146,11 +1322,7 @@ class ParameterAccess(object):
         :returns: the database value
         :rtype: bool
         """
-        detail = self._verify_detail(param_name, bool)
-        value = self._values.get(param_name)
-        if value is None:
-            return detail.initial
-        return value == u'1'
+        return self.get(param_name, bool)
 
     def set_decimal(self, store, param_name, value):
         """
@@ -1161,7 +1333,6 @@ class ParameterAccess(object):
         :param value: the value to set
         :type value: decimal.Decimal
         """
-        self._verify_detail(param_name, Decimal)
         self._set_param_internal(store, param_name, value, Decimal)
 
     def get_decimal(self, param_name):
@@ -1172,15 +1343,7 @@ class ParameterAccess(object):
         :returns: the database value
         :rtype: decimal.Decimal
         """
-        detail = self._verify_detail(param_name, Decimal)
-        value = self._values.get(param_name)
-        if value is None:
-            return detail.initial
-
-        try:
-            return Decimal(value)
-        except ValueError:
-            return detail.initial
+        return self.get(param_name, Decimal)
 
     def set_int(self, store, param_name, value):
         """
@@ -1191,7 +1354,6 @@ class ParameterAccess(object):
         :param value: the value to set
         :type value: int
         """
-        self._verify_detail(param_name, int)
         self._set_param_internal(store, param_name, value, int)
 
     def get_int(self, param_name):
@@ -1202,15 +1364,7 @@ class ParameterAccess(object):
         :returns: the database value
         :rtype: int
         """
-        detail = self._verify_detail(param_name, int)
-        value = self._values.get(param_name)
-        if value is None:
-            return detail.initial
-
-        try:
-            return int(value)
-        except ValueError:
-            return detail.initial
+        return self.get(param_name, int)
 
     def set_string(self, store, param_name, value):
         """
@@ -1221,8 +1375,7 @@ class ParameterAccess(object):
         :param value: the value to set
         :type value: unicode
         """
-        self._verify_detail(param_name, unicode)
-        self._set_param_internal(store, param_name, value, unicode)
+        self._set_param_internal(store, param_name, str(value or ''), str)
 
     def get_string(self, param_name):
         """
@@ -1232,14 +1385,9 @@ class ParameterAccess(object):
         :returns: the database value
         :rtype: unicode
         """
-        detail = self._verify_detail(param_name, unicode)
-        value = self._values.get(param_name)
-        if value is None:
-            return detail.initial
+        return self.get(param_name, str)
 
-        return value
-
-    def set_object(self, store, param_name, value, is_editable=True):
+    def set_object(self, store, param_name, value):
         """
         Updates a database object.
 
@@ -1247,7 +1395,6 @@ class ParameterAccess(object):
         :param param_name: the parameter name
         :param value: the value to set
         :type value: a domain object
-        :param is_editable: if the parameter can be modified interactivly
         """
         detail = self._details.get(param_name)
         if detail is None:
@@ -1255,32 +1402,17 @@ class ParameterAccess(object):
 
         field_type = detail.get_parameter_type()
         if (value is not None and
-            not isinstance(value, field_type)):
+                not isinstance(value, field_type)):
             raise TypeError("%s must be a %s instance, not %r" % (
                 param_name, field_type.__name__,
                 type(value).__name__))
 
-        param = ParameterData.get_or_create(store, field_name=unicode(param_name))
+        param = ParameterData.get_or_create(store, field_name=str(param_name))
         if value is not None:
-            value = unicode(value.id)
+            value = str(value.id)
         param.field_value = value
-        param.is_editable = is_editable
+        param.is_editable = detail.is_editable
         self._values[param_name] = value
-
-    def set_object_default(self, store, param_name, value, is_editable=True):
-        """
-        Updates the default value for a database object. This works like
-        .set_object() but only updates if it doesn't have a value set.
-
-        :param store: a database store
-        :param param_name: the parameter name
-        :param value: the value to set
-        :type value: a domain object
-        :param is_editable: if the parameter can be modified interactivly
-        """
-        if self.has_object(param_name):
-            return
-        self.set_object(store, param_name, value, is_editable=is_editable)
 
     def get_object(self, store, param_name):
         """
@@ -1294,12 +1426,7 @@ class ParameterAccess(object):
         :returns: the object
         """
         detail = self._verify_detail(param_name)
-        value = self._values.get(param_name)
-        if value is None:
-            return detail.initial
-
-        field_type = detail.get_parameter_type()
-        return store.get(field_type, unicode(value))
+        return self.get(param_name, detail.type, store)
 
     def get_object_id(self, param_name):
         """
@@ -1308,8 +1435,7 @@ class ParameterAccess(object):
         :param param_name: the parameter name
         :returns: the object id
         """
-        self._verify_detail(param_name)
-        return self._values.get(param_name)
+        return self.get(param_name)
 
     def has_object(self, param_name):
         """
@@ -1317,8 +1443,7 @@ class ParameterAccess(object):
 
         :param param_name: the parameter name
         """
-        self._verify_detail(param_name)
-        value = self._values.get(param_name)
+        value = self.get(param_name)
         return value is not None
 
     def compare_object(self, param_name, other_object):
@@ -1329,8 +1454,7 @@ class ParameterAccess(object):
         :param param_name: the parameter name
         :param other_object: object to compare
         """
-        self._verify_detail(param_name)
-        object_id = self._values.get(param_name)
+        object_id = self.get(param_name)
         if object_id is None and other_object is None:
             return True
         if other_object is None:
@@ -1350,7 +1474,18 @@ class ParameterAccess(object):
         :param value: value
         :type value: unicode
         """
+        # FIXME: Find a better way of doing this after we integrate stoq.link
+        # better with Stoq.
+        if param_name == 'ONLINE_SERVICES':
+            from stoqlib.lib.threadutils import threadit
+            from stoqlib.net.server import ServerProxy
+            p = ServerProxy(timeout=5)
+            threadit(lambda: p.check_running() and p.call('restart'))
+
         self._values[param_name] = value
+
+    def get_details(self):
+        return list(self._details.values())
 
     def get_detail_by_name(self, param_name):
         """

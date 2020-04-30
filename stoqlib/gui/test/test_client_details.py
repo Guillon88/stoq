@@ -51,9 +51,13 @@ class TestClientDetails(GUITest):
         sale.open_date = today
 
         # Product
-        self.create_sale_item(sale, product=True)
+        sellable = self.create_sellable(description=u'Normal',
+                                        storable=True, price=100)
+        sale.add_sellable(sellable)
         # Service
-        item = self.create_sale_item(sale, product=False)
+        sellable2 = self.create_sellable(description=u'Service', product=False,
+                                         price=100)
+        item = sale.add_sellable(sellable2)
         item.estimated_fix_date = today
         # Payments
         payment = self.add_payments(sale, date=today)[0]
@@ -78,12 +82,12 @@ class TestClientDetails(GUITest):
 
         args, kwargs = run_dialog.call_args
         editor, d, store, model = args
-        self.assertEquals(editor, ClientEditor)
-        self.assertEquals(d, dialog)
-        self.assertEquals(model, dialog.model)
+        self.assertEqual(editor, ClientEditor)
+        self.assertEqual(d, dialog)
+        self.assertEqual(model, dialog.model)
         self.assertTrue(isinstance(store, StoqlibStore))
-        self.assertEquals(kwargs.pop('visual_mode'), True)
-        self.assertEquals(kwargs, {})
+        self.assertEqual(kwargs.pop('visual_mode'), True)
+        self.assertEqual(kwargs, {})
 
     @mock.patch('stoqlib.gui.dialogs.clientdetails.run_dialog')
     @mock.patch('stoqlib.gui.dialogs.clientdetails.api.new_store')
@@ -94,11 +98,13 @@ class TestClientDetails(GUITest):
         sale = self.create_sale(client=client)
         self.create_sale_item(sale, product=True)
         self.create_payment(payment_type=Payment.TYPE_IN, group=sale.group)
-        sale.order()
-        sale.confirm()
+        sale.order(self.current_user)
+        sale.confirm(self.current_user)
 
         sale2 = self.create_sale(client=client)
-        self.create_returned_sale(sale2)
+        item = self.create_sale_item(sale2, product=True)
+        returned_sale = self.create_returned_sale(sale2)
+        self.create_returned_sale_item(returned_sale, item)
 
         self.create_workorder(client=client)
         dialog = ClientDetailsDialog(self.store, client)
@@ -108,7 +114,7 @@ class TestClientDetails(GUITest):
         sales_tab.klist.select(sales_tab.klist[0])
         self.click(sales_tab.button_box.details_button)
         args, kwargs = run_dialog.call_args
-        self.assertEquals(args[0], SaleDetailsDialog)
+        self.assertEqual(args[0], SaleDetailsDialog)
         self.assertTrue(isinstance(kwargs['model'], SaleView))
 
         # Test Sales tab return button
@@ -126,7 +132,7 @@ class TestClientDetails(GUITest):
         returned_sales_tab.klist.select(returned_sales_tab.klist[0])
         self.click(returned_sales_tab.button_box.details_button)
         args, kwargs = run_dialog.call_args
-        self.assertEquals(args[0], SaleDetailsDialog)
+        self.assertEqual(args[0], SaleDetailsDialog)
         self.assertTrue(isinstance(kwargs['model'], SaleView))
 
         # Test Work Orders tab details button
@@ -134,7 +140,7 @@ class TestClientDetails(GUITest):
         work_orders_tab.klist.select(work_orders_tab.klist[0])
         self.click(work_orders_tab.button_box.details_button)
         args, kwargs = run_dialog.call_args
-        self.assertEquals(args[0], WorkOrderEditor)
+        self.assertEqual(args[0], WorkOrderEditor)
         self.assertTrue(isinstance(kwargs['model'], WorkOrder))
 
         # Test Payment tab details button
@@ -142,7 +148,7 @@ class TestClientDetails(GUITest):
         payments_tab.klist.select(payments_tab.klist[0])
         self.click(payments_tab.button_box.details_button)
         args, kwargs = run_dialog.call_args
-        self.assertEquals(args[0], InPaymentEditor)
+        self.assertEqual(args[0], InPaymentEditor)
         self.assertTrue(isinstance(kwargs['model'], Payment))
 
 

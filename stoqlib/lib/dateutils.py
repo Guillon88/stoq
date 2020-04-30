@@ -298,7 +298,7 @@ def get_month_intervals_for_year(year):
 
     while True:
         try:
-            yield months.next(), months.next()
+            yield next(months), next(months)
         except StopIteration:
             break
 
@@ -323,7 +323,7 @@ def pretty_date(time=False, asdays=False):
     '''
 
     now = datetime.datetime.now()
-    if type(time) is int:
+    if isinstance(time, int):
         time = datetime.datetime.fromtimestamp(time)
     elif not time:
         time = now

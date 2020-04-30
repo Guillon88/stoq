@@ -28,10 +28,9 @@ import datetime
 import logging
 import serial
 import sys
+import traceback
 
-import glib
-import gobject
-import gtk
+from gi.repository import Gtk, GLib, GObject
 from kiwi.utils import gsignal
 from stoqdrivers.exceptions import (DriverError, CouponOpenError,
                                     OutofPaperError, PrinterOfflineError)
@@ -80,13 +79,13 @@ def _flush_interface():
     """ Sometimes we need to 'flush' interface, so that the dialog has some
     time to disaperar before we send a blocking command to the printer
     """
-    while gtk.events_pending():
-        gtk.main_iteration()
+    while Gtk.events_pending():
+        Gtk.main_iteration()
 
 # FIXME: Maybe this should be a singleton
 
 
-class FiscalPrinterHelper(gobject.GObject):
+class FiscalPrinterHelper(GObject.GObject):
     """
 
     Signals:
@@ -99,17 +98,15 @@ class FiscalPrinterHelper(gobject.GObject):
       indicating if a ecf printer is present and functional.
 
     """
-                                # Closed, Blocked
-    gsignal('till-status-changed', bool, bool)
-                        # has_ecf
-    gsignal('ecf-changed', bool)
+    gsignal('till-status-changed', bool, bool)  # Closed, Blocked
+    gsignal('ecf-changed', bool)  # has_ecf
 
     def __init__(self, store, parent):
         """ Creates a new FiscalPrinterHelper object
         :param store: a store
-        :param parent: a gtk.Window subclass or None
+        :param parent: a Gtk.Window subclass or None
         """
-        gobject.GObject.__init__(self)
+        GObject.GObject.__init__(self)
         self.store = store
         self._parent = parent
         self._previous_day = False
@@ -119,7 +116,7 @@ class FiscalPrinterHelper(gobject.GObject):
         """Opens the till
         """
         try:
-            current_till = Till.get_current(self.store)
+            current_till = Till.get_current(self.store, api.get_current_station(self.store))
         except TillError as e:
             warning(str(e))
             return False
@@ -164,12 +161,15 @@ class FiscalPrinterHelper(gobject.GObject):
         :returns: True if the till was closed, otherwise False
         """
         is_partial = not close_db and not close_ecf
+        manager = get_plugin_manager()
 
+        # This behavior is only because of ECF
         if not is_partial and not self._previous_day:
-            if not yesno(_("You can only close the till once per day. "
-                           "You won't be able to make any more sales today.\n\n"
-                           "Close the till?"),
-                         gtk.RESPONSE_NO, _("Close Till"), _("Not now")):
+            if (manager.is_active('ecf') and
+                not yesno(_("You can only close the till once per day. "
+                            "You won't be able to make any more sales today.\n\n"
+                            "Close the till?"),
+                          Gtk.ResponseType.NO, _("Close Till"), _("Not now"))):
                 return
         elif not is_partial:
             # When closing from a previous day, close only what is needed.
@@ -177,7 +177,7 @@ class FiscalPrinterHelper(gobject.GObject):
             close_ecf = self._close_ecf
 
         if close_db:
-            till = Till.get_last_opened(self.store)
+            till = Till.get_last_opened(self.store, api.get_current_station(self.store))
             assert till
 
         store = api.new_store()
@@ -220,7 +220,7 @@ class FiscalPrinterHelper(gobject.GObject):
         """
         ecf_needs_closing = HasPendingReduceZ.emit()
 
-        last_till = Till.get_last(self.store)
+        last_till = Till.get_last(self.store, api.get_current_station(self.store))
         if last_till:
             db_needs_closing = last_till.needs_closing()
         else:
@@ -282,8 +282,12 @@ class FiscalPrinterHelper(gobject.GObject):
         delta = midnight - now
 
         # Call check_till at the first seconds of the next day.
-        self._midnight_check_id = glib.timeout_add_seconds(
+        self._midnight_check_id = GLib.timeout_add_seconds(
             delta.seconds, self.check_till, True)
+
+    def disable_midnight_check(self):
+        GLib.source_remove(self._midnight_check_id)
+        self._midnight_check_id = None
 
     def _till_status_changed(self, closed, blocked):
         self.emit('till-status-changed', closed, blocked)
@@ -295,7 +299,7 @@ class FiscalPrinterHelper(gobject.GObject):
         if needs_closing is CLOSE_TILL_NONE:
             self._previous_day = False
             # We still need to check if the till is open or closed.
-            till = Till.get_current(self.store)
+            till = Till.get_current(self.store, api.get_current_station(self.store))
             self._till_status_changed(closed=not till, blocked=False)
             return True
 
@@ -321,7 +325,7 @@ class FiscalPrinterHelper(gobject.GObject):
             msg = _("The till in stoq is closed, but in ECF "
                     "is opened.\n\nClose the till in ECF?")
 
-        if yesno(msg, gtk.RESPONSE_NO, _("Close Till"), _("Not now")):
+        if yesno(msg, Gtk.ResponseType.NO, _("Close Till"), _("Not now")):
             return self.close_till(close_db, close_ecf)
 
         return False
@@ -344,9 +348,10 @@ class FiscalPrinterHelper(gobject.GObject):
             self.emit('ecf-changed', False)
 
         if reset_midnight_check:
-            glib.source_remove(self._midnight_check_id)
-            self._midnight_check_id = None
-            self.setup_midnight_check()
+            self.disable_midnight_check()
+            # Wait a few seconds before adding the check again, otherwise we
+            # might add it a few miliseconds before midnight
+            GLib.timeout_add_seconds(5, self.setup_midnight_check)
 
     def run_initial_checks(self):
         """This will check:
@@ -362,7 +367,7 @@ class FiscalPrinterHelper(gobject.GObject):
 
 
 @implementer(IContainer)
-class FiscalCoupon(gobject.GObject):
+class FiscalCoupon(GObject.GObject):
     """ This class is used just to allow us cancel an item with base in a
     Sellable object. Currently, services can't be added, and they
     are just ignored -- be aware, if a coupon with only services is
@@ -383,12 +388,11 @@ class FiscalCoupon(gobject.GObject):
     gsignal('cancel')
     gsignal('get-coo', retval=int)
     gsignal('get-supports-duplicate-receipt', retval=bool)
-                                   # coo, payment, value, text
-    gsignal('print-payment-receipt', int, object, object, str)
+    gsignal('print-payment-receipt', int, object, object, str)  # coo, payment, value, text
     gsignal('cancel-payment-receipt')
 
     def __init__(self, parent):
-        gobject.GObject.__init__(self)
+        GObject.GObject.__init__(self)
 
         self._coo = None
         self._parent = parent
@@ -401,13 +405,13 @@ class FiscalCoupon(gobject.GObject):
         # This is evil, set/restore the excepthook
         oldhook = sys.excepthook
         sys.excepthook = lambda *x: None
-        retval = gobject.GObject.emit(self, signal, *args)
+        retval = GObject.GObject.emit(self, signal, *args)
         sys.excepthook = oldhook
 
         if sys.last_value is not None:
             # import traceback
             # print 'Exception caught in signal emission for %s::%s:' % (
-            #    gobject.type_name(self), signal)
+            #    GObject.type_name(self), signal)
             # traceback.print_exception(sys.last_type, sys.last_value,
             #                          sys.last_traceback)
             raise sys.last_value  # pylint: disable=E0702
@@ -469,16 +473,16 @@ class FiscalCoupon(gobject.GObject):
                     return False
             except OutofPaperError:
                 if not yesno(
-                    _("The fiscal printer has run out of paper.\nAdd more paper "
-                      "before continuing."),
-                    gtk.RESPONSE_YES, _("Resume"), _("Confirm later")):
+                        _("The fiscal printer has run out of paper.\nAdd more paper "
+                          "before continuing."),
+                        Gtk.ResponseType.YES, _("Resume"), _("Confirm later")):
                     return False
                 return self.open()
             except PrinterOfflineError:
                 if not yesno(
-                    (_(u"The fiscal printer is offline, turn it on and try "
-                       "again")),
-                    gtk.RESPONSE_YES, _(u"Resume"), _(u"Confirm later")):
+                        (_(u"The fiscal printer is offline, turn it on and try "
+                           "again")),
+                        Gtk.ResponseType.YES, _(u"Resume"), _(u"Confirm later")):
                     return False
                 return self.open()
             except (DriverError, DeviceError) as e:
@@ -519,7 +523,7 @@ class FiscalCoupon(gobject.GObject):
         msg = _(u"Payment value (%s) is greater than sale's total (%s). "
                 "Do you want to confirm it anyway?") % (payment, amount)
         if (sale_total < payments_total and not
-            yesno(msg, gtk.RESPONSE_NO, _(u"Confirm Sale"), _(u"Don't Confirm"))):
+                yesno(msg, Gtk.ResponseType.NO, _(u"Confirm Sale"), _(u"Don't Confirm"))):
             return False
 
         model = run_dialog(ConfirmSaleWizard, self._parent, store, sale,
@@ -553,18 +557,22 @@ class FiscalCoupon(gobject.GObject):
 
             # FIXME: This used to be done inside sale.confirm. Maybe it would
             # be better to do a proper error handling
-            till = Till.get_current(store)
+            till = Till.get_current(store, api.get_current_station(store))
             assert till
-            sale.confirm(till=till)
+            sale.confirm(api.get_current_user(store), till=till)
 
             # Only finish the transaction after everything passed above.
             store.confirm(model)
         except Exception as e:
-            warning(_("An error happened while trying to confirm the sale. "
-                      "Cancelling the coupon now..."), str(e))
-            self.cancel()
-            store.rollback(name=savepoint, close=False)
-            return False
+            traceback.print_exception(*sys.exc_info())
+            message = _("An error happened while trying to confirm the sale.")
+            # Just cancel the sale if the coupon is actually being used.
+            if get_plugin_manager().is_active('ecf'):
+                warning(message + ' ' + _("Cancelling the coupon now..."), str(e))
+                self.cancel()
+                store.rollback(name=savepoint, close=False)
+                return False
+            warning(_(message), str(e))
 
         print_cheques_for_payment_group(store, sale.group)
 
@@ -576,7 +584,7 @@ class FiscalCoupon(gobject.GObject):
 
         if (booklets and
             yesno(_("Do you want to print the booklets for this sale?"),
-                  gtk.RESPONSE_YES, _("Print booklets"), _("Don't print"))):
+                  Gtk.ResponseType.YES, _("Print booklets"), _("Don't print"))):
             try:
                 print_report(BookletReport, booklets)
             except ReportError:
@@ -584,7 +592,7 @@ class FiscalCoupon(gobject.GObject):
 
         if (bills and BillReport.check_printable(bills) and
             yesno(_("Do you want to print the bills for this sale?"),
-                  gtk.RESPONSE_YES, _("Print bills"), _("Don't print"))):
+                  Gtk.ResponseType.YES, _("Print bills"), _("Don't print"))):
             try:
                 print_report(BillReport, bills)
             except ReportError:
@@ -592,6 +600,22 @@ class FiscalCoupon(gobject.GObject):
                 warning(_("Could not print bills"))
 
         return True
+
+    def add_sale_items(self, sale):
+        subtotal = 0
+        for sale_item in sale.get_items(with_children=False):
+            sellable = sale_item.sellable
+            if (sellable.service or
+                    (sellable.product and not sellable.product.is_package)):
+                # Do not add the package item in the coupon
+                self.add_item(sale_item)
+                subtotal += sale_item.get_total()
+
+            for child in sale_item.children_items:
+                self.add_item(child)
+                subtotal += child.get_total()
+
+        return subtotal
 
     def print_receipts(self, sale):
         # supports_duplicate = self.emit('get-supports-duplicate-receipt')
@@ -627,7 +651,7 @@ class FiscalCoupon(gobject.GObject):
             while not retval:
                 if not yesno(_(u"An error occurred while trying to print. "
                                u"Would you like to try again?"),
-                             gtk.RESPONSE_YES,
+                             Gtk.ResponseType.YES,
                              _("Try again"), _(u"Don't try again")):
                     CancelPendingPaymentsEvent.emit()
                     try:
@@ -670,7 +694,7 @@ class FiscalCoupon(gobject.GObject):
                          % str(details))
                 if not yesno(_(u"An error occurred while trying to print. "
                                u"Would you like to try again?"),
-                             gtk.RESPONSE_YES,
+                             Gtk.ResponseType.YES,
                              _("Try again"), _(u"Don't try again")):
                     CancelPendingPaymentsEvent.emit()
                     return False
@@ -690,7 +714,7 @@ class FiscalCoupon(gobject.GObject):
                 log.info("Error canceling coupon: %s" % str(details))
                 if not yesno(_(u"An error occurred while trying to cancel the "
                                u"the coupon. Would you like to try again?"),
-                             gtk.RESPONSE_YES,
+                             Gtk.ResponseType.YES,
                              _("Try again"), _(u"Don't try again")):
                     return False
                 _flush_interface()
@@ -719,7 +743,7 @@ class FiscalCoupon(gobject.GObject):
                          % str(details))
                 if not yesno(_(u"An error occurred while trying to print. "
                                u"Would you like to try again?"),
-                             gtk.RESPONSE_YES,
+                             Gtk.ResponseType.YES,
                              _("Try again"), _(u"Don't try again")):
                     CancelPendingPaymentsEvent.emit()
                     return False
@@ -745,7 +769,7 @@ class FiscalCoupon(gobject.GObject):
                          % str(details))
                 if not yesno(_(u"An error occurred while trying to print. "
                                u"Would you like to try again?"),
-                             gtk.RESPONSE_YES,
+                             Gtk.ResponseType.YES,
                              _("Try again"), _(u"Don't try again")):
                     CancelPendingPaymentsEvent.emit()
                     return False

@@ -25,10 +25,11 @@
 
 import datetime
 
-import gtk
+from gi.repository import Gtk, GdkPixbuf
 from kiwi.ui.objectlist import Column
 from kiwi.ui.gadgets import render_pixbuf
 
+from stoqlib.api import api
 from stoqlib.database.runtime import get_current_branch, get_current_user
 from stoqlib.domain.workorder import (WorkOrderPackage,
                                       WorkOrderPackageSentView,
@@ -40,7 +41,7 @@ from stoqlib.gui.base.wizards import (BaseWizardStep, WizardEditorStep,
                                       BaseWizard)
 from stoqlib.gui.editors.workordereditor import WorkOrderEditor
 from stoqlib.gui.search.searchcolumns import IdentifierColumn
-from stoqlib.gui.utils.workorderutils import get_workorder_state_icon
+from stoqlib.gui.utils.iconutils import get_workorder_state_icon, render_icon
 
 _ = stoqlib_gettext
 
@@ -120,10 +121,10 @@ class WorkOrderPackageReceiveOrdersStep(WizardEditorStep):
             Column('equipment', _(u"Equipment (Description)"), data_type=str,
                    expand=True, pack_end=True),
             Column('category_color', title=_(u'Equipment'),
-                   column='equipment', data_type=gtk.gdk.Pixbuf,
+                   column='equipment', data_type=GdkPixbuf.Pixbuf,
                    format_func=render_pixbuf),
             Column('flag_icon', title=_(u'Equipment'), column='equipment',
-                   data_type=gtk.gdk.Pixbuf, format_func_data=True,
+                   data_type=GdkPixbuf.Pixbuf, format_func_data=True,
                    format_func=self._format_state_icon),
             Column('client_name', _(u"Client"), data_type=str),
             Column('salesperson_name', _(u"Salesperson"), data_type=str,
@@ -148,9 +149,7 @@ class WorkOrderPackageReceiveOrdersStep(WizardEditorStep):
     def _format_state_icon(self, item, data):
         stock_id, tooltip = get_workorder_state_icon(item.work_order)
         if stock_id is not None:
-            # We are using self.identifier because render_icon is a
-            # gtk.Widget's # method. It has nothing to do with results tough.
-            return self.identifier.render_icon(stock_id, gtk.ICON_SIZE_MENU)
+            return render_icon(stock_id, Gtk.IconSize.MENU)
 
     def _find_orders(self):
         orders = WorkOrderWithPackageView.find_by_package(
@@ -195,6 +194,6 @@ class WorkOrderPackageReceiveWizard(BaseWizard):
 
     def finish(self):
         self.model.receive_responsible = get_current_user(self.store)
-        self.model.receive()
+        self.model.receive(api.get_current_user(self.store))
         self.retval = self.model
         self.close()

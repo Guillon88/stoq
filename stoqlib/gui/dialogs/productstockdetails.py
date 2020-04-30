@@ -27,10 +27,9 @@
 import datetime
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column, ObjectList, SummaryLabel
-from storm.expr import And, Ne
 
 from stoqlib.api import api
 from stoqlib.domain.inventory import InventoryItemsView
@@ -38,7 +37,7 @@ from stoqlib.domain.person import Branch
 from stoqlib.domain.product import StorableBatchView
 from stoqlib.domain.sale import ReturnedSaleItemsView
 from stoqlib.domain.sellable import Sellable
-from stoqlib.domain.transfer import TransferOrderItem
+from stoqlib.domain.transfer import TransferItemView
 from stoqlib.domain.views import (ReceivingItemView, SaleItemsView,
                                   LoanItemView, StockDecreaseItemsView)
 from stoqlib.lib.formatters import get_formatted_cost, format_quantity
@@ -73,13 +72,13 @@ class ProductStockHistoryDialog(BaseEditor):
         self._setup_widgets()
 
     def add_tab(self, name):
-        box = gtk.HBox()
+        box = Gtk.HBox()
         box.set_border_width(6)
         box.show()
         olist = ObjectList()
-        box.pack_start(olist)
+        box.pack_start(olist, True, True, 0)
         olist.show()
-        self.history_notebook.append_page(box, gtk.Label(name))
+        self.history_notebook.append_page(box, Gtk.Label(label=name))
         return olist
 
     def _add_batches_tab(self):
@@ -116,10 +115,7 @@ class ProductStockHistoryDialog(BaseEditor):
             items = items.find(Branch.id == current_branch.id)
         self.sales_list.add_list(list(items))
 
-        items = self.store.find(
-            TransferOrderItem,
-            And(Ne(TransferOrderItem.transfer_order_id, None),
-                TransferOrderItem.sellable_id == self.model.id))
+        items = TransferItemView.find_by_branch(self.store, self.model, current_branch)
         self.transfer_list.add_list(list(items))
 
         items = self.store.find(LoanItemView, sellable_id=self.model.id)
@@ -149,34 +145,34 @@ class ProductStockHistoryDialog(BaseEditor):
                                                label=total_label,
                                                value_format=value_format)
         receiving_summary_label.show()
-        self.receiving_vbox.pack_start(receiving_summary_label, False)
+        self.receiving_vbox.pack_start(receiving_summary_label, False, True, 0)
 
         sales_summary_label = SummaryLabel(klist=self.sales_list,
                                            column='quantity',
                                            label=total_label,
                                            value_format=value_format)
         sales_summary_label.show()
-        self.sales_vbox.pack_start(sales_summary_label, False)
+        self.sales_vbox.pack_start(sales_summary_label, False, True, 0)
 
         transfer_summary_label = SummaryLabel(klist=self.transfer_list,
-                                              column='quantity',
+                                              column='item_quantity',
                                               label=total_label,
                                               value_format=value_format)
         transfer_summary_label.show()
-        self.transfer_vbox.pack_start(transfer_summary_label, False)
+        self.transfer_vbox.pack_start(transfer_summary_label, False, True, 0)
 
         loan_summary_label = SummaryLabel(klist=self.loan_list,
                                           column='quantity',
                                           label=total_label,
                                           value_format=value_format)
-        self.loan_vbox.pack_start(loan_summary_label, False)
+        self.loan_vbox.pack_start(loan_summary_label, False, True, 0)
 
         decrease_summary_label = SummaryLabel(klist=self.decrease_list,
                                               column='quantity',
                                               label=total_label,
                                               value_format=value_format)
         decrease_summary_label.show()
-        self.decrease_vbox.pack_start(decrease_summary_label, False)
+        self.decrease_vbox.pack_start(decrease_summary_label, False, True, 0)
 
     def _get_receiving_columns(self):
         return [IdentifierColumn("order_identifier", title=_('Receiving #'), sorted=True),
@@ -185,15 +181,15 @@ class ProductStockHistoryDialog(BaseEditor):
                 Column('batch_date', title=_('Batch Date'),
                        data_type=datetime.date, visible=False),
                 Column("receival_date", title=_("Date"),
-                       data_type=datetime.date, justify=gtk.JUSTIFY_RIGHT),
+                       data_type=datetime.date, justify=Gtk.Justification.RIGHT),
                 IdentifierColumn("purchase_identifier",
                                  title=_("Purchase #")),
                 Column("supplier_name", title=_("Supplier"), expand=True,
                        data_type=str),
                 Column("invoice_number", title=_("Invoice"), data_type=str,
-                       justify=gtk.JUSTIFY_RIGHT),
+                       justify=Gtk.Justification.RIGHT),
                 Column("quantity", title=_("Quantity"), data_type=Decimal,
-                       justify=gtk.JUSTIFY_RIGHT),
+                       justify=Gtk.Justification.RIGHT),
                 Column("cost", title=_("Cost"), data_type=currency),
                 Column("unit_description", title=_("Unit"), data_type=str)]
 
@@ -205,7 +201,7 @@ class ProductStockHistoryDialog(BaseEditor):
                        data_type=datetime.date, visible=False),
                 Column("sale_date",
                        title=_("Date Started"), data_type=datetime.date,
-                       justify=gtk.JUSTIFY_RIGHT),
+                       justify=Gtk.Justification.RIGHT),
                 Column("client_name",
                        title=_("Client"), expand=True, data_type=str),
                 Column("quantity", title=_("Sold"),
@@ -217,20 +213,23 @@ class ProductStockHistoryDialog(BaseEditor):
     def _get_transfer_columns(self):
         return [IdentifierColumn("transfer_order.identifier", title=_('Transfer #'),
                                  sorted=True),
-                Column('batch.batch_number', title=_('Batch'), data_type=str,
+                Column('batch_number', title=_('Batch'), data_type=str,
                        visible=self._is_batch),
                 Column('batch_date', title=_('Batch Date'),
                        data_type=datetime.date, visible=False),
                 Column("transfer_order.open_date",
                        title=_("Date Created"), data_type=datetime.date,
-                       justify=gtk.JUSTIFY_RIGHT),
+                       justify=Gtk.Justification.RIGHT),
+                Column("transfer_order.source_branch_name",
+                       title=_("Source"), expand=True,
+                       data_type=str),
                 Column("transfer_order.destination_branch_name",
                        title=_("Destination"), expand=True,
                        data_type=str),
                 Column("transfer_order.source_responsible_name",
                        title=_("Responsible"), expand=True,
                        data_type=str),
-                Column("quantity", title=_("Transfered"),
+                Column("item_quantity", title=_("Transfered"),
                        data_type=Decimal)]
 
     def _get_loan_columns(self):
@@ -240,7 +239,7 @@ class ProductStockHistoryDialog(BaseEditor):
                 Column('batch_date', title=_('Batch Date'),
                        data_type=datetime.date, visible=False),
                 Column("opened", title=_(u"Opened"),
-                       data_type=datetime.date, justify=gtk.JUSTIFY_RIGHT),
+                       data_type=datetime.date, justify=Gtk.Justification.RIGHT),
                 Column("code", title=_(u"Code"), data_type=str, visible=False),
                 Column("category_description", title=_(u"Category"),
                        data_type=str, visible=False),
@@ -259,7 +258,7 @@ class ProductStockHistoryDialog(BaseEditor):
                 Column('batch_date', title=_('Batch Date'),
                        data_type=datetime.date, visible=False),
                 Column("date", title=_("Date"), data_type=datetime.date,
-                       justify=gtk.JUSTIFY_RIGHT),
+                       justify=Gtk.Justification.RIGHT),
                 Column("removed_by_name", title=_("Removed By"), expand=True,
                        data_type=str),
                 Column("quantity", title=_("Quantity"), data_type=int),
@@ -274,9 +273,9 @@ class ProductStockHistoryDialog(BaseEditor):
                 Column("responsible_name", title=_("Responsible"),
                        data_type=str),
                 Column("open_date", title=_("Open date"),
-                       data_type=datetime.date, justify=gtk.JUSTIFY_RIGHT),
+                       data_type=datetime.date, justify=Gtk.Justification.RIGHT),
                 Column("close_date", title=_("Close date"),
-                       data_type=datetime.date, justify=gtk.JUSTIFY_RIGHT),
+                       data_type=datetime.date, justify=Gtk.Justification.RIGHT),
                 Column("recorded_quantity", title=_("Recorded qty"),
                        data_type=Decimal, format_func=format_quantity),
                 Column("actual_quantity", title=_("Counted qty"),
@@ -299,7 +298,7 @@ class ProductStockHistoryDialog(BaseEditor):
                 Column("price", title=_(u"Price"), data_type=currency,
                        format_func=get_formatted_cost),
                 Column("return_date", title=_(u"Return Date"),
-                       data_type=datetime.date, justify=gtk.JUSTIFY_RIGHT)]
+                       data_type=datetime.date, justify=Gtk.Justification.RIGHT)]
 
     def _get_batches_columns(self):
         return [Column('batch_number', title=_('Batch'), data_type=str,

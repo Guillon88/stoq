@@ -1,10 +1,11 @@
 recursive-include data/csv *.csv
 recursive-include data/csv/ibpt_tables *.csv
 recursive-include data/glade *.ui
-recursive-include data/misc *.gtkrc
+recursive-include data/misc *.css
 recursive-include data/uixml *.xml
 recursive-include data/html *.html *.css *.png *.js
 recursive-include data/pixmaps *.png *.svg *.jpg *.gif *.bmp
+recursive-include data/scripts *.py
 recursive-include data/scripts *.sh
 recursive-include data/sql *.sql *.py
 recursive-include data/template *.html *.css

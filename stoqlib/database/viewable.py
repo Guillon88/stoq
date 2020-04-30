@@ -59,7 +59,7 @@ And use it like a regular table with storm:
 
     >>> store = api.new_store()
     >>> for v in store.find(ClientView).order_by(Person.name):
-    ...     print v.name, v.salary
+    ...     print(v.name, v.salary)
     Alessandra Almeida Itaberá 0.00
     Franciso Elisio de Lima Junior 0.00
     Luis Sergio da Silva Marin 0.00
@@ -109,7 +109,7 @@ Now we can create this viewable:
 
     >>> store = api.new_store()
     >>> for v in store.find(ClientSalesView).order_by(Person.name):
-    ...     print v.name, v.total_sales, v.total_value
+    ...     print(v.name, v.total_sales, v.total_value)
     Alessandra Almeida Itaberá 1 706.00
     Franciso Elisio de Lima Junior 0 None
     Luis Sergio da Silva Marin 1 873.00
@@ -120,7 +120,6 @@ Now we can create this viewable:
 """
 
 import inspect
-import warnings
 
 from kiwi.python import ClassInittableObject
 from storm.expr import Expr, JoinExpr
@@ -156,14 +155,15 @@ class Viewable(ClassInittableObject):
     #: store.find()
     clause = None
 
+    #: If not ``None``, this will be used to filter the query using HAVING
+    having = None
+
     #: This is a list of column names that should not be selected, but should
     #: still be possible to filter by.
     hidden_columns = []
 
     @property
     def store(self):
-        warnings.warn("Dont use self.store - get it from some other object)",
-                      DeprecationWarning, stacklevel=2)
         return self._store
 
     # Maybe we could try to use the same api from storm (autoreload)
@@ -191,9 +191,9 @@ class Viewable(ClassInittableObject):
         cls_spec = []
         attributes = []
 
-        # We can ignore the last two items, since they are the Viewable class
-        # and ``object``
-        for base in inspect.getmro(cls)[:-2]:
+        # We can ignore the last three items, since they are: the Viewable class
+        # kwi.ClassInitiableObject and ``object``
+        for base in inspect.getmro(cls)[:-3]:
             for attr, value in base.__dict__.items():
                 if attr == 'clause':
                     continue
@@ -211,13 +211,47 @@ class Viewable(ClassInittableObject):
                 if is_domain and value.__name__.endswith('Alias'):
                     continue
 
-                if (is_domain or isinstance(value, PropertyColumn) or
-                        isinstance(value, Expr)):
+                is_column = isinstance(value, PropertyColumn)
+                if is_column:
+                    vf = value.variable_factory
+                    # Storm suffers from a bug that, if a column defines
+                    # "allow_none=False", it will fail when it is retrieved
+                    # from the database as NULL. That is something very common
+                    # for viewables doing left joins and it should not fail.
+                    # To workaround that, lets create a copy of it and remove
+                    # the allow_none keyword from the property
+                    if not vf.keywords.get('allow_none', True):
+                        keywords = vf.keywords.copy()
+
+                        # We want to remove allow_none so it will assume its
+                        # default form (True). Also, validator_attribute should
+                        # be passed on the constructor and column will be
+                        # passed to variable_factory as "self" inside the
+                        # PropertyColumn.
+                        validator_attribute = keywords.pop('validator_attribute')
+                        for kw in ['allow_none', 'column']:
+                            keywords.pop(kw, None)
+
+                        # This is a copy of how the PropertyColumn is created
+                        # by Storm, passing exactly the same arguments. The
+                        # resulting object should be identical to the original
+                        value = PropertyColumn(
+                            value, value.cls, validator_attribute,
+                            value.name, value.primary, vf.func, keywords)
+                        setattr(cls, attr, value)
+
+                if (attr not in attributes and (is_domain or is_column or
+                                                isinstance(value, Expr))):
                     attributes.append(attr)
                     cls_spec.append(value)
 
         cls.cls_spec = tuple(cls_spec)
         cls.cls_attributes = attributes
+
+        # We store highjacked classes in this dict. Highjacked viewables
+        # are the ones that we create programatically changing one or another
+        # attribute (e.g. a join). See ProductFullStockView for more details
+        cls.highjacked = {}
 
     @classmethod
     def extend_viewable(cls, new_attrs, new_joins=None):
@@ -233,26 +267,14 @@ class Viewable(ClassInittableObject):
         """
         # Create a new viewable as a subclass of the original viewable, that
         # inclues the new tables
-        tables = cls.tables + (new_joins or [])
-        new_table = type(cls.__name__ + 'Ext', (cls,), dict(tables=tables))
+        klass_dict = dict(
+            tables=cls.tables + (new_joins or []),
+            **new_attrs)
 
-        # Extend the new attributes
-        cls_attributes = cls.cls_attributes[:]
-        cls_spec = list(cls.cls_spec)
-        group_by = cls.group_by[:]
-
-        for key, value in new_attrs.items():
-            setattr(new_table, key, value)
-            cls_attributes.append(key)
-            cls_spec.append(value)
-            group_by.append(value)
-
-        new_table.cls_attributes = cls_attributes
-        new_table.cls_spec = tuple(cls_spec)
         if cls.group_by:
-            new_table.group_by = group_by
+            klass_dict['group_by'] = cls.group_by[:] + list(new_attrs.values())
 
-        return new_table
+        return type(cls.__name__ + 'Ext', (cls, ), klass_dict)
 
     @classmethod
     def has_join_with(cls, table):
@@ -267,7 +289,7 @@ class Viewable(ClassInittableObject):
             if not isinstance(i, JoinExpr):
                 if i is table:
                     return True
-            elif table in (i.left, i.right):
+            elif i.left is table or i.right is table:
                 return True
         return False
 

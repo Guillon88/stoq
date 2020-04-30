@@ -27,7 +27,7 @@ import operator
 import platform
 from serial import SerialException
 
-import gtk
+from gi.repository import Gtk
 from kiwi.enums import ListType
 from kiwi.ui.objectlist import Column
 from stoqdrivers.interfaces import ICouponPrinter
@@ -57,9 +57,9 @@ _ = stoqlib_gettext
 
 class _PrinterModel(object):
     def __init__(self, brand, printer_class):
-        self.brand = unicode(brand)
-        self.model = unicode(printer_class.__name__)
-        self.model_name = unicode(printer_class.model_name)
+        self.brand = str(brand)
+        self.model = str(printer_class.__name__)
+        self.model_name = str(printer_class.model_name)
         self.printer_class = printer_class
 
     def get_description(self):
@@ -76,7 +76,6 @@ class ECFEditor(BaseEditor):
                      'user_number', 'register_date', 'register_cro']
 
     def __init__(self, store, model=None):
-        self._device_manager = DeviceManager()
         BaseEditor.__init__(self, store, model)
         self.progress_dialog = ProgressDialog()
         self.progress_dialog.connect('cancel',
@@ -181,12 +180,14 @@ class ECFEditor(BaseEditor):
 
     def _printer_status__reply(self, status, reply):
         self.progress_dialog.stop()
+        if not reply:
+            return
         if not self._populate_ecf_printer(status):
             return
 
         if yesno(_("An ECF Printer was added. You need to restart Stoq "
                    "before using it. Would you like to restart it now?"),
-                 gtk.RESPONSE_YES, _("Restart now"), _("Restart later")):
+                 Gtk.ResponseType.YES, _("Restart now"), _("Restart later")):
             self.store.commit()
             raise SystemExit
 
@@ -227,14 +228,17 @@ class ECFEditor(BaseEditor):
 
     def _populate_serial_ports(self):
         values = []
-        for device in self._device_manager.get_serial_devices():
+        for device in DeviceManager.get_serial_devices():
             values.append(device.device_name)
         if not self.model.device_name in values:
             values.append(self.model.device_name)
+        if sysparam.get_bool('DEMO_MODE') or is_developer_mode():
+            values.append(u'/dev/null')
+
         self.device_name.prefill(values)
 
     def _populate_ecf_printer(self, status):
-        serial = unicode(status.printer.get_serial())
+        serial = str(status.printer.get_serial())
         if self.store.find(ECFPrinter, device_serial=serial):
             status.stop()
             status.get_port().close()
@@ -282,7 +286,7 @@ class ECFEditor(BaseEditor):
                            constant_name=constant_name,
                            constant_type=DeviceConstant.TYPE_TAX,
                            constant_value=value,
-                           device_value=device_value,
+                           device_value=device_value.encode(),
                            printer=model,
                            store=self.store)
 
@@ -311,10 +315,10 @@ class ECFEditor(BaseEditor):
             if payment_enum in payment_methods:
                 continue
             DeviceConstant(constant_enum=int(payment_enum),
-                           constant_name=unicode(constant_name),
+                           constant_name=str(constant_name),
                            constant_type=DeviceConstant.TYPE_PAYMENT,
                            constant_value=None,
-                           device_value=device_value,
+                           device_value=device_value.encode(),
                            printer=model,
                            store=self.store)
             payment_methods.append(payment_enum)

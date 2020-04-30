@@ -24,7 +24,7 @@
 
 import glob
 import os
-import StringIO
+import io
 import unittest
 from xml.etree import ElementTree
 
@@ -84,7 +84,7 @@ class TestAPIDoc(unittest.TestCase):
             rst_data,
             settings_overrides={
                 'input_encoding': 'utf-8',
-                'warning_stream': StringIO.StringIO()})
+                'warning_stream': io.StringIO()})
 
         # Convert to an XML string
         xml = doc.asdom().toxml()
@@ -112,11 +112,6 @@ class TestAPIDoc(unittest.TestCase):
         for module in modules:
             # Skip test modules
             if module.startswith('test_'):
-                continue
-            # Skip a couple of external modules
-            if module in [
-                'generictreemodel',
-                'gicompat']:
                 continue
             self.errors.append('%s: %s module is missing' % (
                 rst_filename, module))

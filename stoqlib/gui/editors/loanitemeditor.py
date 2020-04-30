@@ -23,7 +23,7 @@
 ##
 """ Loan editors """
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 
 from stoqlib.api import api
@@ -58,12 +58,12 @@ class LoanItemEditor(BaseEditor):
         self._calc = CalculatorPopup(self.price,
                                      CalculatorPopup.MODE_SUB)
 
-        self.sale.set_text(unicode(self.model.loan.identifier))
+        self.sale.set_text(str(self.model.loan.identifier))
         self.description.set_text(self.model.sellable.get_description())
         self.original_price.update(self.model.price)
         for widget in [self.quantity, self.price]:
-            widget.set_adjustment(gtk.Adjustment(lower=0, upper=MAX_INT,
-                                                 step_incr=1))
+            widget.set_adjustment(Gtk.Adjustment(lower=0, upper=MAX_INT,
+                                                 step_increment=1))
         unit = self.model.sellable.unit
         self.quantity.set_digits(
             QUANTITY_PRECISION if unit and unit.allow_fraction else 0)
@@ -120,7 +120,7 @@ class LoanItemEditor(BaseEditor):
                  valid_data['max_discount']))
 
     def on_price__icon_press(self, entry, icon_pos, event):
-        if icon_pos != gtk.ENTRY_ICON_PRIMARY:
+        if icon_pos != Gtk.EntryIconPosition.PRIMARY:
             return
 
         # Ask for the credentials of a different user that can possibly allow a

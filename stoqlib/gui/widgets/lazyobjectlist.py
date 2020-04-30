@@ -22,7 +22,8 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 #
 
-import gtk
+from gi.repository import Gtk, GObject, GLib
+from pygtkcompat.generictreemodel import GenericTreeModel
 
 from kiwi.datatypes import number
 from kiwi.ui.objectlist import empty_marker, ListLabel
@@ -59,8 +60,7 @@ class LazyObjectModelRow(object):
         return self.item
 
 
-# FIXME: Port to Gtk.TreeModel so it works under gi
-class LazyObjectModel(gtk.GenericTreeModel, gtk.TreeSortable):
+class LazyObjectModel(GenericTreeModel, Gtk.TreeSortable):
 
     __gtype_name__ = 'LazyObjectModel'
 
@@ -107,7 +107,7 @@ class LazyObjectModel(gtk.GenericTreeModel, gtk.TreeSortable):
 
     @debug
     def on_get_flags(self):
-        return gtk.TREE_MODEL_LIST_ONLY
+        return Gtk.TreeModelFlags.LIST_ONLY
 
     @debug
     def on_get_n_columns(self):
@@ -171,9 +171,11 @@ class LazyObjectModel(gtk.GenericTreeModel, gtk.TreeSortable):
 
     @debug
     def __getitem__(self, key):
-        if isinstance(key, gtk.TreeIter):
+        if isinstance(key, Gtk.TreeIter):
             index = self.get_user_data(key)
-        elif isinstance(key, (basestring, int)):
+        elif isinstance(key, Gtk.TreePath):
+            index = self.get_user_data(self.get_iter(key))
+        elif isinstance(key, (str, int)):
             index = int(key)
         elif isinstance(key, tuple):
             index = key[0]
@@ -187,16 +189,9 @@ class LazyObjectModel(gtk.GenericTreeModel, gtk.TreeSortable):
 
     # GtkTreeSortable
 
-    if gtk.gtk_version >= (3, 0):
-        @debug
-        def do_get_sort_column_id(self):
-            return (self._sort_order >= 0, self._sort_column_id, self._sort_order)
-    else:
-        # FIXME: Remove when done with gtk2
-        @debug
-        def do_get_sort_column_id_gtk2(self):
-            return (self._sort_column_id, self._sort_order)
-        do_get_sort_column_id = do_get_sort_column_id_gtk2
+    @debug
+    def do_get_sort_column_id(self):
+        return (self._sort_order >= 0, self._sort_column_id, self._sort_order)
 
     @debug
     def do_set_sort_column_id(self, sort_column_id, sort_order):
@@ -213,8 +208,9 @@ class LazyObjectModel(gtk.GenericTreeModel, gtk.TreeSortable):
         self._load_result_set(self._result)
         self.sort_column_changed()
 
+    # FIXME: If we set this to do_set_sort_func it segfaults. Why?
     @debug
-    def do_set_sort_func(self, sort_column_id, sort_func, user_data=None):
+    def set_sort_func(self, sort_column_id, sort_func, user_data=None):
         pass
 
     @debug
@@ -264,7 +260,7 @@ class LazyObjectModel(gtk.GenericTreeModel, gtk.TreeSortable):
         self._result = self._executer.get_ordered_result(self._orig_result,
                                                          order_attr)
 
-        if self._sort_order == gtk.SORT_DESCENDING:
+        if self._sort_order == Gtk.SortType.DESCENDING:
             # Results should be reversed, so we need to invert the start and
             # end values, and use the end of the list as a reference.
             # This should be as easy as reversed(self._results[-end:-start])
@@ -384,7 +380,7 @@ class LazyObjectListUpdater(object):
             return False
 
         timeout = {}
-        timeout['source_id'] = gtk.timeout_add(
+        timeout['source_id'] = GLib.timeout_add(
             self.SCROLL_TIMEOUT, timeout_func, timeout)
         self._timeout_queue.append(timeout)
 
@@ -396,6 +392,8 @@ class LazyObjectListUpdater(object):
 
 
 class LazySummaryLabel(ListLabel):
+    __gtype_name__ = 'LazySummaryLabel'
+
     def __init__(self, klist, column, label=_('Total:'), value_format='%s',
                  font_desc=None):
         ListLabel.__init__(self, klist, column, label, value_format, font_desc)
@@ -411,3 +409,6 @@ class LazySummaryLabel(ListLabel):
             return
         column = self._column
         self.set_value(column.as_string(value))
+
+
+GObject.type_register(LazySummaryLabel)

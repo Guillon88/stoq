@@ -27,41 +27,80 @@ import collections
 import decimal
 
 from kiwi.datatypes import ValidationError
-from kiwi.ui.forms import PriceField, DateField, TextField, BoolField, EmptyField
+from kiwi.ui.forms import (PriceField, DateField, TextField, BoolField,
+                           IntegerField, ChoiceField, EmptyField, NumericField)
 from kiwi.ui.objectlist import Column, ObjectList
 
 from stoqlib.api import api
-from stoqlib.domain.person import Client, Transporter
+from stoqlib.domain.person import Client, Transporter, Person
 from stoqlib.domain.sale import Delivery
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.gui.editors.noteeditor import NoteEditor
-from stoqlib.gui.fields import AddressField, PersonField
+from stoqlib.gui.events import StockOperationPersonValidationEvent
+from stoqlib.gui.fields import AddressField, PersonField, PersonQueryField
 from stoqlib.lib.dateutils import localtoday
 from stoqlib.lib.decorators import cached_property
 from stoqlib.lib.formatters import format_quantity
 from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
+from stoqlib.lib.validators import validate_vehicle_license_plate
 
 _ = stoqlib_gettext
 
 
-class _CreateDeliveryModel(object):
-    _savepoint_attr = ['price', 'notes', 'client', 'transporter', 'address',
-                       'estimated_fix_date']
+class CreateDeliveryModel(object):
+    _savepoint_attr = ['price', 'notes', 'recipient', 'transporter_id', 'address',
+                       'estimated_fix_date', 'freight_type', 'volumes_kind',
+                       'volumes_quantity', 'volumes_gross_weight',
+                       'volumes_net_weight', 'vehicle_license_plate',
+                       'vehicle_state', 'vehicle_registration']
 
-    def __init__(self, price=None):
+    def __init__(self, price=None, notes=None, recipient=None, transporter_id=None,
+                 address=None, estimated_fix_date=None, description=None,
+                 freight_type=None, volumes_kind=None, volumes_quantity=1,
+                 volumes_gross_weight=decimal.Decimal(), vehicle_state=None,
+                 vehicle_license_plate=None, vehicle_registration=None,
+                 volumes_net_weight=decimal.Decimal(), original_delivery=None):
         self.price = price
-        self.notes = None
-        self.client = None
-        self.transporter = None
-        self.address = None
-        self.estimated_fix_date = localtoday().date()
-        self.description = _(u'Delivery')
+        self.notes = notes
+        self.address = address or (recipient and recipient.address)
+        self.recipient = recipient or (address and address.person)
+        self.transporter_id = transporter_id
+        self.estimated_fix_date = estimated_fix_date or localtoday().date()
+        self.description = description or _(u'Delivery')
+        self.freight_type = freight_type or Delivery.FREIGHT_TYPE_CIF
+        self.volumes_kind = volumes_kind or _(u'Volumes')
+        self.volumes_quantity = volumes_quantity
+        self.volumes_gross_weight = volumes_gross_weight
+        self.volumes_net_weight = volumes_net_weight
+        self.vehicle_license_plate = vehicle_license_plate
+        self.vehicle_state = vehicle_state
+        self.vehicle_registration = vehicle_registration
+        self.original_delivery = original_delivery
 
         self._savepoint = {}
 
-    # Since _CreateDeliveryModel is not a Domain, changes to it can't be
+    @classmethod
+    def from_delivery(cls, delivery):
+        service_item = delivery.service_item
+        return cls(
+            price=service_item.price,
+            notes=service_item.notes,
+            transporter_id=delivery.transporter_id,
+            address=delivery.address,
+            estimated_fix_date=service_item.estimated_fix_date,
+            freight_type=delivery.freight_type,
+            volumes_kind=delivery.volumes_kind,
+            volumes_quantity=delivery.volumes_quantity,
+            volumes_gross_weight=delivery.volumes_gross_weight,
+            volumes_net_weight=delivery.volumes_net_weight,
+            vehicle_license_plate=delivery.vehicle_license_plate,
+            vehicle_state=delivery.vehicle_state,
+            vehicle_registration=delivery.vehicle_registration,
+            original_delivery=delivery)
+
+    # Since CreateDeliveryModel is not a Domain, changes to it can't be
     # undone by a store.rollback(). Therefore, we must make the rollback
     # by hand.
 
@@ -86,7 +125,7 @@ class CreateDeliveryEditor(BaseEditor):
     """
 
     model_name = _('Delivery')
-    model_type = _CreateDeliveryModel
+    model_type = CreateDeliveryModel
     form_holder_name = 'forms'
     gladefile = 'CreateDeliveryEditor'
     title = _('New Delivery')
@@ -101,31 +140,46 @@ class CreateDeliveryEditor(BaseEditor):
             user.profile.check_app_permission(u'admin'),
             user.profile.check_app_permission(u'purchase'),
         ))
+        freight_types = [(v, k) for k, v in Delivery.freights.items()]
+        states = [(v, v) for v in api.get_l10n_field('state').state_list]
 
         return collections.OrderedDict(
-            client_id=PersonField(_("Client"), proxy=True, mandatory=True,
-                                  person_type=Client),
+            recipient=PersonQueryField(_("Recipient"), proxy=True, mandatory=True,
+                                       person_type=self.person_type),
             transporter_id=PersonField(_("Transporter"), proxy=True,
                                        person_type=Transporter,
                                        can_add=can_modify_transporter,
                                        can_edit=can_modify_transporter),
             address=AddressField(_("Address"), proxy=True, mandatory=True),
+            freight_type=ChoiceField(_("Freight type"), proxy=True,
+                                     values=freight_types),
             price=PriceField(_("Delivery cost"), proxy=True),
             estimated_fix_date=DateField(_("Estimated delivery date"), proxy=True),
+            volumes_kind=TextField(_("Volumes kind"), proxy=True),
+            volumes_quantity=IntegerField(_("Volumes quantity"), proxy=True),
+            volumes_net_weight=NumericField(_("Volumes net weight"), proxy=True,
+                                            digits=3),
+            volumes_gross_weight=NumericField(_("Volumes gross weight"),
+                                              proxy=True, digits=3),
+            vehicle_license_plate=TextField(_("Vehicle license plate"), proxy=True),
+            vehicle_state=ChoiceField(_("Vehicle state"), proxy=True, use_entry=True,
+                                      values=states),
+            vehicle_registration=TextField(_("Vehicle registration"), proxy=True),
         )
 
-    def __init__(self, store, model=None, sale_items=None):
-        self.sale_items = sale_items
+    def __init__(self, store, model=None, items=None, person_type=Client):
+        self.items = items
         self._deliver_items = []
+        self.person_type = person_type
 
         if not model:
-            for sale_item in sale_items:
-                sale_item.deliver = True
+            for item in items:
+                item.deliver = True
         else:
             model.create_savepoint()
             # Store this information for later rollback.
-            for sale_item in sale_items:
-                self._deliver_items.append(sale_item.deliver)
+            for item in items:
+                self._deliver_items.append(item.deliver)
 
         BaseEditor.__init__(self, store, model)
         self._setup_widgets()
@@ -178,15 +232,35 @@ class CreateDeliveryEditor(BaseEditor):
             return ValidationError(
                 _("The Delivery cost must be a positive value."))
 
-    def on_client_id__content_changed(self, combo):
-        client_id = combo.get_selected_data()
-        if client_id:
-            client = self.store.get(Client, client_id)
-            self.fields['address'].set_from_client(client)
-        else:
-            client = None
+    def on_vehicle_license_plate__validate(self, widget, value):
+        # Do not validate if the widget is empty
+        if not value:
+            return
 
-        self.model.client = client
+        if not validate_vehicle_license_plate(value):
+            return ValidationError(_("Invalid License Plate"))
+
+    def on_recipient__content_changed(self, entry):
+        entry_value = entry.read()
+        if entry_value is None:
+            return
+
+        if type(entry_value) is Person:
+            person = entry_value
+        else:
+            person = entry_value.person
+        self.fields['address'].set_from_person(person)
+
+    def on_transporter_id__validate(self, widget, transporter_id):
+        transporter = self.store.get(Transporter, transporter_id)
+        return StockOperationPersonValidationEvent.emit(transporter.person, type(transporter))
+
+    def on_recipient__validate(self, widget, recipient):
+        if type(recipient) is Person:
+            person = recipient
+        else:
+            person = recipient.person
+        return StockOperationPersonValidationEvent.emit(person, type(recipient))
 
     def _on_items__cell_edited(self, items, item, attribute):
         self.force_validation()
@@ -197,11 +271,17 @@ class CreateDeliveryEditor(BaseEditor):
 
     def create_model(self, store):
         price = sysparam.get_object(store, 'DELIVERY_SERVICE').sellable.price
-        return _CreateDeliveryModel(price=price)
+        volumes_weight = decimal.Decimal()
+        for item in self.items:
+            product = item.sellable.product
+            if product:
+                volumes_weight += product.weight * item.quantity
+        return CreateDeliveryModel(price=price, volumes_net_weight=volumes_weight,
+                                   volumes_gross_weight=volumes_weight)
 
     def setup_slaves(self):
         self.items = ObjectList(columns=self._get_sale_items_columns(),
-                                objects=self.sale_items)
+                                objects=self.items)
         self.items.connect('cell-edited', self._on_items__cell_edited)
         self.addition_list_holder.add(self.items)
         self.items.show()
@@ -211,13 +291,13 @@ class CreateDeliveryEditor(BaseEditor):
         # that here instead of making this rollback by hand. Bug 5415.
         self.model.rollback_to_savepoint()
         if self._deliver_items:
-            for sale_item, deliver in zip(self.sale_items, self._deliver_items):
-                sale_item.deliver = deliver
+            for item, deliver in zip(self.items, self._deliver_items):
+                item.deliver = deliver
 
     def on_confirm(self):
         estimated_fix_date = self.estimated_fix_date.read()
-        for sale_item in self.sale_items:
-            sale_item.estimated_fix_date = estimated_fix_date
+        for item in self.items:
+            item.estimated_fix_date = estimated_fix_date
 
 
 class DeliveryEditor(BaseEditor):
@@ -225,7 +305,7 @@ class DeliveryEditor(BaseEditor):
 
     title = _("Delivery editor")
     gladefile = 'DeliveryEditor'
-    size = (-1, 400)
+    size = (700, 500)
     model_type = Delivery
     model_name = _('Delivery')
     form_holder_name = 'forms'
@@ -239,20 +319,33 @@ class DeliveryEditor(BaseEditor):
             user.profile.check_app_permission(u'admin'),
             user.profile.check_app_permission(u'purchase'),
         ))
+        freight_types = [(v, k) for k, v in Delivery.freights.items()]
+        states = [(v, v) for v in api.get_l10n_field('state').state_list]
 
         return collections.OrderedDict(
-            client_str=TextField(_("Client"), proxy=True, editable=False,
-                                 colspan=2),
+            recipient_str=TextField(_("Recipient"), proxy=True, editable=False),
             transporter_id=PersonField(_("Transporter"), proxy=True,
-                                       person_type=Transporter, colspan=2,
+                                       person_type=Transporter,
                                        can_add=can_modify_transporter,
                                        can_edit=can_modify_transporter),
-            address=AddressField(_("Address"), proxy=True, mandatory=True,
-                                 colspan=2),
-            was_delivered_check=BoolField(_("Was sent to deliver?")),
-            deliver_date=DateField(_("Delivery date"), mandatory=True, proxy=True),
+            address=AddressField(_("Address"), proxy=True, mandatory=True),
+            is_sent_check=BoolField(_("Was sent to deliver?")),
+            send_date=DateField(_("Send date"), mandatory=True, proxy=True),
             tracking_code=TextField(_("Tracking code"), proxy=True),
-            was_received_check=BoolField(_("Was received by client?")),
+
+            freight_type=ChoiceField(_("Freight type"), proxy=True,
+                                     values=freight_types),
+            volumes_kind=TextField(_("Volumes kind"), proxy=True),
+            volumes_quantity=IntegerField(_("Volumes quantity"), proxy=True),
+            volumes_net_weight=NumericField(_("Volumes net weight"), proxy=True,
+                                            digits=3),
+            volumes_gross_weight=NumericField(_("Volumes gross weight"),
+                                              proxy=True, digits=3),
+            vehicle_license_plate=TextField(_("Vehicle license plate"), proxy=True),
+            vehicle_state=ChoiceField(_("Vehicle state"), proxy=True, use_entry=True,
+                                      values=states),
+            vehicle_registration=TextField(_("Vehicle registration"), proxy=True),
+            is_received_check=BoolField(_("Was received by recipient?")),
             receive_date=DateField(_("Receive date"), mandatory=True, proxy=True),
             empty=EmptyField(),
         )
@@ -285,19 +378,19 @@ class DeliveryEditor(BaseEditor):
     #
 
     def _setup_widgets(self):
-        for widget in (self.receive_date, self.deliver_date,
+        for widget in (self.receive_date, self.send_date,
                        self.tracking_code):
             widget.set_sensitive(False)
 
     def _update_status_widgets(self):
         if self.model.status == Delivery.STATUS_INITIAL:
-            for widget in (self.was_delivered_check, self.was_received_check):
+            for widget in [self.is_sent_check, self.is_received_check]:
                 widget.set_active(False)
         elif self.model.status == Delivery.STATUS_SENT:
-            self.was_delivered_check.set_active(True)
-            self.was_received_check.set_active(False)
+            self.is_sent_check.set_active(True)
+            self.is_received_check.set_active(False)
         elif self.model.status == Delivery.STATUS_RECEIVED:
-            for widget in (self.was_delivered_check, self.was_received_check):
+            for widget in [self.is_sent_check, self.is_received_check]:
                 widget.set_active(True)
         else:
             raise ValueError(_("Invalid status for %s") % (
@@ -315,34 +408,34 @@ class DeliveryEditor(BaseEditor):
     #  Callbacks
     #
 
-    def on_was_delivered_check__toggled(self, button):
+    def on_is_sent_check__toggled(self, button):
         active = button.get_active()
         # When delivered, don't let user change transporter or address
         self.transporter_id.set_sensitive(not active)
         self.address.set_sensitive(not active)
-        for widget in (self.deliver_date, self.tracking_code):
+        for widget in [self.send_date, self.tracking_code]:
             widget.set_sensitive(active)
 
-        if not self.model.deliver_date:
-            self.deliver_date.update(localtoday().date())
+        if not self.model.send_date:
+            self.send_date.update(localtoday().date())
 
         if self._configuring_proxies:
             # Do not change status above
             return
 
         if active:
-            self.model.set_sent()
+            self.model.send(api.get_current_user(self.store))
         else:
             self.model.set_initial()
 
-    def on_was_received_check__toggled(self, button):
+    def on_is_received_check__toggled(self, button):
         active = button.get_active()
         self.receive_date.set_sensitive(active)
-        # If it was received, don't let the user unmark was_delivered_check
-        self.was_delivered_check.set_sensitive(not active)
+        # If it was received, don't let the user unmark is_sent_check
+        self.is_sent_check.set_sensitive(not active)
 
-        if not self.was_delivered_check.get_active():
-            self.was_delivered_check.set_active(True)
+        if not self.is_sent_check.get_active():
+            self.is_sent_check.set_active(True)
 
         if not self.model.receive_date:
             self.receive_date.update(localtoday().date())
@@ -352,6 +445,9 @@ class DeliveryEditor(BaseEditor):
             return
 
         if active:
-            self.model.set_received()
+            self.model.receive()
         else:
-            self.model.set_sent()
+            # We have to change this status manually because set_sent won't
+            # allow us to change from RECEIVED to it. Also, it we would call
+            # set_sent it would overwrite the sent_date that we set previously
+            self.model.status = self.model.STATUS_SENT

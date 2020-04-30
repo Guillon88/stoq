@@ -24,7 +24,7 @@
 
 import contextlib
 
-import gtk
+from gi.repository import Gtk
 import mock
 from stoqlib.database.runtime import get_current_branch
 from stoqlib.domain.inventory import Inventory
@@ -84,10 +84,10 @@ class TestInventory(BaseGUITest):
                 self.activate(app.Cancel)
                 yesno.assert_called_once_with(u'Are you sure you want to cancel '
                                               u'this inventory ?',
-                                              gtk.RESPONSE_NO,
+                                              Gtk.ResponseType.NO,
                                               u"Cancel inventory",
                                               u"Don't cancel")
-                self.assertEquals(results[0].status, Inventory.STATUS_CANCELLED)
+                self.assertEqual(results[0].status, Inventory.STATUS_CANCELLED)
 
     @mock.patch('stoq.gui.inventory.yesno')
     @mock.patch('stoq.gui.inventory.api.new_store')
@@ -106,10 +106,10 @@ class TestInventory(BaseGUITest):
                 self.activate(app.Cancel)
                 yesno.assert_called_once_with(u'Are you sure you want to cancel '
                                               u'this inventory ?',
-                                              gtk.RESPONSE_NO,
+                                              Gtk.ResponseType.NO,
                                               u"Cancel inventory",
                                               u"Don't cancel")
-                self.assertEquals(results[0].status, Inventory.STATUS_OPEN)
+                self.assertEqual(results[0].status, Inventory.STATUS_OPEN)
 
     def test_run_dialogs(self):
         inventory = self.create_inventory(branch=get_current_branch(self.store))
@@ -165,17 +165,6 @@ class TestInventory(BaseGUITest):
 
         run_dialog.assert_called_once_with(InventoryDetailsDialog, self.store, results[0])
 
-    @mock.patch('stoq.gui.inventory.warning')
-    @mock.patch('stoq.gui.inventory.api.new_store')
-    def test_new_activate(self, new_store, warning):
-        new_store.return_value = self.store
-        self.create_inventory(branch=get_current_branch(self.store))
-
-        app = self.create_app(InventoryApp, u'inventory')
-        self.activate(app.window.NewToolItem)
-        warning.assert_called_once_with("You cannot open an inventory without having a "
-                                        "branch with stock in it.")
-
     def test_deactivate(self):
         app = self.create_app(InventoryApp, u'inventory')
-        self.activate(app.window.Close)
+        self.activate(app.window.quit)

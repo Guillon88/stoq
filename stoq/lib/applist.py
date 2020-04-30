@@ -24,8 +24,6 @@
 ##
 """ Listing and importing applications """
 
-import platform
-
 from stoqlib.lib.translation import stoqlib_gettext as _
 
 N_ = lambda s: s
@@ -37,10 +35,14 @@ _APPLICATIONS = {
     u'calendar': (N_(u"Calendar"),
                   N_(u"Shows payments, orders and other things that will happen "
                      u"in the future.")),
+    u'delivery': (N_(u"Delivery"),
+                  N_(u"Control your deliveries.")),
     u'financial': (N_(u"Financial"),
                    N_(u"Control accounts and financial transactions.")),
     u'inventory': (N_(u"Inventory"),
                    N_(u"Audit and adjust the product stock.")),
+    u'link': (N_(u"Stoq.Link"),
+              N_(u"Manage your company from the cloud with Stoq.link.")),
     u'services': (N_(u"Services"),
                   N_(u"Perform services like maintenance, installation or repair.")),
     u'payable': (N_(u"Accounts Payable"),
@@ -63,36 +65,35 @@ _APPLICATIONS = {
               N_(u"Control tills and their workflow.")),
 }
 
-if platform.system() == u'Windows':
-    del _APPLICATIONS[u'calendar']
-
 
 def get_application_names():
     """Get a list of application names, useful for launcher programs
 
     @returns: application names
     """
-    return list(_APPLICATIONS.keys())
+    return sorted(_APPLICATIONS.keys())
 
 
 def get_application_icon(appname):
     from stoqlib.gui.stockicons import (
-        STOQ_ADMIN_APP, STOQ_CALENDAR_APP, STOQ_CALC, STOQ_INVENTORY_APP,
-        STOQ_PAYABLE_APP, STOQ_POS_APP, STOQ_PRODUCTION_APP,
-        STOQ_PURCHASE_APP, STOQ_BILLS, STOQ_SALES_APP, STOQ_SERVICES,
-        STOQ_STOCK_APP, STOQ_TILL_APP)
+        STOQ_ADMIN_APP, STOQ_CALC, STOQ_CALENDAR_APP,
+        STOQ_INVENTORY_APP, STOQ_PAYABLE_APP, STOQ_POS_APP, STOQ_PRODUCTION_APP,
+        STOQ_PURCHASE_APP, STOQ_RECEIVABLE_APP, STOQ_SALES_APP, STOQ_SERVICES,
+        STOQ_STOCK_APP, STOQ_TILL_APP, STOQ_LINK, STOQ_DELIVERY)
 
     return {u'admin': STOQ_ADMIN_APP,
             u'calendar': STOQ_CALENDAR_APP,
+            u'delivery': STOQ_DELIVERY,
             u'financial': STOQ_CALC,
             u'inventory': STOQ_INVENTORY_APP,
             u'launcher': STOQ_STOCK_APP,
+            u'link': STOQ_LINK,
             u'services': STOQ_SERVICES,
             u'payable': STOQ_PAYABLE_APP,
             u'pos': STOQ_POS_APP,
             u'production': STOQ_PRODUCTION_APP,
             u'purchase': STOQ_PURCHASE_APP,
-            u'receivable': STOQ_BILLS,
+            u'receivable': STOQ_RECEIVABLE_APP,
             u'sales': STOQ_SALES_APP,
             u'stock': STOQ_STOCK_APP,
             u'till': STOQ_TILL_APP}[appname]
@@ -106,7 +107,7 @@ class ApplicationDescriptions:
 
     def get_descriptions(self):
         app_desc = []
-        for name, (label, description) in _APPLICATIONS.items():
+        for name, (label, description) in sorted(_APPLICATIONS.items()):
             icon = get_application_icon(name)
             app_desc.append((name, _(label),
                              icon, _(description)))

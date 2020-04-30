@@ -5,7 +5,17 @@
 # http://wiki.python.org/moin/PythonDecoratorLibrary#Cached_Properties
 #
 
+import errno
+import inspect
 import time
+import functools
+import logging
+import os
+import queue
+import threading
+import _thread as thread
+
+log = logging.getLogger(__name__)
 
 
 class cached_property(object):
@@ -39,6 +49,7 @@ class cached_property(object):
         del instance._cache[<property name>]
 
     '''
+
     def __init__(self, ttl=300):
         self.ttl = ttl
 
@@ -67,6 +78,7 @@ class cached_property(object):
 
 class cached_function(object):
     """Like cached_property but for functions"""
+
     def __init__(self, ttl=300):
         self._cache = {}
         self.ttl = ttl
@@ -74,14 +86,26 @@ class cached_function(object):
     def __call__(self, func):
         def wraps(*args, **kwargs):
             now = time.time()
+
+            # Use inspect.getcallargs so that we have all positional arguments
+            # with their respective names
+            args_dict = inspect.getcallargs(func, *args, **kwargs)
+            if len(args_dict) == len(args) + len(kwargs):
+                # This means all args and kwargs were converted to the named
+                # arguments, and we can use it as a key.
+                key = tuple(sorted(args_dict.items()))
+            else:
+                # otherwise, just use them separately
+                key = (args, tuple(sorted(kwargs.items())))
+
             try:
-                value, last_update = self._cache[args]
+                value, last_update = self._cache[key]
                 if self.ttl > 0 and now - last_update > self.ttl:
                     raise AttributeError
                 return value
             except (KeyError, AttributeError):
                 value = func(*args, **kwargs)
-                self._cache[args] = (value, now)
+                self._cache[key] = (value, now)
                 return value
         return wraps
 
@@ -105,8 +129,89 @@ class public:
     There's an optional argument called *since* which takes a string
     and specifies the version in which this api was added.
     """
+
     def __init__(self, since=None):
         self.since = since
 
     def __call__(self, func):
         return func
+
+
+@public(since='1.13')
+def threaded(original):
+    """Threaded decorator
+
+    This will make the decorated function run in a separate thread, and will
+    keep the gui responsive by running pending main iterations.
+
+    Note that the result will be syncronous.
+    """
+
+    @functools.wraps(original)
+    def _run_thread_task(*args, **kwargs):
+        from gi.repository import Gtk
+        q = queue.Queue()
+
+        # Wrap the actual function inside a try/except so that we can return the
+        # exception to the main thread, for it to be reraised
+        def f():
+            try:
+                retval = original(*args, **kwargs)
+            except Exception as e:
+                return e
+            return retval
+
+        # This is the new thread.
+        t = threading.Thread(target=lambda q=q: q.put(f()))
+        t.daemon = True
+        t.start()
+
+        # We we'll wait for the new thread to finish here, while keeping the
+        # interface responsive (a nice progress dialog should be displayed)
+        while t.is_alive():
+            if Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+
+        try:
+            retval = q.get_nowait()
+        except queue.Empty:  # pragma no cover (how do I test this?)
+            return None
+
+        if isinstance(retval, Exception):
+            # reraise the exception just like if it happened in this thread.
+            # This will help catching them by callsites so they can warn
+            # the user
+            raise retval
+        else:
+            return retval
+    return _run_thread_task
+
+
+class TimeoutError(Exception):
+    pass
+
+
+def timeout(seconds=10, error_message=os.strerror(errno.ETIME)):
+    """Timeout Decorator
+
+    This allows the decorated function to have a time limit for it's execution,
+    by raising an exception when the given time expires.
+    """
+    def _handle_timeout():
+        # Since this is running over a thread, we must propagate the exception
+        # to the main one, and we do this by raising KeyboardInterrupt
+        thread.interrupt_main()
+
+    def outer(fn):
+        def inner(*args, **kwargs):
+            timer = threading.Timer(seconds, _handle_timeout)
+            timer.start()
+            try:
+                result = fn(*args, **kwargs)
+            except KeyboardInterrupt:
+                raise TimeoutError(error_message)
+            finally:
+                timer.cancel()
+            return result
+        return inner
+    return outer

@@ -25,7 +25,7 @@
 import os
 import tempfile
 
-import gtk
+from gi.repository import Gtk
 import mock
 from stoqlib.database.settings import DatabaseSettings
 from stoqlib.gui.test.uitestutils import GUITest
@@ -61,6 +61,7 @@ class TestFirstTimeConfigWizard(GUITest):
         wizard = FirstTimeConfigWizard(options, self.config)
         return wizard
 
+    @mock.patch('stoqlib.database.migration.SchemaMigration.check')
     @mock.patch('stoq.gui.config.needs_schema_update')
     @mock.patch('stoq.gui.config.test_local_database')
     @mock.patch('stoq.gui.config.ProcessView.execute_command')
@@ -77,8 +78,10 @@ class TestFirstTimeConfigWizard(GUITest):
                    create_default_profile_settings,
                    execute_command,
                    test_local_database,
-                   needs_schema_update):
+                   needs_schema_update,
+                   check):
         needs_schema_update.return_value = False
+        check.return_value = True
 
         DatabaseSettingsStep.model_type = self.fake.DatabaseSettings
         self.settings = self.fake.DatabaseSettings(self.store)
@@ -88,76 +91,50 @@ class TestFirstTimeConfigWizard(GUITest):
 
         wizard = self.create_wizard()
 
-        self.check_wizard(wizard, u'wizard-config-welcome')
-        self.click(wizard.next_button)
-
         step = wizard.get_current_step()
         self.assertTrue(step.radio_local.get_active())
         self.check_wizard(wizard, u'wizard-config-database-location')
         self.click(wizard.next_button)
 
         # Warning should not have being called by now.
-        self.assertEquals(warning.call_count, 0, warning.call_args_list)
+        self.assertEqual(warning.call_count, 0, warning.call_args_list)
 
         self.check_wizard(wizard, u'wizard-config-installation-mode')
-        self.click(wizard.next_button)
 
-        self.check_wizard(wizard, u'wizard-config-plugins')
-        self.click(wizard.next_button)
-
-        step = wizard.get_current_step()
-        step.name.update(u'Name')
-        step.email.update(u'example@example.com')
-        step.phone.update(u'1212341234')
-        wizard.tef_request_done = True
-        self.check_wizard(wizard, u'wizard-config-tef')
-        self.click(wizard.next_button)
-
-        step = wizard.get_current_step()
-        step.password_slave.password.update(u'foobar')
-        step.password_slave.confirm_password.update(u'foobar')
-        self.check_wizard(wizard, u'wizard-config-admin-password')
         self.click(wizard.next_button)
 
         self.check_wizard(wizard, u'wizard-config-installing')
         execute_command.assert_called_once_with([
-            u'stoq', u'dbadmin', u'init',
-            u'--no-load-config', u'--no-register-station', u'-v',
-            u'--enable-plugins', u'ecf',
-            u'--create-dbuser',
-            u'-d', u'stoq',
-            u'-p', u'12345',
-            u'-u', u'username',
-            u'-w', u'password'])
+            'stoq', 'dbadmin', 'init',
+            '--no-load-config', '--no-register-station', '-v',
+            '--create-dbuser',
+            '-d', 'stoq',
+            '-p', u'12345',
+            '-u', u'username',
+            '-w', u'password'])
         step = wizard.get_current_step()
-        self.assertEquals(step.progressbar.get_text(),
-                          u'Creating database...')
+        self.assertEqual(step.progressbar.get_text(), u'Creating database...')
 
         step.process_view.emit(u'read-line', u'stoqlib.database.create SCHEMA')
-        self.assertEquals(step.progressbar.get_text(),
-                          u'Creating base schema...')
+        self.assertEqual(step.progressbar.get_text(), u'Creating base schema...')
 
         step.process_view.emit(u'read-line', u'stoqlib.database.create PATCHES:1')
-        self.assertEquals(step.progressbar.get_text(),
-                          u'Creating schema, applying patches...')
+        self.assertEqual(step.progressbar.get_text(),
+                         u'Creating schema, applying patches...')
 
         step.process_view.emit(u'read-line', u'stoqlib.database.create PATCH:0')
-        self.assertEquals(step.progressbar.get_text(),
-                          u'Creating schema, applying patch 1 ...')
+        self.assertEqual(step.progressbar.get_text(),
+                         u'Creating schema, applying patch 1 ...')
 
         step.process_view.emit(u'read-line', u'stoqlib.database.create INIT START')
-        self.assertEquals(step.progressbar.get_text(),
-                          u'Creating additional database objects ...')
-
-        step.process_view.emit(u'read-line', u'stoqlib.database.create PLUGIN')
-        self.assertEquals(step.progressbar.get_text(),
-                          u'Activating plugins ...')
+        self.assertEqual(step.progressbar.get_text(),
+                         u'Creating additional database objects ...')
 
         yesno.return_value = False
         step.process_view.emit(u'finished', 30)
         yesno.assert_called_once_with(
             u'Something went wrong while trying to create the database. Try again?',
-            gtk.RESPONSE_NO, u'Change settings', u'Try again')
+            Gtk.ResponseType.NO, u'Change settings', u'Try again')
 
         step.process_view.emit(u'finished', 999)
         warning.assert_called_once_with(
@@ -165,6 +142,14 @@ class TestFirstTimeConfigWizard(GUITest):
 
         step.process_view.emit(u'finished', 0)
         create_default_profile_settings.assert_called_once_with()
+        self.click(wizard.next_button)
+
+        step = wizard.get_current_step()
+        step.name.update(u'Name')
+        step.email.update(u'example@example.com')
+        step.phone.update(u'1212341234')
+        wizard.link_request_done = True
+        self.check_wizard(wizard, u'wizard-config-link')
         self.click(wizard.next_button)
 
         self.check_wizard(wizard, u'wizard-config-done')
@@ -175,10 +160,10 @@ class TestFirstTimeConfigWizard(GUITest):
         self.click(wizard.next_button)
         self.assertTrue(self.config.flushed)
 
+    @mock.patch('stoqlib.database.migration.SchemaMigration.check')
     @mock.patch('stoq.gui.config.needs_schema_update')
     @mock.patch('stoq.gui.config.ProcessView.execute_command')
     @mock.patch('stoq.gui.config.create_default_profile_settings')
-    @mock.patch('stoq.gui.config.yesno')
     @mock.patch('stoq.gui.config.warning')
     @mock.patch('stoq.gui.config.get_hostname')
     @mock.patch('stoq.gui.config.get_database_version')
@@ -188,20 +173,18 @@ class TestFirstTimeConfigWizard(GUITest):
                     get_database_version,
                     get_hostname,
                     warning,
-                    yesno,
                     create_default_profile_settings,
                     execute_command,
-                    needs_schema_update):
+                    needs_schema_update,
+                    check):
         needs_schema_update.return_value = False
+        check.return_value = True
 
         DatabaseSettingsStep.model_type = self.fake.DatabaseSettings
         self.settings = self.fake.DatabaseSettings(self.store)
         get_hostname.return_value = u'foo_hostname'
         get_database_version.return_value = (9, 1)
         wizard = self.create_wizard()
-
-        # Welcome
-        self.click(wizard.next_button)
 
         # DatabaseLocationStep
         step = wizard.get_current_step()
@@ -219,43 +202,26 @@ class TestFirstTimeConfigWizard(GUITest):
         self.settings.check = True
         self.click(wizard.next_button)
 
-        # Installation mode
+        with tempfile.NamedTemporaryFile() as f:
+            os.environ[u'PGPASSFILE'] = f.name
+            self.click(wizard.next_button)
+            data = f.read().decode()
+        self.assertEqual(data,
+                         (u'remotehost:12345:postgres:username:password\n'
+                          u'remotehost:12345:dbname:username:password\n'))
+
+        # Installing
+        step = wizard.get_current_step()
+        step.process_view.emit(u'finished', 0)
+        create_default_profile_settings.assert_called_once_with()
         self.click(wizard.next_button)
 
-        # Plugins
-        self.click(wizard.next_button)
-
-        # TEF
+        # Link
         step = wizard.get_current_step()
         step.name.update(u'Name')
         step.email.update(u'example@example.com')
         step.phone.update(u'1212341234')
-        wizard.tef_request_done = True
-        self.click(wizard.next_button)
-
-        # AdminPassword
-        step = wizard.get_current_step()
-        step.password_slave.password.update(u'foobar')
-        step.password_slave.confirm_password.update(u'foobar')
-        self.check_wizard(wizard, u'wizard-config-admin-password-remote')
-        with tempfile.NamedTemporaryFile() as f:
-            os.environ[u'PGPASSFILE'] = f.name
-            self.click(wizard.next_button)
-            data = f.read()
-        self.assertEquals(data,
-                          (u'remotehost:12345:postgres:username:password\n'
-                           u'remotehost:12345:dbname:username:password\n'))
-
-        # Installing
-        step = wizard.get_current_step()
-        yesno.return_value = False
-        step.process_view.emit(u'finished', 0)
-        yesno.assert_called_once_with(
-            u"The specified database 'dbname' does not exist.\n"
-            u"Do you want to create it?", gtk.RESPONSE_YES,
-            u"Create database", u"Don't create")
-
-        create_default_profile_settings.assert_called_once_with()
+        wizard.link_request_done = True
         self.click(wizard.next_button)
 
         self.check_wizard(wizard, u'wizard-config-done')
@@ -271,7 +237,6 @@ class TestFirstTimeConfigWizard(GUITest):
 
         wizard = self.create_wizard()
 
-        self.click(wizard.next_button)
         step = wizard.get_current_step()
         step.radio_network.set_active(True)
         self.click(wizard.next_button)

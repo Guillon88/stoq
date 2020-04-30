@@ -24,6 +24,7 @@
 
 from stoqlib.domain.payment.payment import Payment
 from stoqlib.reporting.report import HTMLReport
+from stoqlib.lib.parameters import sysparam
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
@@ -49,13 +50,22 @@ class OpticalWorkOrderReceiptReport(HTMLReport):
         self.method_summary = {}
         if self.sale:
             payments = self.sale.payments
-            for payment in payments.find(Payment.status == Payment.STATUS_PAID):
+            for payment in payments.find(Payment.group == self.sale.group):
                 self.method_summary.setdefault(payment.method, 0)
                 self.method_summary[payment.method] += payment.value
             for order in workorders:
                 self.workorder_items.extend(order.get_items())
 
+        self.use_wo_description = sysparam.get_bool('CUSTOM_WORK_ORDER_DESCRIPTION')
+
         super(OpticalWorkOrderReceiptReport, self).__init__(filename)
+
+    def remaining_to_pay(self):
+        """This method returns the amount remaining to pay.
+        Note that the payment is not necessarialy mark as paid
+        """
+        payments = sum(p.value for p in self.sale.payments)
+        return self.sale.get_sale_subtotal() - payments
 
     def get_optical_data(self, workorder):
         from optical.opticaldomain import OpticalWorkOrder

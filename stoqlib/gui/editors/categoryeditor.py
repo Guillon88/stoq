@@ -23,13 +23,14 @@
 ##
 """ Sellable category editors implementation"""
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 
 from stoqlib.api import api
 from stoqlib.domain.sellable import SellableCategory, SellableTaxConstant
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.gui.slaves.commissionslave import CategoryCommissionSlave
+from stoqlib.lib.defaults import MAX_INT
 from stoqlib.lib.translation import stoqlib_gettext
 
 _ = stoqlib_gettext
@@ -55,9 +56,9 @@ class SellableCategoryEditor(BaseEditor):
     #
 
     def add_extra_tab(self, tab_label, slave):
-        event_box = gtk.EventBox()
+        event_box = Gtk.EventBox()
         event_box.set_border_width(6)
-        self.category_notebook.append_page(event_box, gtk.Label(tab_label))
+        self.category_notebook.append_page(event_box, Gtk.Label(label=tab_label))
         self.attach_slave(tab_label, slave, event_box)
         event_box.show()
 
@@ -117,6 +118,8 @@ class SellableCategoryEditor(BaseEditor):
 
         self.category.prefill(
             api.for_combo(categories, attr='full_description'))
+        self.suggested_markup.set_adjustment(
+            Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1))
 
     def _update_widgets(self):
         category_lbl = self.category.get_selected_label()

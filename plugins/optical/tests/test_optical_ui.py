@@ -23,14 +23,16 @@
 ##
 
 import contextlib
-import gtk
+from gi.repository import Gtk
 import mock
+from kiwi.python import Settable
 
 from stoqlib.database.runtime import StoqlibStore
 from stoqlib.database.viewable import Viewable
 from stoqlib.domain.person import Person
+from stoqlib.domain.purchase import PurchaseOrder
 from stoqlib.domain.sale import Sale
-from stoqlib.domain.workorder import WorkOrderCategory
+from stoqlib.domain.workorder import WorkOrderCategory, WorkOrder
 from stoqlib.gui.base.dialogs import run_dialog
 from stoqlib.gui.editors.personeditor import ClientEditor
 from stoqlib.gui.editors.producteditor import ProductEditor
@@ -46,10 +48,11 @@ from stoq.gui.sales import SalesApp
 from stoq.gui.services import ServicesApp
 
 from ..medicssearch import OpticalMedicSearch, MedicSalesSearch
-from ..opticaleditor import MedicEditor, OpticalWorkOrderEditor
+from ..opticaldomain import OpticalProduct
+from ..opticaleditor import MedicEditor, OpticalWorkOrderEditor, OpticalSupplierEditor
 from ..opticalhistory import OpticalPatientDetails
 from ..opticalreport import OpticalWorkOrderReceiptReport
-from ..opticalui import OpticalUI
+from ..opticalui import OpticalUI, OpticalWorkOrderActions
 from ..opticalwizard import OpticalSaleQuoteWizard, MedicRoleWizard
 from .test_optical_domain import OpticalDomainTest
 
@@ -60,7 +63,7 @@ __tests__ = 'plugins.optical.opticalui.py'
 class TestOpticalUI(BaseGUITest, OpticalDomainTest):
     @classmethod
     def setUpClass(cls):
-        cls.ui = OpticalUI()
+        cls.ui = OpticalUI.get_instance()
         BaseGUITest.setUpClass()
 
     def test_optical_sales(self):
@@ -71,18 +74,18 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
             sales.close_date = localdate(2012, 4, 5)
         self.check_app(app, u'sales-optical-plugin')
 
+        app.deactivate()
         self.window.hide_app(empty=True)
 
     def test_optical_sales_pre_sale(self):
         app = self.create_app(SalesApp, u'sales')
-        action = app.uimanager.get_action(
-            '/ui/menubar/ExtraMenubarPH/OpticalMenu/OpticalPreSale')
+        action = app.OpticalPreSale
         assert action, action
         with mock.patch('plugins.optical.opticalui.run_dialog') as run_dialog_:
             self.activate(action)
             args, kwargs = run_dialog_.call_args
-            self.assertEquals(args[0], OpticalSaleQuoteWizard)
-            self.assertEquals(args[1], app)
+            self.assertEqual(args[0], OpticalSaleQuoteWizard)
+            self.assertEqual(args[1], app)
             self.assertTrue(isinstance(args[2], StoqlibStore))
 
         with mock.patch('plugins.optical.opticalui.warning') as warning_:
@@ -93,32 +96,33 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
                 self.activate(action)
                 warning_.assert_called_once_with(
                     "You cannot create a pre-sale with an open inventory.")
+        app.deactivate()
 
     def test_optical_sales_medic_search(self):
         app = self.create_app(SalesApp, u'sales')
-        action = app.uimanager.get_action(
-            '/ui/menubar/ExtraMenubarPH/OpticalMenu/OpticalMedicSearch')
+        action = app.OpticalMedicSearch
         assert action, action
         with mock.patch('plugins.optical.opticalui.run_dialog') as run_dialog_:
             self.activate(action)
             args, kwargs = run_dialog_.call_args
-            self.assertEquals(args[0], OpticalMedicSearch)
-            self.assertEquals(args[1], None)
+            self.assertEqual(args[0], OpticalMedicSearch)
+            self.assertEqual(args[1], None)
             self.assertTrue(isinstance(args[2], StoqlibStore))
-            self.assertEquals(kwargs['hide_footer'], True)
+            self.assertEqual(kwargs['hide_footer'], True)
+        app.deactivate()
 
     def test_optical_sales_medic_sales_search(self):
         app = self.create_app(SalesApp, u'sales')
-        action = app.uimanager.get_action(
-            '/ui/menubar/ExtraMenubarPH/OpticalMenu/OpticalMedicSaleItems')
+        action = app.OpticalMedicSaleItems
         assert action, action
         with mock.patch('plugins.optical.opticalui.run_dialog') as run_dialog_:
             self.activate(action)
             args, kwargs = run_dialog_.call_args
-            self.assertEquals(args[0], MedicSalesSearch)
-            self.assertEquals(args[1], None)
+            self.assertEqual(args[0], MedicSalesSearch)
+            self.assertEqual(args[1], None)
             self.assertTrue(isinstance(args[2], StoqlibStore))
-            self.assertEquals(kwargs['hide_footer'], True)
+            self.assertEqual(kwargs['hide_footer'], True)
+        app.deactivate()
 
     def test_product_editor(self):
         product = self.create_product(stock=10)
@@ -142,7 +146,7 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
         # FIXME: baseditor should probably add an api for getting a list
         #        of buttons
         print_button = editor.main_dialog.action_area.get_children()[0]
-        assert print_button.get_label() == gtk.STOCK_PRINT
+        assert print_button.get_label() == Gtk.STOCK_PRINT
         with mock.patch('plugins.optical.opticalui.print_report') as print_report_:
             self.click(print_button)
             print_report_.assert_called_once_with(
@@ -212,6 +216,7 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
         app = self.create_app(ServicesApp, u'services')
         app.search.refresh()
         self.check_app(app, u'services-optical-plugin')
+        app.deactivate()
 
     @mock.patch('plugins.optical.opticalui.api.new_store')
     @mock.patch('plugins.optical.opticalui.run_dialog')
@@ -221,8 +226,9 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
         product = self.create_product()
         work_order = self.create_workorder()
         work_order.identifier = 666
-        work_order.open_date = localdate(2014, 01, 31)
+        work_order.open_date = localdate(2014, 1, 31)
         work_order.sellable = product.sellable
+        self.create_optical_work_order(work_order)
 
         app = self.create_app(ServicesApp, u'services')
         app.search.refresh()
@@ -234,8 +240,7 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
         self.assertIsNotNone(wo_view)
         app.search.results.select(wo_view)
 
-        action = app.uimanager.get_action(
-            '/menubar/AppMenubarPH/OrderMenu/OpticalDetails')
+        action = OpticalWorkOrderActions.get_instance().get_action('OpticalDetails')
         with contextlib.nested(
                 mock.patch.object(self.store, 'commit'),
                 mock.patch.object(self.store, 'close')):
@@ -243,6 +248,85 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
 
         run_dialog.assert_called_once_with(OpticalWorkOrderEditor, None,
                                            self.store, work_order)
+        app.deactivate()
+
+    @mock.patch('plugins.optical.opticalui.api.new_store')
+    @mock.patch('plugins.optical.opticalui.run_dialog')
+    def test_new_purchase_cancel(self, run_dialog, new_store):
+        new_store.return_value = self.store
+
+        sale = self.create_sale()
+        product = self.create_product()
+        work_order = self.create_workorder()
+        work_order.status = WorkOrder.STATUS_WORK_IN_PROGRESS
+        work_order.sale = sale
+        work_order.add_sellable(product.sellable)
+        self.create_optical_work_order(work_order)
+        app = self.create_app(ServicesApp, u'services')
+        app.search.refresh()
+
+        for wo_view in app.search.results:
+            if wo_view.work_order == work_order:
+                break
+
+        self.assertIsNotNone(wo_view)
+        app.search.results.select(wo_view)
+
+        action = OpticalWorkOrderActions.get_instance().get_action('OpticalNewPurchase')
+        run_dialog.return_value = False
+        with contextlib.nested(
+                mock.patch.object(self.store, 'commit'),
+                mock.patch.object(self.store, 'close')):
+            self.activate(action)
+
+        run_dialog.assert_called_once_with(OpticalSupplierEditor, None,
+                                           self.store, work_order)
+        app.deactivate()
+
+    @mock.patch('plugins.optical.opticalui.api.new_store')
+    @mock.patch('plugins.optical.opticalui.run_dialog')
+    def test_new_purchase_confirm(self, run_dialog, new_store):
+        new_store.return_value = self.store
+
+        supplier = self.create_supplier()
+        sale = self.create_sale()
+        product = self.create_product()
+        work_order = self.create_workorder()
+        work_order.status = WorkOrder.STATUS_WORK_IN_PROGRESS
+        work_order.sale = sale
+        work_item = work_order.add_sellable(product.sellable)
+        self.create_optical_work_order(work_order)
+        app = self.create_app(ServicesApp, u'services')
+        app.search.refresh()
+
+        for wo_view in app.search.results:
+            if wo_view.work_order == work_order:
+                break
+
+        self.assertIsNotNone(wo_view)
+        app.search.results.select(wo_view)
+
+        # Before the action, there are no purchase orders for this work order
+        results = PurchaseOrder.find_by_work_order(self.store, work_order)
+        self.assertEquals(results.count(), 0)
+
+        action = OpticalWorkOrderActions.get_instance().get_action('OpticalNewPurchase')
+        run_dialog.return_value = Settable(supplier=supplier,
+                                           supplier_order='1111',
+                                           item=work_item,
+                                           is_freebie=True)
+        with contextlib.nested(
+                mock.patch.object(self.store, 'commit'),
+                mock.patch.object(self.store, 'close')):
+            self.activate(action)
+
+        run_dialog.assert_called_once_with(OpticalSupplierEditor, None,
+                                           self.store, work_order)
+
+        # Now there should be one purchase order
+        results = PurchaseOrder.find_by_work_order(self.store, work_order)
+        self.assertEquals(results.count(), 1)
+        app.deactivate()
 
     @mock.patch('plugins.optical.opticalui.print_report')
     def test_print_report_event(self, print_report):
@@ -250,13 +334,13 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
         # Emitting with something different from SaleOrderReport
         rv = PrintReportEvent.emit(object)
         self.assertFalse(rv)
-        self.assertEquals(print_report.call_count, 0)
+        self.assertEqual(print_report.call_count, 0)
 
         # Emitting with SaleOrderReport, but without workorders
         sale = self.create_sale()
         rv = PrintReportEvent.emit(SaleOrderReport, sale)
         self.assertFalse(rv)
-        self.assertEquals(print_report.call_count, 0)
+        self.assertEqual(print_report.call_count, 0)
 
         # Emitting with SaleOrderReport and with workorders
         optical_wo = self.create_optical_work_order()
@@ -265,3 +349,80 @@ class TestOpticalUI(BaseGUITest, OpticalDomainTest):
         self.assertTrue(rv)
         print_report.assert_called_once_with(OpticalWorkOrderReceiptReport,
                                              [optical_wo.work_order])
+
+    def test_work_order_change_status(self):
+        supplier = self.create_supplier()
+        product = self.create_product()
+        opt_type = OpticalProduct.TYPE_GLASS_LENSES
+        optical_product = self.create_optical_product(optical_type=opt_type)
+        optical_product.product = product
+        sale = self.create_sale()
+        sale_item = sale.add_sellable(sellable=product.sellable)
+        wo = self.create_workorder()
+        work_item = wo.add_sellable(product.sellable)
+        work_item.sale_item = sale_item
+        wo.sale = sale
+        optical_wo = self.create_optical_work_order()
+        optical_wo.work_order = wo
+
+        app = self.create_app(ServicesApp, u'services')
+        app.search.refresh()
+
+        for wo_view in app.search.results:
+            if wo_view.work_order == wo:
+                break
+
+        self.assertIsNotNone(wo_view)
+        app.search.results.select(wo_view)
+        with mock.patch('plugins.optical.opticalui.run_dialog') as run_dialog:
+            wo.approve(self.current_user)
+            run_dialog.return_value = Settable(supplier=supplier,
+                                               supplier_order='1111',
+                                               item=work_item,
+                                               is_freebie=False)
+            wo.work(self.current_branch, self.current_user)
+            results = PurchaseOrder.find_by_work_order(wo.store, wo)
+            self.assertEquals(len(list(results)), 1)
+
+        wo.finish(self.current_branch, self.current_user)
+        app.deactivate()
+
+    def test_work_order_cancel_change_status(self):
+        product = self.create_product()
+        opt_type = OpticalProduct.TYPE_GLASS_LENSES
+        optical_product = self.create_optical_product(optical_type=opt_type)
+        optical_product.product = product
+        sale = self.create_sale()
+        sale_item = sale.add_sellable(sellable=product.sellable)
+        wo = self.create_workorder()
+        work_item = wo.add_sellable(product.sellable)
+        work_item.sale_item = sale_item
+        wo.sale = sale
+        wo.approve(self.current_user)
+
+        app = self.create_app(ServicesApp, u'services')
+        app.search.refresh()
+
+        for wo_view in app.search.results:
+            if wo_view.work_order == wo:
+                break
+
+        self.assertIsNotNone(wo_view)
+        app.search.results.select(wo_view)
+
+        with mock.patch('plugins.optical.opticalui.run_dialog') as run_dialog:
+            # No optical work order related to this WO, the dialog doesn't even run
+            wo.work(self.current_branch, self.current_user)
+            self.assertNotCalled(run_dialog)
+
+        wo.pause(self.current_user, 'Reason')
+        optical_wo = self.create_optical_work_order()
+        optical_wo.work_order = wo
+
+        with mock.patch('plugins.optical.opticalui.run_dialog') as run_dialog:
+            run_dialog.return_value = None
+            wo.work(self.current_branch, self.current_user)
+            # At this point we didnt create a purchase
+            results = PurchaseOrder.find_by_work_order(wo.store, wo)
+            self.assertEquals(len(list(results)), 0)
+        app.deactivate()

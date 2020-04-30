@@ -49,31 +49,35 @@ clean:
 check: clean check-source
 	@echo "Running $(TEST_MODULES) unittests"
 	@rm -f .noseids
-	@python runtests.py --failed $(TEST_MODULES)
+	@python3 runtests.py --exclude-dir=stoqlib/pytests --failed $(TEST_MODULES)
+	pytest -vvv stoqlib/pytests
 
 check-failed: clean
-	python runtests.py --failed $(TEST_MODULES)
+	python3 runtests.py --failed $(TEST_MODULES)
 
 coverage: clean check-source-all
-	python runtests.py \
+	python3 runtests.py \
 	    --with-xcoverage \
 	    --with-xunit \
 	    --cover-package=stoq,stoqlib,plugins \
 	    --cover-erase \
 	    --cover-inclusive \
+		--exclude-dir=stoqlib/pytests \
 	    $(TEST_MODULES) && \
-	tools/validatecoverage coverage.xml && \
-	git show|tools/diff-coverage jenkins-test/stoq-$$VERSION/coverage.xml
+	pytest -vvv stoqlib/pytests --cov=stoqlib/ --cov-append && \
+	coverage xml --omit "**/test/*.py,stoqlib/pytests/*" && \
+	utils/validatecoverage.py coverage.xml && \
+	git show|tools/diff-coverage coverage.xml
 
 jenkins: check-source-all
 	unset STOQLIB_TEST_QUICK && \
-	VERSION=`python -c "from stoq import version; print version"` && \
+	VERSION=`python3 -c "from stoq import version; print(version)" | sed s/beta/b/` && \
 	rm -fr jenkins-test && \
-	python setup.py -q sdist -d jenkins-test && \
+	python3 setup.py -q sdist -d jenkins-test && \
 	cd jenkins-test && \
 	tar xfz stoq-$$VERSION.tar.gz && \
 	cd stoq-$$VERSION && \
-	python runtests.py \
+	python3 runtests.py \
 	    --with-xcoverage \
 	    --with-xunit \
 	    --cover-package=stoq,stoqlib,plugins \
@@ -81,7 +85,7 @@ jenkins: check-source-all
 	    --cover-inclusive \
 	    $(TEST_MODULES) && \
 	cd ../.. && \
-	tools/validatecoverage jenkins-test/stoq-$$VERSION/coverage.xml && \
+	utils/validatecoverage.py jenkins-test/stoq-$$VERSION/coverage.xml && \
 	git show|tools/diff-coverage jenkins-test/stoq-$$VERSION/coverage.xml
 
 include utils/utils.mk

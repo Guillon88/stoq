@@ -1,26 +1,29 @@
 dialog: ReceivingOrderDetailsDialog
-GtkVBox(toplevel):
-  GtkLabel(header_label, fill=True): 'Received in <b>YYYY-MM-DD</b> for branch <b>Moda Stoq</b>'
+GtkBox(vbox1, orientation=vertical):
+  GtkBox(hbox1, orientation=horizontal, fill=True):
+    GtkLabel(header_label, fill=True): 'Received in <b>YYYY-MM-DD</b> for branch <b>Moda Stoq</b>'
+    GtkButtonBox(hbuttonbox2, orientation=horizontal, expand=True, fill=True):
+      GtkButton(return_btn, expand=True): 'Return Receiving'
   GtkNotebook(values_list, expand=True, fill=True, padding=6):
-    GtkVBox(products_vbox):
+    GtkBox(products_vbox, orientation=vertical):
       ObjectTree(product_list, expand=True, fill=True):
         column: title='Code'
         column: title='Description', expand
         column: title='Quantity'
         column: title='Cost'
         column: title='Total'
-        row: u'', u'Description', u'1.000', <currency $125>, <currency $125>
-          row: u'', u'Description', u'1.000', <currency $125>, <currency $125>
-      GtkHBox(fill=True):
+        row: '', 'Description', '1.000', <currency $0>, <currency $0>
+          row: '', 'Description', '1.000', <currency $125>, <currency $125>
+      SummaryLabel(fill=True):
         GtkLabel(expand=True, fill=True, padding=6): '<b>Total:</b>'
-        GtkLabel(): '<b>$250.00</b>'
+        GtkLabel(): '<b>$125.00</b>'
     GtkEventBox(details_holder): slave ReceivingInvoiceSlave is attached
-      GtkVBox(toplevel):
+      GtkBox(vbox1, orientation=vertical):
         GtkTable(table, fill=True):
           GtkLabel(label10): 'Branch:'
           ProxyLabel(branch): '<span >Moda Stoq</span>'
           ProxyLabel(kiwilabel4): 'Products Total ($CURRENCY):'
-          ProxyLabel(products_total): '<span >$250.00</span>'
+          ProxyLabel(products_total): '<span >$125.00</span>'
           ProxyLabel(purchase_supplier_label): 'Supplier:'
           ProxyLabel(supplier_label): '<span >Supplier</span>'
           ProxyLabel(kiwilabel54): 'Freight ($CURRENCY):'
@@ -30,20 +33,25 @@ GtkVBox(toplevel):
           ProxyLabel(kiwilabel6): 'IPI ($CURRENCY):'
           ProxyEntry(ipi): '0.00', ineditable, insensitive
           GtkLabel(label8): 'Invoice Number:'
-          GtkHBox(invoice_hbox):
+          GtkBox(invoice_hbox, orientation=horizontal):
             ProxyEntry(invoice_number, fill=True): '222', ineditable
             GtkLabel(label1, expand=True, fill=True):
           ProxyLabel(kiwilabel200): 'ICMS Total ($CURRENCY):'
           ProxyEntry(icms_total): '0.00', ineditable, insensitive
+          GtkLabel(label5): 'Invoice Key:'
+          ProxyEntry(invoice_key): '', ineditable
+          ProxyLabel(kiwilabel1): 'ICMS ST Total ($CURRENCY):'
+          ProxyEntry(icms_st_total): '0.00', ineditable, insensitive
           GtkLabel(label9): 'C.F.O.P.:'
           ProxyComboEntry(cfop): insensitive
             item: '1.102 Compra para Comercializacao'
             item: '1.102 test', selected
+            item: '1.202 Devolução de Venda de Mercadoria Adquirida'
           ProxyLabel(discount_label): 'Discount ($CURRENCY):'
           ProxyEntry(discount_value): '0.00', ineditable, insensitive
           GtkLabel(label2): 'Transporter:'
           ProxyComboEntry(transporter): insensitive
-            item: 'Jos\xc3\xa9 Carlos de Carvalho'
+            item: 'José Carlos de Carvalho'
           ProxyLabel(kiwilabel2): 'Secure ($CURRENCY):'
           ProxyEntry(secure_value): '0.00', ineditable, insensitive
           GtkLabel(label4): 'Responsible:'
@@ -57,10 +65,10 @@ GtkVBox(toplevel):
             item: 'CIF - Freight value is unknown'
             item: 'CIF - Freight value highlighted on invoice'
           ProxyLabel(kiwilabel11): 'Invoice Total ($CURRENCY):'
-          ProxyLabel(total): '<span weight="bold">$250.00</span>'
-          GtkHButtonBox(notes_box):
+          ProxyLabel(total): '<span weight="bold">$125.00</span>'
+          GtkButtonBox(notes_box, orientation=horizontal):
             GtkButton(observations_button): 'Observations...', hidden
     GtkScrolledWindow(scrolledwindow1):
       ProxyTextView(notes):
-  GtkHButtonBox(hbuttonbox1, fill=True):
+  GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
     GtkButton(print_labels): 'gtk-print'

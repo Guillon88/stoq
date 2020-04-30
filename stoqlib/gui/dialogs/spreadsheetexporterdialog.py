@@ -24,8 +24,7 @@
 """Spreedsheet Exporter Dialog"""
 
 
-import gio
-import gtk
+from gi.repository import Gtk, Gio
 
 from stoqlib.api import api
 
@@ -41,15 +40,17 @@ class SpreadSheetExporter:
     """
     title = _('Exporter to Spreadseet')
 
-    def export(self, object_list, name, filename_prefix, data=None):
+    def export(self, object_list, name, filename_prefix, data=None,
+               filter_description=None):
         xls = XLSExporter(name)
-        xls.add_from_object_list(object_list, data)
+        xls.add_from_object_list(object_list, data,
+                                 filter_description=filter_description)
         temporary = xls.save(filename_prefix)
         self.export_temporary(temporary)
 
     def export_temporary(self, temporary):
         mime_type = 'application/vnd.ms-excel'
-        app_info = gio.app_info_get_default_for_type(mime_type, False)
+        app_info = Gio.app_info_get_default_for_type(mime_type, False)
         if app_info:
             action = api.user_settings.get('spreadsheet-action')
             if action is None:
@@ -71,7 +72,7 @@ class SpreadSheetExporter:
         # and open action will be executed. Esc should cancel the action
         if yesno(_("A spreadsheet has been created, "
                    "what do you want to do with it?"),
-                 gtk.RESPONSE_NO,
+                 Gtk.ResponseType.NO,
                  _('Save it to disk'),
                  _("Open with %s") % (app_info.get_name())):
             return 'save'
@@ -79,19 +80,19 @@ class SpreadSheetExporter:
             return 'open'
 
     def _open_application(self, mime_type, filename):
-        app_info = gio.app_info_get_default_for_type(mime_type, False)
-        gfile = gio.File(path=filename)
+        app_info = Gio.app_info_get_default_for_type(mime_type, False)
+        gfile = Gio.File.new_for_path(filename)
         app_info.launch([gfile])
 
     def _save(self, temp):
-        chooser = gtk.FileChooserDialog(
+        chooser = Gtk.FileChooserDialog(
             _("Export Spreadsheet..."), None,
-            gtk.FILE_CHOOSER_ACTION_SAVE,
-            (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
-             gtk.STOCK_SAVE, gtk.RESPONSE_OK))
+            Gtk.FileChooserAction.SAVE,
+            (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+             Gtk.STOCK_SAVE, Gtk.ResponseType.OK))
         chooser.set_do_overwrite_confirmation(True)
 
-        xls_filter = gtk.FileFilter()
+        xls_filter = Gtk.FileFilter()
         xls_filter.set_name(_('Excel Files'))
         xls_filter.add_pattern('*.xls')
         chooser.add_filter(xls_filter)
@@ -99,7 +100,7 @@ class SpreadSheetExporter:
         response = chooser.run()
 
         filename = None
-        if response != gtk.RESPONSE_OK:
+        if response != Gtk.ResponseType.OK:
             chooser.destroy()
             return
 

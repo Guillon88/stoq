@@ -1,10 +1,10 @@
 editor: InventoryOpenEditor
 GtkDialog(main_dialog.toplevel): title='Open Inventory', hidden
-  GtkVBox(main_dialog._main_vbox):
-    GtkVBox(main_dialog.vbox, expand=True, fill=True):
+  GtkBox(main_dialog._main_vbox, orientation=vertical):
+    GtkBox(main_dialog.vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(main_dialog.header):
       GtkEventBox(main_dialog.main, expand=True, fill=True, padding=6): slave InventoryOpenEditor is attached
-        GtkVBox(toplevel):
+        GtkBox(vbox1, orientation=vertical):
           GtkTable(table1):
             ProxyLabel(kiwilabel4): 'User:'
             ProxyLabel(username): '<span >Administrator</span>'
@@ -13,30 +13,30 @@ GtkDialog(main_dialog.toplevel): title='Open Inventory', hidden
             ProxyLabel(branch_label): 'Branch:'
             ProxyLabel(branch_name): '<span >Moda Stoq</span>'
             ProxyLabel(kiwilabel2): 'Time:'
-            ProxyLabel(open_time): '<span >12:33:00</span>'
+            ProxyLabel(open_time): '<span >12:33:00 PM</span>'
           GtkHSeparator(hseparator1, fill=True):
-          GtkHBox(hbox2, expand=True, fill=True):
+          GtkBox(hbox2, orientation=horizontal, expand=True, fill=True):
             ObjectTree(category_tree, expand=True, fill=True, padding=6):
               column: title='Include'
               column: title='Description', expand
-              row: True, u'(Uncategorized products)'
-              row: True, u'Bermudas'
-                row: True, u'Bermudas Sarja'
-                row: True, u'Bermudas Shorts'
-              row: True, u'Blusas'
-                row: True, u'Blusas Algod\xe3o'
-                row: True, u'Blusas Poliester'
-              row: True, u'Cal\xe7ados'
-                row: True, u'Chinelos'
-              row: True, u'Cal\xe7as'
-                row: True, u'Cal\xe7as Jeans'
-                row: True, u'Cal\xe7as Poliester'
-              row: True, u'Camisetas'
-                row: True, u'Tinturada'
-              row: True, u'Casacos'
-                row: True, u'Algod\xe3o'
-              row: True, u'Vestido'
-                row: True, u'Viscose'
+              row: True, 'Bermudas'
+                row: True, 'Bermudas Sarja'
+                row: True, 'Bermudas Shorts'
+              row: True, 'Blusas'
+                row: True, 'Blusas Algodão'
+                row: True, 'Blusas Poliester'
+              row: True, 'Calçados'
+                row: True, 'Chinelos'
+              row: True, 'Calças'
+                row: True, 'Calças Jeans'
+                row: True, 'Calças Poliester'
+              row: True, 'Camisetas'
+                row: True, 'Tinturada'
+              row: True, 'Casacos'
+                row: True, 'Algodão'
+              row: True, '(Uncategorized products)'
+              row: True, 'Vestido'
+                row: True, 'Viscose'
             GtkTable(table2, fill=True):
               GtkLabel(label1): 'Extra Filters:'
               GtkLabel(label2): 'Manufacturer:'
@@ -45,15 +45,16 @@ GtkDialog(main_dialog.toplevel): title='Open Inventory', hidden
               ProxyComboEntry(product_brand):
               GtkLabel(label5): 'Family:'
               ProxyComboEntry(product_family):
-          GtkHBox(hbox1):
-            GtkHButtonBox(hbuttonbox1, fill=True):
+          GtkBox(hbox1, orientation=horizontal):
+            GtkButtonBox(hbuttonbox1, orientation=horizontal, fill=True):
               GtkButton(select_all): 'gtk-select-all', insensitive
               GtkButton(unselect_all): '_Unselect All'
-      GtkHBox(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(main_dialog.extra_holder, expand=True, fill=True, padding=6):
         GtkEventBox(main_dialog.print_holder, expand=True, fill=True):
         GtkEventBox(main_dialog.notice, fill=True):
         GtkEventBox(main_dialog.details_holder, padding=6, pack-end):
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
-      GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): '_Open'
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(main_dialog.action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
+        GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): '_Open'

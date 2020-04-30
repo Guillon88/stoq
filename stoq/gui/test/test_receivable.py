@@ -27,8 +27,9 @@ import contextlib
 import mock
 from stoqlib.domain.account import Account
 from stoqlib.domain.payment.method import CheckData, PaymentMethod
+from stoqlib.domain.payment.card import CreditCardData
 from stoqlib.domain.payment.payment import Payment
-from stoqlib.lib.dateutils import localdatetime, localtoday
+from stoqlib.lib.dateutils import datetime, localdatetime, localtoday
 from stoqlib.gui.dialogs.paymentchangedialog import PaymentDueDateChangeDialog
 from stoqlib.gui.dialogs.paymentcommentsdialog import PaymentCommentsDialog
 from stoqlib.gui.editors.paymenteditor import InPaymentEditor
@@ -56,11 +57,11 @@ class TestReceivable(BaseGUITest):
             self.activate(action)
 
             run_dialog = ctx[0]
-            self.assertEquals(run_dialog.call_count, 1)
+            self.assertEqual(run_dialog.call_count, 1)
             args, kwargs = run_dialog.call_args
-            self.assertEquals(args[0], dialog)
-            self.assertEquals(args[1], app)
-            self.assertEquals(args[2], self.store)
+            self.assertEqual(args[0], dialog)
+            self.assertEqual(args[1], app)
+            self.assertEqual(args[2], self.store)
 
     def setUp(self):
         BaseGUITest.setUp(self)
@@ -119,14 +120,15 @@ class TestReceivable(BaseGUITest):
 
     def create_receivable_sale(self):
         sale = self.create_sale()
+        sale.open_date = datetime.datetime(2013, 1, 1)
         sale.identifier = 12345
         self.add_product(sale)
-        sale.order()
-        payment = self.add_payments(sale, method_type=u'bill')[0]
+        sale.order(self.current_user)
+        payment = self.add_payments(sale, method_type=u'bill',
+                                    date=datetime.datetime(2013, 1, 1))[0]
         payment.identifier = 67890
-        sale.confirm()
+        sale.confirm(self.current_user)
         payment.due_date = localdatetime(2012, 1, 1)
-        # payment.paid_date = datetime.datetime(2012, 2, 2)
         return sale, payment
 
     def test_select(self):
@@ -318,3 +320,11 @@ class TestReceivable(BaseGUITest):
 
         self.activate(app.ChangeDueDate)
         change_due_date.assert_called_once_with(olist[-1], sale)
+
+    def test_format_card_type(self):
+        app = self.create_app(ReceivableApp, u'receivable')
+        # We run this test with a private method because .uitest files do not apply
+        # the format_func argument to itself - e.g. the card type column for None will
+        # show None instead of the empty string shown at the UI.
+        self.assertEqual(app._format_card_type(CreditCardData.TYPE_CREDIT), u'Credit')
+        self.assertEqual(app._format_card_type(None), u'')

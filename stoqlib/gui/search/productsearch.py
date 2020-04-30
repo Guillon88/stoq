@@ -26,7 +26,7 @@
 import datetime
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column, ColoredColumn, COL_MODEL
 from storm.expr import Eq
@@ -45,7 +45,7 @@ from stoqlib.domain.views import (ProductQuantityView,
                                   ProductBatchView, ProductBrandStockView,
                                   ProductBrandByBranchView)
 from stoqlib.enums import SearchFilterPosition
-from stoqlib.gui.base.gtkadds import change_button_appearance
+from stoqlib.gui.base.gtkadds import change_button_appearance, set_bold
 from stoqlib.gui.editors.producteditor import (ProductEditor,
                                                ProductStockEditor)
 from stoqlib.gui.search.searchcolumns import SearchColumn, QuantityColumn
@@ -81,6 +81,7 @@ class _ProductBrandResultTreeView(SearchResultTreeView):
             parent = self._cache.get(result.brand)
         else:
             parent = None
+
         if parent:
             self.add_result(parent)
         if not result in self:
@@ -103,6 +104,38 @@ class _ProductBrandResultTreeView(SearchResultTreeView):
                 yield obj[COL_MODEL]
             for child in obj.iterchildren():
                 yield child[COL_MODEL]
+
+
+class _ProductSearchResultTreeView(SearchResultTreeView):
+
+    # Overriding the method _add_results to avoid multiple consults to sql
+    def add_result(self, result):
+        if result.parent_id:
+            parent = self._cache.get(result.parent_id)
+            assert parent is not None
+        else:
+            parent = None
+
+        if parent:
+            self.add_result(parent)
+        if not result in self:
+            self.append(parent, result)
+            if parent:
+                self.expand(parent)
+
+    def search_completed(self, results):
+        results = list(results)
+        if results:
+            obj = results[0]
+            # Build a cache of parent produts to make the results load faster.
+            # Also, the parents will show up in the results even if they would
+            # normally not, but if one of its children shows up.
+            parents = obj.store.find(type(obj), Eq(Product.is_grid, True))
+            self._cache = {}
+            for item in parents:
+                self._cache[item.id] = item
+
+        super(_ProductSearchResultTreeView, self).search_completed(results)
 
 
 class ProductSearch(SellableSearch):
@@ -132,6 +165,7 @@ class ProductSearch(SellableSearch):
         # not setting 'tree = True' on the class definition as it has too many
         # subclasses for us to manually set to False on each one
         if self.__class__ is ProductSearch:
+            self.result_view_class = _ProductSearchResultTreeView
             self.tree = True
 
         self.hide_cost_column = hide_cost_column
@@ -147,7 +181,7 @@ class ProductSearch(SellableSearch):
     def _setup_print_slave(self):
         self._print_slave = SearchDialogPrintSlave()
         change_button_appearance(self._print_slave.print_price_button,
-                                 gtk.STOCK_PRINT, _("_Price table"))
+                                 Gtk.STOCK_PRINT, _("_Price table"))
         self.attach_slave('print_holder', self._print_slave)
         self._print_slave.connect('print', self.on_print_price_button_clicked)
         self._print_slave.print_price_button.set_sensitive(False)
@@ -155,7 +189,14 @@ class ProductSearch(SellableSearch):
     def on_print_price_button_clicked(self, button):
         print_report(ProductPriceReport, list(self.results),
                      filters=self.search.get_search_filters(),
-                     branch_name=self.branch_filter.combo.get_active_text())
+                     branch_name=self.branch_filter.combo.get_selected_label())
+    #
+    #  Private
+    #
+
+    def _get_status_values(self):
+        return ([(_('Any'), None)] +
+                [(v, k) for k, v in Sellable.statuses.items()])
 
     #
     #  ProductSearch
@@ -218,7 +259,15 @@ class ProductSearch(SellableSearch):
                              visible=False),
                 Column('unit', title=_('Unit'), data_type=str, visible=False),
                 SearchColumn('location', title=_('Location'), data_type=str,
-                             visible=False)]
+                             visible=False),
+                SearchColumn('status', title=_('Status'), data_type=str,
+                             valid_values=self._get_status_values(), visible=False),
+                SearchColumn('brand', title=_('Brand'), data_type=str,
+                             visible=False),
+                SearchColumn('family', title=_('Family'), data_type=str,
+                             visible=False),
+                SearchColumn('internal_use', title=_('Is internal'),
+                             data_type=bool, visible=False)]
         # The price/cost columns must be controlled by hide_cost_column and
         # hide_price_column. Since the product search will be available across
         # the applications, it's important to restrict such columns depending
@@ -230,7 +279,7 @@ class ProductSearch(SellableSearch):
             cols.append(SearchColumn('price', title=_('Price'),
                                      data_type=currency, width=90))
 
-        cols.append(QuantityColumn('stock', title=_('Stock')))
+        cols.append(QuantityColumn('stock', title=_('Stock'), use_having=True))
         return cols
 
     def executer_query(self, store):
@@ -319,8 +368,45 @@ class ProductsSoldSearch(ProductSearch):
                                hide_toolbar=hide_toolbar)
 
     #
-    #  ProductSearch
+    # Private API
     #
+
+    def _update_summary(self, klist):
+        quantity = total = 0
+        for obj in klist:
+            quantity += obj.quantity
+            total += obj.total_sold
+
+        self.quantity_label.set_label(_(u'Total quantity: %s') % format_quantity(quantity))
+        self.total_sold_label.set_label(_(u'Total sold: %s') % get_formatted_cost(total))
+
+    #
+    # ProductSearch
+    #
+
+    def setup_widgets(self):
+        super(ProductSearch, self).setup_widgets()
+        hbox = Gtk.HBox()
+        hbox.set_spacing(6)
+
+        self.vbox.pack_start(hbox, False, True, 0)
+        self.vbox.reorder_child(hbox, 2)
+        self.vbox.set_spacing(6)
+
+        label = Gtk.Label()
+        hbox.pack_start(label, True, True, 0)
+
+        # Create two labels to show a summary for the search (kiwi's
+        # SummaryLabel supports only one column)
+        self.quantity_label = Gtk.Label()
+        hbox.pack_start(self.quantity_label, False, False, 0)
+
+        self.total_sold_label = Gtk.Label()
+        hbox.pack_start(self.total_sold_label, False, False, 0)
+        hbox.show_all()
+
+        set_bold(self.quantity_label)
+        set_bold(self.total_sold_label)
 
     def create_filters(self):
         self.date_filter = DateSearchFilter(_('Date:'))
@@ -334,7 +420,16 @@ class ProductsSoldSearch(ProductSearch):
                        data_type=str, expand=True),
                 QuantityColumn('quantity', title=_('Sold')),
                 Column('average_cost', title=_('Avg. Cost'),
-                       data_type=currency), ]
+                       data_type=currency),
+                Column('total_sold', title=_('Total sold'),
+                       data_type=currency)]
+
+    #
+    # Callbacks
+    #
+
+    def on_search__search_completed(self, search, result_view, states):
+        self._update_summary(result_view)
 
 
 class ProductStockSearch(ProductSearch):
@@ -358,7 +453,7 @@ class ProductStockSearch(ProductSearch):
     def setup_widgets(self):
         super(ProductStockSearch, self).setup_widgets()
 
-        difference_label = gtk.Label()
+        difference_label = Gtk.Label()
         difference_label.set_markup(
             "<small><b>%s</b></small>"
             % api.escape(_(u"The DIFFERENCE column is equal to "
@@ -384,7 +479,7 @@ class ProductStockSearch(ProductSearch):
                 QuantityColumn('maximum_quantity', title=_('Maximum'),
                                visible=False),
                 QuantityColumn('minimum_quantity', title=_('Minimum')),
-                QuantityColumn('stock', title=_('In Stock')),
+                QuantityColumn('stock', title=_('In Stock'), use_having=True),
                 QuantityColumn('to_receive_quantity', title=_('To Receive')),
                 ColoredColumn('difference', title=_('Difference'), color='red',
                               format_func=format_quantity, data_type=Decimal,

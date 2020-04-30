@@ -26,10 +26,9 @@ Kiwi integration for Stoq/Storm
 
 import re
 import threading
-import Queue
+import queue
 
-import glib
-import gobject
+from gi.repository import GLib, GObject
 from kiwi.python import Settable
 from kiwi.utils import gsignal
 from storm import Undef
@@ -195,7 +194,7 @@ class AsyncResultSet(object):
         return getattr(self.resultset, attr)
 
 
-class AsyncQueryOperation(gobject.GObject):
+class AsyncQueryOperation(GObject.GObject):
 
     (STATUS_WAITING,
      STATUS_EXECUTING,
@@ -211,7 +210,7 @@ class AsyncQueryOperation(gobject.GObject):
            the result from.
         :param expr: query expression to execute
         """
-        gobject.GObject.__init__(self)
+        GObject.GObject.__init__(self)
 
         self.status = self.STATUS_WAITING
         self.resultset = resultset
@@ -222,6 +221,10 @@ class AsyncQueryOperation(gobject.GObject):
         self._async_conn = None
         self._statement = None
         self._parameters = None
+
+    #
+    #  Public API
+    #
 
     def execute(self, async_conn):
         """Executes a query within an asyncronous psycopg2 connection
@@ -239,7 +242,7 @@ class AsyncQueryOperation(gobject.GObject):
         self._async_conn = async_conn
 
         # This is postgres specific, see storm/databases/postgres.py
-        self._statement = stmt.encode('utf-8')
+        self._statement = stmt
         self._parameters = tuple(Connection.to_database(state.parameters))
 
         trace("connection_raw_execute", self._conn,
@@ -253,7 +256,7 @@ class AsyncQueryOperation(gobject.GObject):
             return
 
         self.status = self.STATUS_FINISHED
-        glib.idle_add(self.emit, 'finish')
+        GLib.idle_add(self._on_finish)
 
     def get_result(self):
         """Get operation result.
@@ -276,7 +279,17 @@ class AsyncQueryOperation(gobject.GObject):
         """Cancel the operation scheduling"""
         self.status = self.STATUS_CANCELLED
 
-gobject.type_register(AsyncQueryOperation)
+    #
+    #  Private
+    #
+
+    def _on_finish(self):
+        if self.status == self.STATUS_CANCELLED:
+            return
+        self.emit('finish')
+
+
+GObject.type_register(AsyncQueryOperation)
 
 
 class _OperationExecuter(threading.Thread):
@@ -287,7 +300,7 @@ class _OperationExecuter(threading.Thread):
         super(_OperationExecuter, self).__init__()
 
         self._conn = psycopg2.connect(db_settings.get_store_dsn())
-        self._queue = Queue.Queue()
+        self._queue = queue.Queue()
 
     @classmethod
     def get_instance(cls):
@@ -322,6 +335,7 @@ class QueryExecuter(object):
         self._limit = -1
         self.store = store
         self.search_spec = None
+        self.order_by = None
         self._query_callbacks = []
         self._filter_query_callbacks = {}
         self._query = self._default_query
@@ -346,7 +360,16 @@ class QueryExecuter(object):
         limit = limit or self._limit
         if limit > 0:
             resultset.config(limit=limit)
-        return resultset
+
+        if callable(self.order_by):
+            order_by = self.order_by()
+        else:
+            order_by = self.order_by
+
+        if order_by:
+            return resultset.order_by(order_by)
+        else:
+            return resultset
 
     def search_async(self, states=None, resultset=None, limit=None):
         """
@@ -373,7 +396,7 @@ class QueryExecuter(object):
 
         Create a loop for testing
 
-        >>> loop = glib.MainLoop()
+        >>> loop = GLib.MainLoop()
         >>> sig_id = operation.connect('finish', finished, loop)
         >>> loop.run()
 
@@ -424,6 +447,15 @@ class QueryExecuter(object):
         :param search_spec: a Storm search_spec
         """
         self.search_spec = search_spec
+
+    def set_order_by(self, order_by):
+        """
+        Sets the Storm order_by for this executer.
+
+        :param order_by: a Storm expression or a callable that returns either an
+          expression or None.
+        """
+        self.order_by = order_by
 
     def add_query_callback(self, callback):
         """

@@ -22,11 +22,16 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 
+import atexit
 import glob
+import hashlib
+import io
 import logging
 import os
+import shutil
 import sys
-from zipfile import ZipFile, is_zipfile
+import tempfile
+from zipfile import ZipFile, BadZipfile, is_zipfile
 
 from kiwi.desktopparser import DesktopParser
 from kiwi.component import get_utility, provide_utility
@@ -35,12 +40,12 @@ from zope.interface import implementer
 from stoqlib.database.exceptions import SQLError
 from stoqlib.database.runtime import get_default_store, new_store
 from stoqlib.domain.plugin import InstalledPlugin, PluginEgg
-from stoqlib.lib.fileutils import md5sum_for_filename
 from stoqlib.lib.interfaces import IPlugin, IPluginManager
 from stoqlib.lib.kiwilibrary import library
 from stoqlib.lib.message import error
-from stoqlib.lib.osutils import get_system_locale, get_application_dir
+from stoqlib.lib.osutils import get_system_locale
 from stoqlib.lib.settings import get_settings
+from stoqlib.lib.translation import stoqlib_gettext as _
 
 log = logging.getLogger(__name__)
 
@@ -60,26 +65,27 @@ class PluginDescription(object):
                 filename = [f for f in egg.namelist()
                             if f.endswith('plugin')][0]
                 plugin_file = egg.open(filename)
-                config.readfp(plugin_file)
+                config.read_string(plugin_file.read().decode())
         else:
             plugin_path = os.path.dirname(os.path.dirname(filename))
             self.plugin_path = plugin_path
-            config.read(filename)
+            config.read(filename, encoding='utf8')
 
-        self.name = unicode(os.path.basename(filename).split('.')[0])
+        self.name = os.path.basename(filename).split('.')[0]
         self.entry = config.get('Plugin', 'Module')
         self.filename = filename
+        self.version = config.get('Plugin', 'Version')
 
         if config.has_option('Plugin', 'Dependencies'):
             self.dependencies = [
-                unicode(dependency.strip()) for dependency in
+                dependency.strip() for dependency in
                 config.get('Plugin', 'Dependencies').split(',')]
         else:
             self.dependencies = []
 
         if config.has_option('Plugin', 'Replaces'):
             self.replaces = [
-                unicode(replace.strip()) for replace in
+                replace.strip() for replace in
                 config.get('Plugin', 'Replaces').split(',')]
         else:
             self.replaces = []
@@ -107,7 +113,12 @@ class PluginManager(object):
     """
 
     def __init__(self):
+        self._eggs_cache = None
         self._reload()
+
+    def get_installed_plugins_names(self, store=None):
+        """A list of names of all installed plugins"""
+        return InstalledPlugin.get_plugin_names(store or get_default_store())
 
     #
     # Properties
@@ -126,14 +137,23 @@ class PluginManager(object):
 
     @property
     def installed_plugins_names(self):
-        """A list of names of all installed plugins"""
-        default_store = get_default_store()
-        return [p.plugin_name for p in default_store.find(InstalledPlugin)]
+        """A list of names of all installed plugins as a getter
+
+        This getter should be avoided, and should be replaced by
+        get_installed_plugins_names(). A more generic implementation of this.
+        """
+        return self.get_installed_plugins_names()
 
     @property
     def active_plugins_names(self):
         """A list of names of all active plugins"""
         return list(self._active_plugins.keys())
+
+    @property
+    def available_plugins_versions(self):
+        """An object with pairs of available plugin names and its versions"""
+        return {plugin_name: self._plugin_descriptions[plugin_name].version
+                for plugin_name in self.available_plugins_names}
 
     #
     # Private
@@ -148,36 +168,22 @@ class PluginManager(object):
         self._read_plugin_descriptions()
 
     def _create_eggs_cache(self):
-        log.info("Creating cache for plugins eggs")
-
-        # $HOME/.stoq/plugins
-        default_store = get_default_store()
-        path = os.path.join(get_application_dir(), 'plugins')
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        existing_eggs = {
-            unicode(os.path.basename(f)[:-4]): md5sum_for_filename(f) for f in
-            glob.iglob(os.path.join(path, '*.egg'))}
+        self._eggs_cache = tempfile.mkdtemp(prefix='stoq', suffix='eggs')
+        log.info("Eggs cache created in %s", self._eggs_cache)
 
         # Now extract all eggs from the database and put it where stoq know
         # how to load them
-        for plugin_name, egg_md5sum in default_store.using(PluginEgg).find(
-                (PluginEgg.plugin_name, PluginEgg.egg_md5sum)):
-            # A little optimization to avoid loading the egg in memory if we
-            # already have a valid version cached.
-            if existing_eggs.get(plugin_name, u'') == egg_md5sum:
-                log.info("Plugin %r egg md5sum matches. Skipping it..." % (
-                    plugin_name, ))
-                continue
-
+        default_store = get_default_store()
+        for plugin_egg in default_store.find(PluginEgg):
+            plugin_name = plugin_egg.plugin_name
             log.info("Creating egg cache for plugin %r" % (plugin_name, ))
-            egg_filename = '%s.egg' % (plugin_name, )
-            plugin_egg = default_store.find(
-                PluginEgg, plugin_name=plugin_name).one()
 
-            with open(os.path.join(path, egg_filename), 'wb') as f:
+            egg_filename = '{}.egg'.format(plugin_name)
+            with open(os.path.join(self._eggs_cache, egg_filename), 'wb') as f:
                 f.write(plugin_egg.egg_content)
+
+        atexit.register(
+            lambda: shutil.rmtree(self._eggs_cache, ignore_errors=True))
 
     def _get_external_plugins_paths(self):
         # This is the dir containing stoq/kiwi/stoqdrivers/etc
@@ -194,8 +200,8 @@ class PluginManager(object):
         # Development plugins on the same checkout
         paths = [os.path.join(library.get_root(), 'plugins')]
 
-        # Plugins on $HOME/.stoq/plugins
-        paths.append(os.path.join(get_application_dir(), 'plugins'))
+        # Plugins from PluginEgg
+        paths.append(self._eggs_cache)
 
         if library.get_resource_exists('stoq', 'plugins'):
             paths.append(library.get_resource_filename('stoq', 'plugins'))
@@ -204,11 +210,11 @@ class PluginManager(object):
 
         for path in paths:
             for filename in glob.iglob(os.path.join(path, '*', '*.plugin')):
-                self._register_plugin_description(filename)
+                self.register_plugin_description(filename)
             for filename in glob.iglob(os.path.join(path, '*.egg')):
-                self._register_plugin_description(filename, is_egg=True)
+                self.register_plugin_description(filename, is_egg=True)
 
-    def _register_plugin_description(self, filename, is_egg=False):
+    def register_plugin_description(self, filename, is_egg=False):
         desc = PluginDescription(filename, is_egg)
         self._plugin_descriptions[desc.name] = desc
 
@@ -222,47 +228,77 @@ class PluginManager(object):
         __import__(os.path.basename(plugin_desc.dirname), globals(), locals(),
                    [plugin_desc.entry])
 
-        assert plugin_desc.name in self._plugins
+        assert plugin_desc.name in self._plugins, (plugin_desc.name,
+                                                   self._plugins)
 
     #
     # Public API
     #
 
-    def download_plugin(self, plugin_name):
+    def download_plugin(self, plugin_name, channel=None):
         """Download a plugin from webservice
 
         :param plugin_name: the name of the plugin to download
+        :param channel: the channel the plugin belongs
         :returns: a deferred
         """
         from stoqlib.lib.webservice import WebService
 
-        def callback(filename):
-            md5sum = unicode(md5sum_for_filename(filename))
-            with open(filename) as f:
+        default_store = get_default_store()
+        existing_egg = default_store.find(PluginEgg,
+                                          plugin_name=plugin_name).one()
+        md5sum = existing_egg and existing_egg.egg_md5sum
+        webapi = WebService()
+        r = webapi.download_plugin(plugin_name, md5sum=md5sum, channel=channel)
+
+        try:
+            response = r.get_response()
+        except Exception as e:
+            return False, _("Failed to do the request: %s" % (e, ))
+
+        code = response.status_code
+        if code == 204:
+            msg = _("No update needed. The plugin is already up to date.")
+            log.info(msg)
+            return True, msg
+
+        if code != 200:
+            return_messages = {
+                400: _("Plugin not available for this stoq version"),
+                401: _("The instance is not authorized to download the plugin"),
+                404: _("Plugin does not exist"),
+                405: _("This instance has not acquired the specified plugin"),
+            }
+            msg = return_messages.get(code, str(code))
+            log.warning(msg)
+            return False, msg
+
+        try:
+            with io.BytesIO() as f:
+                f.write(response.content)
+                with ZipFile(f) as egg:
+                    if egg.testzip() is not None:
+                        raise BadZipfile
+
+                md5sum = hashlib.md5(f.getvalue()).hexdigest()
                 with new_store() as store:
                     existing_egg = store.find(PluginEgg,
                                               plugin_name=plugin_name).one()
                     if existing_egg is not None:
-                        existing_egg.egg_content = f.read()
+                        existing_egg.egg_content = f.getvalue()
                         existing_egg.egg_md5sum = md5sum
                     else:
                         PluginEgg(
                             store=store,
                             plugin_name=plugin_name,
                             egg_md5sum=md5sum,
-                            egg_content=f.read(),
+                            egg_content=f.getvalue(),
                         )
+        except BadZipfile:
+            return False, _("The downloaded plugin is corrupted")
 
-            self._reload()
-
-        default_store = get_default_store()
-        existing_egg = default_store.find(PluginEgg,
-                                          plugin_name=plugin_name).one()
-        md5sum = existing_egg and existing_egg.egg_md5sum
-
-        webapi = WebService()
-        return webapi.download_plugin(plugin_name, callback=callback,
-                                      md5sum=md5sum)
+        self._reload()
+        return True, _("Plugin download successful")
 
     def get_plugin(self, plugin_name):
         """Returns a plugin by it's name
@@ -328,7 +364,23 @@ class PluginManager(object):
         plugin.activate()
         self._active_plugins[plugin_name] = plugin
 
-    def install_plugin(self, plugin_name):
+    def pre_install_plugin(self, store, plugin_name):
+        """Pre Install Plugin
+
+        Registers an intention to activate a plugin, that will require further
+        actions to enable when running stoq later, like downloading the
+        plugin from stoq.link.
+        """
+
+        if plugin_name in self.installed_plugins_names:
+            raise PluginError("Plugin %s is already enabled."
+                              % (plugin_name, ))
+
+        InstalledPlugin(store=store,
+                        plugin_name=plugin_name,
+                        plugin_version=None)
+
+    def install_plugin(self, store, plugin_name):
         """Install and enable a plugin
 
         @important: Calling this makes a plugin installed, but, it's
@@ -347,13 +399,28 @@ class PluginManager(object):
         dependencies = self._plugin_descriptions[plugin_name].dependencies
         for dependency in dependencies:
             if not self.is_installed(dependency):
-                self.install_plugin(dependency)
+                self.install_plugin(store, dependency)
 
-        store = new_store()
-        InstalledPlugin(store=store,
-                        plugin_name=plugin_name,
-                        plugin_version=0)
-        store.commit(close=True)
+        InstalledPlugin.create(store, plugin_name)
+        # FIXME: We should not be doing this commit here, but by not doing so,
+        # ```
+        # migration = plugin.get_migration()
+        # ```
+        # Would not find any plugin (as it uses the default store), to allow
+        # `plugin.get_migration()` to accept a custom store, we would have to
+        # change all the plugins `get_migration` method.
+        #
+        # An alternate solution to this would be to manually set the correct
+        # plugin for `migration`:
+        #
+        # migration._plugin = store.find(InstalledPlugin,
+        #                                plugin_name=plugin_name).one()
+        #
+        # Along with passing the store to `migration.apply_all_patches()`
+        #
+        # But it will be dirty and will probably be removed once the definitive
+        # solution (change `plugin.get_migration()`) is implemented
+        store.commit(close=False)
 
         migration = plugin.get_migration()
         if migration:
@@ -402,12 +469,19 @@ class PluginManager(object):
         """
         return plugin_name in self.active_plugins_names
 
-    def is_installed(self, plugin_name):
+    def is_any_active(self, plugin_names):
+        """Check if any of the plugin names are active.
+
+        :param plugin_names: a list of plugin names to check
+        """
+        return any(self.is_active(name) for name in plugin_names)
+
+    def is_installed(self, plugin_name, store=False):
         """Returns if a plugin with a certain name is installed or not
 
         :returns: True if the given plugin name is active, False otherwise.
         """
-        return plugin_name in self.installed_plugins_names
+        return plugin_name in self.get_installed_plugins_names(store)
 
 
 def register_plugin(plugin_class):

@@ -25,7 +25,7 @@
 
 import collections
 
-import gtk
+from gi.repository import Gtk
 from kiwi.datatypes import ValidationError
 from kiwi.ui.forms import PercentageField, TextField
 from stoqdrivers.enum import TaxType, UnitType
@@ -43,6 +43,7 @@ from stoqlib.gui.dialogs.labeldialog import PrintLabelEditor
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.gui.editors.categoryeditor import SellableCategoryEditor
 from stoqlib.gui.slaves.commissionslave import CommissionSlave
+from stoqlib.gui.slaves.imageslave import ImageGallerySlave
 from stoqlib.gui.utils.databaseform import DatabaseForm
 from stoqlib.gui.utils.printing import print_labels
 from stoqlib.lib.decorators import cached_property
@@ -244,7 +245,7 @@ class SellableEditor(BaseEditor):
                                     self.unit_combo,
                                     ])
 
-        self._print_labels_btn = self.add_button('print_labels', gtk.STOCK_PRINT)
+        self._print_labels_btn = self.add_button('print_labels', Gtk.STOCK_PRINT)
         self._print_labels_btn.connect('clicked', self.on_print_labels_clicked,
                                        'print_labels')
         label = self._print_labels_btn.get_children()[0]
@@ -258,7 +259,7 @@ class SellableEditor(BaseEditor):
             # to avoid having *lots* of buttons. If it's closed, provide a way
             # to reopen it, else, show a delete button if it can be removed
             # or a close button if it can be closed
-            if self._sellable.is_closed():
+            if self._sellable.is_closed(api.get_current_branch(self.store)):
                 self._add_reopen_button()
             elif self._sellable.can_remove():
                 self._add_delete_button()
@@ -266,12 +267,15 @@ class SellableEditor(BaseEditor):
                 self._add_close_button()
 
         self.set_main_tab_label(self.model_name)
+        image_gallery_slave = ImageGallerySlave(
+            self.store, self.model.sellable, self.visual_mode)
+        self.add_extra_tab(_(u'Images'), image_gallery_slave)
         price_slave = CategoryPriceSlave(self.store, self.model.sellable,
                                          self.visual_mode)
         self.add_extra_tab(_(u'Category Prices'), price_slave)
         self._setup_ui_forms()
         self._update_print_labels()
-        self._update_on_price_label()
+        self._update_price()
 
     def _add_demo_warning(self):
         fmt = _("This is a demostration mode of Stoq, you cannot "
@@ -288,7 +292,7 @@ class SellableEditor(BaseEditor):
             button.connect(connect_on, callback_func, label)
 
     def _add_delete_button(self):
-        self._add_extra_button(_('Remove'), gtk.STOCK_DELETE,
+        self._add_extra_button(_('Remove'), Gtk.STOCK_DELETE,
                                self._on_delete_button__clicked)
 
     def _add_close_button(self):
@@ -309,11 +313,16 @@ class SellableEditor(BaseEditor):
         self._add_extra_button(label, None,
                                self._on_reopen_sellable_button__clicked)
 
-    def _update_default_sellable_code(self):
-        code = Sellable.get_max_value(self.store, Sellable.code)
+    def _update_default_sellable_code(self, category=None):
+        if category:
+            query = (Sellable.category_id == category.id)
+            code = Sellable.get_max_value(self.store, Sellable.code, query=query)
+        else:
+            code = Sellable.get_max_value(self.store, Sellable.code)
         self.code.update(next_value_for(code))
 
-    def _update_on_price_label(self):
+    def _update_price(self):
+        self.sellable_proxy.update('base_price')
         if self._sellable.is_on_sale():
             text = _("Currently on sale for %s") % (
                 get_formatted_price(self._sellable.on_sale_price), )
@@ -343,21 +352,21 @@ class SellableEditor(BaseEditor):
 
     def set_main_tab_label(self, tabname):
         self.sellable_notebook.set_tab_label(self.sellable_tab,
-                                             gtk.Label(tabname))
+                                             Gtk.Label(label=tabname))
 
     def add_extra_tab(self, tabname, tabslave):
         self.sellable_notebook.set_show_tabs(True)
         self.sellable_notebook.set_show_border(True)
 
-        event_box = gtk.EventBox()
+        event_box = Gtk.EventBox()
         event_box.show()
-        self.sellable_notebook.append_page(event_box, gtk.Label(tabname))
+        self.sellable_notebook.append_page(event_box, Gtk.Label(label=tabname))
         self.attach_slave(tabname, tabslave, event_box)
 
     def set_widget_formats(self):
         for widget in (self.cost, self.price):
-            widget.set_adjustment(gtk.Adjustment(lower=0, upper=MAX_INT,
-                                                 step_incr=1))
+            widget.set_adjustment(Gtk.Adjustment(lower=0, upper=MAX_INT,
+                                                 step_increment=1))
         self.requires_weighing_label.set_size("small")
         self.requires_weighing_label.set_text("")
 
@@ -368,7 +377,7 @@ class SellableEditor(BaseEditor):
                             self.get_toplevel().get_toplevel(),
                             self.store, sellable)
         if result:
-            self._update_on_price_label()
+            self._update_price()
         else:
             self.store.rollback_to_savepoint('before_run_editor_sellable_price')
 
@@ -471,7 +480,7 @@ class SellableEditor(BaseEditor):
         sellable_description = self._sellable.get_description()
         msg = (_("This will delete '%s' from the database. Are you sure?")
                % sellable_description)
-        if not yesno(msg, gtk.RESPONSE_NO, _("Delete"), _("Keep")):
+        if not yesno(msg, Gtk.ResponseType.NO, _("Delete"), _("Keep")):
             return
 
         try:
@@ -497,11 +506,11 @@ class SellableEditor(BaseEditor):
                  "Please note that when it's closed, you won't be able to "
                  "commercialize it anymore.")
                % self._sellable.get_description())
-        if not yesno(msg, gtk.RESPONSE_NO,
+        if not yesno(msg, Gtk.ResponseType.NO,
                      parent_button_label, _("Don't close")):
             return
 
-        self._sellable.close()
+        self._sellable.close(api.get_current_branch(self.store))
         self.confirm()
 
     def _on_reopen_sellable_button__clicked(self, button,
@@ -509,15 +518,24 @@ class SellableEditor(BaseEditor):
         msg = (_("Do you really want to reopen '%s'?\n"
                  "Note that when it's opened, you will be able to "
                  "commercialize it again.") % self._sellable.get_description())
-        if not yesno(msg, gtk.RESPONSE_NO,
+        if not yesno(msg, Gtk.ResponseType.NO,
                      parent_button_label, _("Keep closed")):
             return
 
-        self._sellable.set_available()
+        self._sellable.set_available(api.get_current_branch(self.store))
         self.confirm()
 
-    def on_category_combo__content_changed(self, category):
-        self.edit_category.set_sensitive(bool(category.get_selected()))
+    def on_category_combo__content_changed(self, combo):
+        # This is being called twice (because of a kiwi bug). Run this code only
+        # once.
+        category = combo.get_selected()
+        if category == self._sellable.category:
+            return
+        category_suggest = api.sysparam.get_object(self.store,
+                                                   'SUGGEST_PRODUCT_CODE_BASED_CATEGORY')
+        if not self.edit_mode and category_suggest:
+            self._update_default_sellable_code(category)
+        self.edit_category.set_sensitive(bool(category))
 
     def on_tax_constant__changed(self, combo):
         self._update_tax_value()
@@ -543,8 +561,11 @@ class SellableEditor(BaseEditor):
     def on_barcode__validate(self, widget, value):
         if not value:
             return
-        if value and len(value) > 14:
-            return ValidationError(_(u'Barcode must have 14 digits or less.'))
+
+        max_barcode = sysparam.get_int('BARCODE_MAX_SIZE')
+        if value and len(value) > max_barcode:
+            return ValidationError(_(u'Barcode must have %s digits or less.') %
+                                   max_barcode)
         if self.model.sellable.check_barcode_exists(value):
             return ValidationError(_('The barcode %s already exists') % value)
         if self._demo_mode and value not in _DEMO_BAR_CODES:

@@ -52,6 +52,13 @@ _ = stoqlib_gettext
 
 
 def _create_transaction(store, till_entry):
+    # Dont create till entries for sangrias/suprimentos as those are really tied to the
+    # old ECF behaivour (where *all* the sales values are added to the till). If we
+    # create transactions for those operations, the value would be duplicated when the
+    # payment is finally payed.
+    if not till_entry.payment:
+        return
+
     if till_entry.value > 0:
         operation_type = AccountTransaction.TYPE_IN
         source_account = sysparam.get_object_id('IMBALANCE_ACCOUNT')
@@ -65,7 +72,7 @@ def _create_transaction(store, till_entry):
                        source_account_id=source_account,
                        account_id=dest_account,
                        value=abs(till_entry.value),
-                       code=unicode(till_entry.identifier),
+                       code=str(till_entry.identifier),
                        date=TransactionTimestamp(),
                        store=store,
                        payment=till_entry.payment,
@@ -128,8 +135,9 @@ class TillOpeningEditor(BaseEditor):
     #
 
     def create_model(self, store):
-        till = Till(store=store, station=api.get_current_station(store))
-        till.open_till()
+        till = Till(store=store, branch=api.get_current_branch(store),
+                    station=api.get_current_station(store))
+        till.open_till(api.get_current_user(store))
 
         return _TillOpeningModel(till=till, value=currency(0))
 
@@ -140,9 +148,10 @@ class TillOpeningEditor(BaseEditor):
         till = self.model.till
         # Using api.get_default_store instead of self.store
         # or it will return self.model.till
-        last_opened = Till.get_last_opened(api.get_default_store())
+        last_opened = Till.get_last_opened(api.get_default_store(),
+                                           api.get_current_station(api.get_default_store()))
         if (last_opened and
-            last_opened.opening_date.date() == till.opening_date.date()):
+                last_opened.opening_date.date() == till.opening_date.date()):
             warning(_("A till was opened earlier this day."))
             self.retval = False
             return
@@ -196,11 +205,12 @@ class TillClosingEditor(BaseEditor):
         :param previous_day: If the till wasn't closed previously
         """
         self._previous_day = previous_day
-        self.till = Till.get_last(store)
+        self.till = Till.get_last(store, api.get_current_station(store))
         if close_db:
             assert self.till
         self._close_db = close_db
         self._close_ecf = close_ecf
+        self._blind_close = sysparam.get_bool('TILL_BLIND_CLOSING')
         BaseEditor.__init__(self, store, model)
         self._setup_widgets()
 
@@ -214,14 +224,17 @@ class TillClosingEditor(BaseEditor):
         self.value.update(value)
 
         self.day_history.set_columns(self._get_columns())
-        self.day_history.connect('row-activated', lambda olist, row: self.confirm())
-        self.day_history.add_list(self._get_day_history())
-        summary_day_history = SummaryLabel(
-            klist=self.day_history,
-            column='value',
-            label='<b>%s</b>' % api.escape(_(u'Total balance:')))
-        summary_day_history.show()
-        self.day_history_box.pack_start(summary_day_history, False)
+        if not self._blind_close:
+            self.day_history.add_list(self._get_day_history())
+            summary_day_history = SummaryLabel(
+                klist=self.day_history,
+                column='system_value',
+                label='<b>%s</b>' % api.escape(_(u'Total balance:')))
+            summary_day_history.show()
+            self.day_history_box.pack_start(summary_day_history, False, True, 0)
+        else:
+            self.totals_grid.hide()
+            self.day_history.add_list(self.till.get_day_summary())
 
     def _get_day_history(self):
         if not self.till:
@@ -241,19 +254,24 @@ class TillClosingEditor(BaseEditor):
                 else:
                     desc = _(u'Cash Out')
 
-            if desc in day_history.keys():
-                day_history[desc] += entry.value
-            else:
-                day_history[desc] = entry.value
+            day_history.setdefault(desc, 0)
+            day_history[desc] += entry.value
 
         for description, value in day_history.items():
-            yield Settable(description=description, value=value)
+            yield Settable(description=description, system_value=value, user_value=0)
 
     def _get_columns(self):
-        return [Column('description', title=_('Description'), data_type=str,
-                       width=300, sorted=True),
-                ColoredColumn('value', title=_('Amount'), data_type=currency,
-                              color='red', data_func=lambda x: x < 0)]
+        cols = [Column('description', title=_('Description'), data_type=str,
+                       width=300, sorted=True)]
+        if self._blind_close:
+            cols.append(
+                Column('user_value', title=_('Amount'), data_type=currency,
+                       editable=True))
+        else:
+            cols.append(
+                ColoredColumn('system_value', title=_('Amount'), data_type=currency,
+                              color='red', data_func=lambda x: x < 0))
+        return cols
 
     #
     # BaseEditorSlave
@@ -269,6 +287,12 @@ class TillClosingEditor(BaseEditor):
                                     TillClosingEditor.proxy_widgets)
 
     def validate_confirm(self):
+        if self._blind_close:
+            for item in self.day_history:
+                if item.user_value is None:
+                    warning(_("You must fill all the values"))
+                    return False
+
         till = self.model.till
         removed = abs(self.model.value)
         if removed and removed > till.get_balance():
@@ -294,6 +318,7 @@ class TillClosingEditor(BaseEditor):
 
             # Financial transaction
             _create_transaction(store, till_entry)
+
             # DB transaction
             store.confirm(True)
             store.close()
@@ -313,7 +338,8 @@ class TillClosingEditor(BaseEditor):
 
         if self._close_db:
             try:
-                till.close_till(observations=self.model.observations)
+                till.close_till(user=api.get_current_user(self.store),
+                                observations=self.model.observations)
             except ValueError as err:
                 warning(str(err))
                 return
@@ -383,7 +409,7 @@ class CashAdvanceEditor(BaseEditor):
     #
 
     def create_model(self, store):
-        till = Till.get_current(self.store)
+        till = Till.get_current(self.store, api.get_current_station(self.store))
         return Settable(employee=None,
                         payment=None,
                         # FIXME: should send in consts.now()
@@ -439,7 +465,7 @@ class BaseCashEditor(BaseEditor):
     #
 
     def create_model(self, store):
-        till = Till.get_current(store)
+        till = Till.get_current(store, api.get_current_station(store))
         return Settable(value=currency(0),
                         reason=u'',
                         till=till,

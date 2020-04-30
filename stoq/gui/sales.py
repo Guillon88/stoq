@@ -27,16 +27,16 @@ import decimal
 from datetime import date
 from dateutil.relativedelta import relativedelta
 
-import pango
-import gtk
+from gi.repository import Gtk, Pango
 from kiwi.currency import currency
+from kiwi.ui.objectlist import Column
 from storm.expr import And
 
 from stoqlib.api import api
 from stoqlib.database.expr import Date
-from stoqlib.domain.events import SaleAvoidCancelEvent
+from stoqlib.domain.events import SaleAvoidCancelEvent, StockOperationTryFiscalCancelEvent
 from stoqlib.domain.invoice import InvoicePrinter
-from stoqlib.domain.sale import Sale, SaleView, SaleComment
+from stoqlib.domain.sale import Sale, SaleView
 from stoqlib.enums import SearchFilterPosition
 from stoqlib.gui.dialogs.invoicedialog import SaleInvoicePrinterDialog
 from stoqlib.gui.editors.saleeditor import SaleClientEditor, SalesPersonEditor
@@ -56,13 +56,13 @@ from stoqlib.gui.search.salespersonsearch import SalesPersonSalesSearch
 from stoqlib.gui.search.salesearch import (SalesByPaymentMethodSearch,
                                            SoldItemsByBranchSearch,
                                            SoldItemsByClientSearch,
+                                           SoldItemsBySalespersonSearch,
                                            UnconfirmedSaleItemsSearch)
 from stoqlib.gui.search.searchcolumns import IdentifierColumn, SearchColumn
 from stoqlib.gui.search.searchfilters import ComboSearchFilter
 from stoqlib.gui.search.servicesearch import ServiceSearch
-from stoqlib.gui.stockicons import (STOQ_PRODUCTS, STOQ_SERVICES,
-                                    STOQ_CLIENTS, STOQ_DELIVERY)
 from stoqlib.gui.utils.keybindings import get_accels
+from stoqlib.gui.widgets.lazyobjectlist import LazySummaryLabel
 from stoqlib.gui.wizards.loanwizard import NewLoanWizard, CloseLoanWizard
 from stoqlib.gui.wizards.salequotewizard import SaleQuoteWizard
 from stoqlib.gui.wizards.workorderquotewizard import WorkOrderQuoteWizard
@@ -70,6 +70,7 @@ from stoqlib.lib.formatters import format_quantity
 from stoqlib.lib.invoice import SaleInvoice, print_sale_invoice
 from stoqlib.lib.message import info, warning
 from stoqlib.lib.permissions import PermissionManager
+from stoqlib.lib.pluginmanager import get_plugin_manager
 from stoqlib.lib.translation import stoqlib_gettext as _
 from stoqlib.reporting.sale import SalesReport
 
@@ -121,7 +122,9 @@ class SalesApp(ShellApp):
     def __init__(self, window, store=None):
         self.summary_label = None
         self._visible_date_col = None
+        self._extra_summary = None
         ShellApp.__init__(self, window, store=store)
+        self.search.connect('search-completed', self._on_search_completed)
 
     #
     # Application
@@ -149,16 +152,16 @@ class SalesApp(ShellApp):
              _("Total sales made by salesperson..."),
              group.get("search_salesperson_sales"),
              _("Search for sales by payment method")),
-            ("SearchProduct", STOQ_PRODUCTS, _("Products..."),
+            ("SearchProduct", None, _("Products..."),
              group.get("search_products"),
              _("Search for products")),
-            ("SearchService", STOQ_SERVICES, _("Services..."),
+            ("SearchService", None, _("Services..."),
              group.get("search_services"),
              _("Search for services")),
-            ("SearchDelivery", STOQ_DELIVERY, _("Deliveries..."),
+            ("SearchDelivery", None, _("Deliveries..."),
              group.get("search_deliveries"),
              _("Search for deliveries")),
-            ("SearchClient", STOQ_CLIENTS, _("Clients..."),
+            ("SearchClient", None, _("Clients..."),
              group.get("search_clients"),
              _("Search for clients")),
             ("SearchClientCalls", None, _("Client Calls..."),
@@ -189,62 +192,71 @@ class SalesApp(ShellApp):
             ("SearchSoldItemsByClient", None, _("Sold items by client..."),
              None,
              _("Search for products sold by client")),
+            ("SearchSoldItemsBySalesperson", None, _("Sold items by salesperson.."),
+             None,
+             _("Search for products sold by salesperson")),
 
 
             # Sale
             ("SaleMenu", None, _("Sale")),
 
             ("SalesCancel", None, _("Cancel...")),
-            ("ChangeClient", gtk.STOCK_EDIT, _("Change client...")),
-            ("ChangeSalesperson", gtk.STOCK_EDIT, _("Change salesperson...")),
-            ("SalesPrintInvoice", gtk.STOCK_PRINT, _("_Print invoice...")),
-            ("Return", gtk.STOCK_CANCEL, _("Return..."), '',
+            ("ChangeClient", Gtk.STOCK_EDIT, _("Change client...")),
+            ("ChangeSalesperson", Gtk.STOCK_EDIT, _("Change salesperson...")),
+            ("SalesPrintInvoice", Gtk.STOCK_PRINT, _("_Print invoice...")),
+            ("Return", Gtk.STOCK_CANCEL, _("Return..."), '',
              _("Return the selected sale, canceling it's payments")),
-            ("Edit", gtk.STOCK_EDIT, _("Edit..."), '',
+            ("Edit", Gtk.STOCK_EDIT, _("Edit..."), '',
              _("Edit the selected sale, allowing you to change the details "
                "of it")),
-            ("Details", gtk.STOCK_INFO, _("Details..."), '',
+            ("Details", Gtk.STOCK_INFO, _("Details..."), '',
              _("Show details of the selected sale"))
         ]
 
-        self.sales_ui = self.add_ui_actions("", actions,
-                                            filename="sales.xml")
-
-        self.SaleQuote.set_short_label(_("New Sale Quote"))
-        self.SaleQuote.set_short_label(_("New Sale Quote with Work Order"))
-        self.SearchClient.set_short_label(_("Clients"))
-        self.SearchProduct.set_short_label(_("Products"))
-        self.SearchService.set_short_label(_("Services"))
-        self.SearchDelivery.set_short_label(_("Deliveries"))
-        self.SalesCancel.set_short_label(_("Cancel"))
-        self.ChangeClient.set_short_label(_("Change Client"))
-        self.ChangeSalesperson.set_short_label(_("Change Salesperson"))
-        self.Edit.set_short_label(_("Edit"))
-        self.Return.set_short_label(_("Return"))
-        self.Details.set_short_label(_("Details"))
-
+        self.sales_ui = self.add_ui_actions(actions)
         self.set_help_section(_("Sales help"), 'app-sales')
+
+    def get_domain_options(self):
+        options = [
+            ('fa-info-circle-symbolic', _('Details'), 'sales.Details', True),
+            ('fa-edit-symbolic', _('Edit'), 'sales.Edit', True),
+            ('fa-undo-symbolic', _('Return'), 'sales.Return', True),
+            ('fa-ban-symbolic', _('Cancel'), 'sales.SalesCancel', True),
+        ]
+
+        if api.sysparam.get_bool('CHANGE_CLIENT_AFTER_CONFIRMED'):
+            options.append(('', _('Change client'), 'sales.ChangeClient', False))
+        if api.sysparam.get_bool('CHANGE_SALESPERSON_AFTER_CONFIRMED'):
+            options.append(('', _('Change salesperson'), 'sales.ChangeSalesperson', False))
+
+        return options
 
     def create_ui(self):
         if api.sysparam.get_bool('SMART_LIST_LOADING'):
             self.search.enable_lazy_search()
-        if not api.sysparam.get_bool('CHANGE_CLIENT_AFTER_CONFIRMED'):
-            self.ChangeClient.set_visible(False)
-        if not api.sysparam.get_bool('CHANGE_SALESPERSON_AFTER_CONFIRMED'):
-            self.ChangeSalesperson.set_visible(False)
-
-        self.popup = self.uimanager.get_widget('/SaleSelection')
 
         self._setup_columns()
         self._setup_widgets()
 
-        self.window.add_new_items([self.SaleQuote, self.WorkOrderQuote])
-        self.window.add_search_items([
-            self.SearchProduct,
-            self.SearchClient,
-            self.SearchService,
-            self.SearchDelivery])
-        self.window.Print.set_tooltip(_("Print a report of these sales"))
+        self.window.add_print_items()
+        self.window.add_export_items()
+        self.window.add_extra_items([self.LoanClose])
+        self.window.add_new_items([self.SaleQuote, self.WorkOrderQuote,
+                                   self.LoanNew])
+        self.window.add_search_items(
+            [self.SearchProduct, self.SearchService, self.SearchDelivery])
+        self.window.add_search_items(
+            [self.SearchClient, self.SearchClientCalls,
+             self.SearchCreditCheckHistory, self.SearchClientsWithSale,
+             self.SearchClientsWithCredit])
+        self.window.add_search_items(
+            [self.SearchSalesByPaymentMethod, self.ReturnedSaleSearch,
+             self.SearchCommission, self.SearchSalesPersonSales])
+        self.window.add_search_items(
+            [self.SearchUnconfirmedSaleItems, self.SearchSoldItemsByBranch,
+             self.SearchSoldItemsByClient, self.SearchSoldItemsBySalesperson])
+        self.window.add_search_items(
+            [self.LoanSearch, self.LoanSearchItems])
 
     def activate(self, refresh=True):
         if refresh:
@@ -255,21 +267,13 @@ class SalesApp(ShellApp):
 
         self.search.focus_search_entry()
 
-    def deactivate(self):
-        self.uimanager.remove_ui(self.sales_ui)
-
-    def new_activate(self):
-        self._new_sale_quote(wizard=SaleQuoteWizard)
-
-    def search_activate(self):
-        self._search_product()
-
     def set_open_inventory(self):
         self.set_sensitive(self._inventory_widgets, False)
 
     def create_filters(self):
         self.set_text_field_columns(['client_name', 'salesperson_name',
-                                     'identifier_str'])
+                                     'identifier_str', 'token_code',
+                                     'token_name'])
 
         status_filter = ComboSearchFilter(_('Show sales'),
                                           self._get_filter_options())
@@ -285,7 +289,7 @@ class SalesApp(ShellApp):
 
     def get_columns(self):
         self._status_col = SearchColumn('status_name', title=_('Status'),
-                                        data_type=str, width=80, visible=False,
+                                        data_type=str, width=80, visible=True,
                                         search_attribute='status',
                                         valid_values=self._get_status_values())
 
@@ -296,46 +300,72 @@ class SalesApp(ShellApp):
                 SearchColumn('paid', title=_('Paid'), width=120,
                              data_type=bool, visible=False),
                 SearchColumn('open_date', title=_('Open date'), width=120,
-                             data_type=date, justify=gtk.JUSTIFY_RIGHT,
+                             data_type=date, justify=Gtk.Justification.RIGHT,
                              visible=False),
                 SearchColumn('close_date', title=_('Close date'), width=120,
-                             data_type=date, justify=gtk.JUSTIFY_RIGHT,
+                             data_type=date, justify=Gtk.Justification.RIGHT,
                              visible=False),
                 SearchColumn('confirm_date', title=_('Confirm date'),
-                             data_type=date, justify=gtk.JUSTIFY_RIGHT,
+                             data_type=date, justify=Gtk.Justification.RIGHT,
                              visible=False, width=120),
                 SearchColumn('cancel_date', title=_('Cancel date'), width=120,
-                             data_type=date, justify=gtk.JUSTIFY_RIGHT,
+                             data_type=date, justify=Gtk.Justification.RIGHT,
                              visible=False),
                 SearchColumn('return_date', title=_('Return date'), width=120,
-                             data_type=date, justify=gtk.JUSTIFY_RIGHT,
+                             data_type=date, justify=Gtk.Justification.RIGHT,
                              visible=False),
                 SearchColumn('expire_date', title=_('Expire date'), width=120,
-                             data_type=date, justify=gtk.JUSTIFY_RIGHT,
+                             data_type=date, justify=Gtk.Justification.RIGHT,
                              visible=False),
-                self._status_col,
-                SearchColumn('client_name', title=_('Client'),
-                             data_type=str, width=140, expand=True,
-                             ellipsize=pango.ELLIPSIZE_END),
-                SearchColumn('salesperson_name', title=_('Salesperson'),
-                             data_type=str, width=130,
-                             ellipsize=pango.ELLIPSIZE_END),
-                SearchColumn('total_quantity', title=_('Items'),
-                             data_type=decimal.Decimal, width=60,
-                             format_func=format_quantity),
-                SearchColumn('total', title=_('Total'), data_type=currency,
-                             width=120, search_attribute='_total')]
+                self._status_col]
+
+        if api.sysparam.get_bool('USE_SALE_TOKEN'):
+            cols.append(Column('token_str', title=_(u'Sale token'),
+                               data_type=str, visible=True))
+
+        cols.extend([
+            SearchColumn('client_name', title=_('Client'),
+                         data_type=str, width=140, expand=True,
+                         ellipsize=Pango.EllipsizeMode.END),
+            SearchColumn('client_fancy_name', title=_('Client fancy name'),
+                         data_type=str, width=140, expand=True,
+                         visible=False, ellipsize=Pango.EllipsizeMode.END),
+            SearchColumn('salesperson_name', title=_('Salesperson'),
+                         data_type=str, width=130,
+                         ellipsize=Pango.EllipsizeMode.END),
+            SearchColumn('total_quantity', title=_('Items'),
+                         data_type=decimal.Decimal, width=60,
+                         format_func=format_quantity),
+            SearchColumn('total', title=_('Gross total'), data_type=currency,
+                         width=120, search_attribute='_total'),
+            SearchColumn('net_total', title=_('Net total'), data_type=currency,
+                         width=120, search_attribute='_net_total')])
         return cols
 
     #
     # Private
     #
 
-    def _create_summary_label(self):
-        self.search.set_summary_label(column='total',
-                                      label='<b>Total:</b>',
+    def _create_summary_labels(self):
+        parent = self.get_statusbar_message_area()
+        self.search.set_summary_label(column='net_total',
+                                      label=('<b>%s</b>' %
+                                             api.escape(_('Gross total:'))),
                                       format='<b>%s</b>',
-                                      parent=self.get_statusbar_message_area())
+                                      parent=parent)
+        # Add an extra summary beyond the main one
+        # XXX: Should we modify the summary api to make it support more than one
+        # summary value? This is kind of ugly
+        if self._extra_summary:
+            parent.remove(self._extra_summary)
+
+        self._extra_summary = LazySummaryLabel(klist=self.search.result_view,
+                                               column='net_total',
+                                               label=('<b>%s</b>' %
+                                                      api.escape(_('Net total:'))),
+                                               value_format='<b>%s</b>')
+        parent.pack_start(self._extra_summary, False, False, 0)
+        self._extra_summary.show()
 
     def _setup_widgets(self):
         self._setup_slaves()
@@ -351,6 +381,7 @@ class SalesApp(ShellApp):
 
     def _update_toolbar(self, *args):
         sale_view = self.results.get_selected()
+        user = api.get_current_user(self.store)
         # FIXME: Disable invoice printing if the sale was returned. Remove this
         #       when we add proper support for returned sales invoice.
         can_print_invoice = bool(sale_view and
@@ -358,9 +389,10 @@ class SalesApp(ShellApp):
                                  sale_view.status != Sale.STATUS_RETURNED)
         self.set_sensitive([self.SalesPrintInvoice], can_print_invoice)
         self.set_sensitive([self.SalesCancel],
-                           bool(sale_view and sale_view.can_cancel()))
+                           bool(sale_view and sale_view.can_cancel(user)))
         self.set_sensitive([self.sale_toolbar.return_sale_button, self.Return],
-                           bool(sale_view and sale_view.can_return()))
+                           bool(sale_view and (sale_view.can_return() or
+                                               sale_view.can_cancel(user))))
         self.set_sensitive([self.sale_toolbar.return_sale_button, self.Details],
                            bool(sale_view))
         self.set_sensitive([self.sale_toolbar.edit_button, self.Edit],
@@ -384,7 +416,7 @@ class SalesApp(ShellApp):
         assert printer.layout
 
         invoice = SaleInvoice(sale, printer.layout)
-        if not invoice.has_invoice_number() or sale.invoice_number:
+        if not invoice.has_invoice_number() or sale.invoice.invoice_number:
             print_sale_invoice(invoice, printer)
         else:
             store = api.new_store()
@@ -413,7 +445,7 @@ class SalesApp(ShellApp):
         self.results.set_columns(self.search.columns)
         # Adding summary label again and make it properly aligned with the
         # new columns setup
-        self._create_summary_label()
+        self._create_summary_labels()
 
     def _get_status_values(self):
         items = [(value, key) for key, value in Sale.statuses.items()]
@@ -502,9 +534,6 @@ class SalesApp(ShellApp):
     def on_results__has_rows(self, results, has_rows):
         self._update_toolbar()
 
-    def on_results__right_click(self, results, result, event):
-        self.popup.popup(None, None, None, event.button, event.time)
-
     # Sales
 
     def on_SaleQuote__activate(self, action):
@@ -515,29 +544,42 @@ class SalesApp(ShellApp):
 
     def on_SalesCancel__activate(self, action):
         sale_view = self.results.get_selected()
-        can_cancel = api.sysparam.get_bool('ALLOW_CANCEL_LAST_COUPON')
         # A plugin (e.g. ECF) can avoid the cancelation of a sale
         # because it wants it to be cancelled using another way
-        if can_cancel and SaleAvoidCancelEvent.emit(sale_view.sale):
+        if SaleAvoidCancelEvent.emit(sale_view.sale, Sale.STATUS_CANCELLED):
             return
 
         store = api.new_store()
         sale = store.fetch(sale_view.sale)
         msg_text = _(u"This will cancel the sale, Are you sure?")
-        model = SaleComment(store=store, sale=sale,
-                            author=api.get_current_user(store))
+
+        # nfce plugin cancellation event requires a minimum length for the
+        # cancellation reason note. We can't set this in the plugin because it's
+        # not possible to identify unically this NoteEditor.
+        if get_plugin_manager().is_active('nfce'):
+            note_min_length = 15
+        else:
+            note_min_length = 0
 
         retval = self.run_dialog(
-            NoteEditor, store, model=model, attr_name='comment',
-            message_text=msg_text, label_text=_(u"Reason"),
-            mandatory=True, ok_button_label=_(u"Cancel sale"),
-            cancel_button_label=_(u"Don't cancel"))
+            NoteEditor, store, model=None, message_text=msg_text,
+            label_text=_(u"Reason"), mandatory=True,
+            ok_button_label=_(u"Cancel sale"),
+            cancel_button_label=_(u"Don't cancel"),
+            min_length=note_min_length)
 
         if not retval:
             store.rollback()
             return
 
-        sale.cancel()
+        # Try to cancel the sale with sefaz. Don't cancel the sale if sefaz
+        # reject it.
+        if StockOperationTryFiscalCancelEvent.emit(sale, retval.notes) is False:
+            warning(_("The cancellation was not authorized by SEFAZ. You should "
+                      "do a sale return."))
+            return
+
+        sale.cancel(api.get_current_user(store), retval.notes)
         store.commit(close=True)
         self.refresh()
 
@@ -621,6 +663,9 @@ class SalesApp(ShellApp):
     def on_SearchSoldItemsByClient__activate(self, action):
         self.run_dialog(SoldItemsByClientSearch, self.store)
 
+    def on_SearchSoldItemsBySalesperson__activate(self, action):
+        self.run_dialog(SoldItemsBySalespersonSearch, self.store)
+
     # Toolbar
 
     def on_Edit__activate(self, action):
@@ -641,3 +686,14 @@ class SalesApp(ShellApp):
 
     def on_sale_toolbar__sale_returned(self, widget, sale):
         self.refresh()
+
+    # Search
+
+    def _on_search_completed(self, *args):
+        if not (self.search.result_view.lazy_search_enabled()
+                and len(self.search.result_view)):
+            return
+
+        post = self.search.result_view.get_model().get_post_data()
+        if post is not None:
+            self._extra_summary.update_total(post.net_sum)

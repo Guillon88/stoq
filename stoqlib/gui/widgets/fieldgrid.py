@@ -29,14 +29,10 @@
 """Widget containing a Grid of fields
 """
 
+import contextlib
 import pickle
 
-import gobject
-import glib
-import pango
-import gtk
-from gtk import gdk
-from gtk import keysyms
+from gi.repository import Gtk, Gdk, GLib, GObject, Pango
 
 from kiwi.python import clamp
 from kiwi.utils import gsignal
@@ -50,14 +46,30 @@ from kiwi.utils import gsignal
  FIELD_MOVEMENT_VERTICAL,
  FIELD_DELETION) = range(3)
 
-# _CURSOR_LEFT_SIDE = gdk.Cursor(gdk.LEFT_SIDE)
-_CURSOR_RIGHT_SIDE = gdk.Cursor(gdk.RIGHT_SIDE)
-# _CURSOR_TOP_SIDE = gdk.Cursor(gdk.TOP_SIDE)
-_CURSOR_BOTTOM_SIDE = gdk.Cursor(gdk.BOTTOM_SIDE)
-# _CURSOR_BOTTOM_LEFT = gdk.Cursor(gdk.BOTTOM_LEFT_CORNER)
-_CURSOR_BOTTOM_RIGHT = gdk.Cursor(gdk.BOTTOM_RIGHT_CORNER)
-# _CURSOR_TOP_LEFT = gdk.Cursor(gdk.TOP_LEFT_CORNER)
-# _CURSOR_TOP_RIGHT = gdk.Cursor(gdk.TOP_RIGHT_CORNER)
+_cursors = {}
+
+_selection_color = (0.0, 0.0, 1.0)  # blue
+_grid_color = (0.8, 0.8, 0.8)  # grey80
+_field_border_color = (0.0, 0.0, 0.0)  # black
+_border_color = (0.0, 0.0, 0.0)  # black
+
+
+@contextlib.contextmanager
+def _cc_context(cc):
+    cc.save()
+    yield
+    cc.restore()
+
+
+def _get_cursor(gdk_pos):
+    # Do a lazy initialization of those Gdk.Cursor objects
+    # If we initialize them too early (e.g. in the module) they would
+    # break Stoq running on non graphical environments.
+    c = _cursors.get(gdk_pos, None)
+    if c is not None:
+        return c
+
+    return _cursors.setdefault(gdk_pos, Gdk.Cursor.new(gdk_pos))
 
 
 class Range(object):
@@ -83,18 +95,22 @@ class FieldInfo(object):
         self.model = model
 
     def update_label(self, text):
-        fmt = '<span letter_spacing="3072">%s</span>'
-        self.widget.set_markup(fmt % (glib.markup_escape_text(text), ))
+        string = '<span letter_spacing="3072">{}</span>'.format(
+            GLib.markup_escape_text(text))
+        self.widget.set_markup(string)
+        self.widget.set_tooltip_markup(string)
 
     def allocate(self, width, height):
-        req_width, req_height = self.widget.size_request()
-        self.widget.size_allocate(((self.x * width) - 1,
-                                   (self.y * height) - 1,
-                                   (self.width * width) + 2,
-                                   (self.height * height) + 3))
+        rect = Gdk.Rectangle()
+        rect.x = (self.x * width) - 1
+        rect.y = (self.y * height) - 1
+        rect.width = (self.width * width) + 2
+        rect.height = (self.height * height) + 3
+        self.widget.size_allocate(rect)
 
     def find_at(self, x, y):
-        wx, wy, ww, wh = self.widget.allocation
+        alloc = self.widget.get_allocation()
+        wx, wy, ww, wh = alloc.x, alloc.y, alloc.width, alloc.height
         return (x in Range(wx, wx + ww) and
                 y in Range(wy, wy + wh))
 
@@ -102,7 +118,7 @@ class FieldInfo(object):
         self.widget.show()
 
     def get_cursor(self, x, y):
-        a = self.widget.allocation
+        a = self.widget.get_allocation()
         cx = a.x + 1
         cy = a.y + 1
         cw = a.width
@@ -112,25 +128,25 @@ class FieldInfo(object):
 
         if x in Range(cx - 1, cx + 1):
             if intop:
-                return  # _CURSOR_TOP_LEFT
+                return  # _get_cursor(Gdk.CursorType.TOP_LEFT_CORNER)
             elif inbottom:
-                return  # _CURSOR_BOTTOM_LEFT
+                return  # _get_cursor(Gdk.CursorType.BOTTOM_LEFT_CORNER)
             else:
-                return  # _CURSOR_LEFT_SIDE
+                return  # _get_cursor(Gdk.CursorType.LEFT_SIDE)
         elif x in Range(cx + cw - 2, cx + cw + 1):
             if intop:
-                return  # _CURSOR_TOP_RIGHT
+                return  # _get_cursor(Gdk.CursorType.TOP_RIGHT_CORNER)
             elif inbottom:
-                return _CURSOR_BOTTOM_RIGHT
+                return _get_cursor(Gdk.CursorType.BOTTOM_RIGHT_CORNER)
             else:
-                return _CURSOR_RIGHT_SIDE
+                return _get_cursor(Gdk.CursorType.RIGHT_SIDE)
         elif intop:
-            return  # _CURSOR_TOP_SIDE
+            return  # _get_cursor(Gdk.CursorType.TOP_SIDE)
         elif inbottom:
-            return _CURSOR_BOTTOM_SIDE
+            return _get_cursor(Gdk.CursorType.BOTTOM_SIDE)
 
 
-class FieldGrid(gtk.Layout):
+class FieldGrid(Gtk.Layout):
     """FieldGrid is a Grid like widget which you can add fields to
 
     * **field-added** (object): Emitted when a field is added to the grid
@@ -141,21 +157,22 @@ class FieldGrid(gtk.Layout):
     """
 
     gsignal('selection-changed', object,
-            flags=gobject.SIGNAL_RUN_LAST | gobject.SIGNAL_ACTION)
+            flags=GObject.SignalFlags.RUN_LAST | GObject.SignalFlags.ACTION)
     gsignal('field-added', object)
     gsignal('field-removed', object)
 
     def __init__(self, font, width, height):
-        gtk.Layout.__init__(self)
+        super(FieldGrid, self).__init__()
+
         self.set_can_focus(True)
         self.drag_dest_set(
-            gtk.DEST_DEFAULT_ALL,
-            [('OBJECTLIST_ROW', 0, 10),
-             ('text/uri-list', 0, 11),
-             ('_NETSCAPE_URL', 0, 12)],
-            gdk.ACTION_LINK | gdk.ACTION_COPY | gdk.ACTION_MOVE)
+            Gtk.DestDefaults.ALL,
+            [Gtk.TargetEntry.new('OBJECTLIST_ROW', 0, 10),
+             Gtk.TargetEntry.new('text/uri-list', 0, 11),
+             Gtk.TargetEntry.new('_NETSCAPE_URL', 0, 12)],
+            Gdk.DragAction.LINK | Gdk.DragAction.COPY | Gdk.DragAction.MOVE)
 
-        self.font = pango.FontDescription(font)
+        self.font = Pango.FontDescription(font)
         self.width = width
         self.height = height
         self._fields = []
@@ -198,7 +215,8 @@ class FieldGrid(gtk.Layout):
         self.emit('field-removed', field)
 
     def _add_field(self, name, description, x, y, width=-1, height=1, model=None):
-        label = gtk.Label()
+        label = Gtk.Label()
+        label.set_ellipsize(Pango.EllipsizeMode.END)
         label.set_alignment(0, 0)
         label.set_padding(2, 4)
         if not description:
@@ -249,11 +267,10 @@ class FieldGrid(gtk.Layout):
         if self._moving_field is not None:
             raise AssertionError("can't move two fields at once")
 
-        mask = (gdk.BUTTON_RELEASE_MASK | gdk.BUTTON_RELEASE_MASK |
-                gdk.POINTER_MOTION_MASK)
-        grab = gdk.pointer_grab(self.window, False, mask, None, None,
-                                long(time))
-        if grab != gdk.GRAB_SUCCESS:
+        mask = (Gdk.EventMask.BUTTON_RELEASE_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                Gdk.EventMask.POINTER_MOTION_MASK)
+        grab = Gdk.pointer_grab(self.get_window(), False, mask, None, None, time)
+        if grab != Gdk.GrabStatus.SUCCESS:
             raise AssertionError("grab failed")
 
         self._moving_field = field
@@ -290,7 +307,7 @@ class FieldGrid(gtk.Layout):
         if not self._moving_field:
             return
 
-        gdk.pointer_ungrab(long(time))
+        Gdk.pointer_ungrab(time)
         self._moving_field = None
 
     def _get_coords(self, x, y):
@@ -326,86 +343,93 @@ class FieldGrid(gtk.Layout):
     #
 
     def do_realize(self):
-        gtk.Layout.do_realize(self)
-        # Use the same gdk.window (from gtk.Layout) to capture these events.
-        self.window.set_events(self.get_events() |
-                               gdk.BUTTON_PRESS_MASK |
-                               gdk.BUTTON_RELEASE_MASK |
-                               gdk.KEY_PRESS_MASK |
-                               gdk.KEY_RELEASE_MASK |
-                               gdk.ENTER_NOTIFY_MASK |
-                               gdk.LEAVE_NOTIFY_MASK |
-                               gdk.POINTER_MOTION_MASK)
+        Gtk.Layout.do_realize(self)
+        # Use the same Gdk.window (from Gtk.Layout) to capture these events.
+        window = self.get_window()
+        events = (
+            Gdk.EventMask.BUTTON_PRESS_MASK |
+            Gdk.EventMask.BUTTON_RELEASE_MASK |
+            Gdk.EventMask.KEY_PRESS_MASK |
+            Gdk.EventMask.KEY_RELEASE_MASK |
+            Gdk.EventMask.ENTER_NOTIFY_MASK |
+            Gdk.EventMask.LEAVE_NOTIFY_MASK |
+            Gdk.EventMask.POINTER_MOTION_MASK
+        )
+        original_events = self.get_events()
+        if isinstance(original_events, Gdk.EventMask):
+            events |= original_events
 
-        self.modify_bg(gtk.STATE_NORMAL, gdk.color_parse('white'))
-        gc = gdk.GC(self.window,
-                    line_style=gdk.LINE_ON_OFF_DASH,
-                    line_width=2)
-        gc.set_rgb_fg_color(gdk.color_parse('blue'))
-        self._selection_gc = gc
+        window.set_events(events)
 
-        gc = gdk.GC(self.window)
-        gc.set_rgb_fg_color(gdk.color_parse('grey80'))
-        self._grid_gc = gc
+        self.override_background_color(
+            Gtk.StateType.NORMAL, Gdk.RGBA(1.0, 1.0, 1.0, 1.0))
 
-        gc = gdk.GC(self.window)
-        gc.set_rgb_fg_color(gdk.color_parse('black'))
-        self._border_gc = gc
-
-        gc = gdk.GC(self.window)
-        gc.set_rgb_fg_color(gdk.color_parse('grey40'))
-        self._field_border_gc = gc
+        width = self.width * (self._field_width + 1) + 1
+        height = self.height * (self._field_height + 1) + 1
+        self.set_size(width, height)
 
     def do_size_request(self, req):
         border_width = 1
         req.width = self.width * (self._field_width + border_width) + border_width
         req.height = self.height * (self._field_height + border_width) + border_width
 
-    def do_expose_event(self, event):
-        window = event.window
+    def do_draw(self, cc):
+        Gtk.Layout.do_draw(self, cc)
 
-        if not self.get_realized():
-            return
-
-        for c in self._fields:
-            self.propagate_expose(c.widget, event)
+        hvalue = self.get_hadjustment().get_value()
+        vvalue = self.get_vadjustment().get_value()
+        # Since we are drawing in the widget and not in the bin window
+        # we need to translate the coordinates or else our drawing would
+        # be static when scrolling
+        cc.translate(-hvalue, -vvalue)
 
         fw = self._field_width + 1
         fh = self._field_height + 1
 
         width = (self.width * fw) - 1
         height = (self.height * fh) - 1
-        window.draw_rectangle(self._border_gc, False, 0, 0,
-                              width + 1, height + 1)
+
+        with _cc_context(cc):
+            cc.set_source_rgb(*_border_color)
+            cc.rectangle(0, 0, width + 1, height + 1)
+            cc.stroke()
 
         if self._draw_grid:
-            grid_gc = self._grid_gc
+            with _cc_context(cc):
+                cc.set_line_width(0.25)
+                cc.set_source_rgb(*_grid_color)
 
-            for x in range(self.width):
-                window.draw_line(grid_gc,
-                                 x * fw, 0,
-                                 x * fw, height)
+                for x in range(self.width):
+                    cc.move_to(x * fw, 0)
+                    cc.line_to(x * fw, height)
 
-            for y in range(self.height):
-                window.draw_line(grid_gc,
-                                 0, y * fh,
-                                 width, y * fh)
+                for y in range(self.height):
+                    cc.move_to(0, y * fh)
+                    cc.line_to(width, y * fh)
+
+                cc.stroke()
 
         fields = self._fields[:]
         if self._selected_field:
-            gc = self._selection_gc
-            field = self._selected_field
-            cx, cy, cw, ch = field.widget.allocation
-            window.draw_rectangle(gc, False,
-                                  cx + 1, cy + 1, cw - 2, ch - 2)
+            with _cc_context(cc):
+                cc.set_line_width(2)
+                cc.set_dash([4.0, 4.0, 4.0])
+                cc.set_source_rgb(*_selection_color)
+                field = self._selected_field
+                rect = field.widget.get_allocation()
+                cc.rectangle(rect.x + 1, rect.y + 1,
+                             rect.width - 2, rect.height - 2)
+                cc.stroke()
 
-            fields.remove(field)
+                fields.remove(field)
 
-        gc = self._field_border_gc
-        for field in fields:
-            cx, cy, cw, ch = field.widget.allocation
-            window.draw_rectangle(gc, False,
-                                  cx + 1, cy + 1, cw - 2, ch - 3)
+        with _cc_context(cc):
+            cc.set_line_width(0.25)
+            cc.set_source_rgb(*_field_border_color)
+            for field in fields:
+                rect = field.widget.get_allocation()
+                cc.rectangle(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 3)
+                cc.stroke()
 
     def do_button_press_event(self, event):
         x, y = int(event.x), int(event.y)
@@ -442,24 +466,24 @@ class FieldGrid(gtk.Layout):
             cursor = None
             if field:
                 cursor = field.get_cursor(event.x, event.y)
-            self.window.set_cursor(cursor)
+            self.get_window().set_cursor(cursor)
 
     def do_key_press_event(self, event):
         if self._moving_field:
             return
 
-        if event.keyval == keysyms.Up:
+        if event.keyval == Gdk.KEY_Up:
             self._move_field(FIELD_MOVEMENT_VERTICAL, -1)
-        elif event.keyval == keysyms.Down:
+        elif event.keyval == Gdk.KEY_Down:
             self._move_field(FIELD_MOVEMENT_VERTICAL, 1)
-        elif event.keyval == keysyms.Left:
+        elif event.keyval == Gdk.KEY_Left:
             self._move_field(FIELD_MOVEMENT_HORIZONTAL, -1)
-        elif event.keyval == keysyms.Right:
+        elif event.keyval == Gdk.KEY_Right:
             self._move_field(FIELD_MOVEMENT_HORIZONTAL, 1)
-        elif event.keyval == keysyms.Delete:
+        elif event.keyval == Gdk.KEY_Delete:
             self._remove_selected_field()
 
-        if gtk.Layout.do_key_press_event(self, event):
+        if Gtk.Layout.do_key_press_event(self, event):
             return True
 
         return True
@@ -488,7 +512,7 @@ class FieldGrid(gtk.Layout):
 
     def do_focus(self, direction):
         self.set_can_focus(False)
-        res = gtk.Layout.do_focus(self, direction)
+        res = Gtk.Layout.do_focus(self, direction)
         self.set_can_focus(True)
 
         return res
@@ -550,4 +574,4 @@ class FieldGrid(gtk.Layout):
         self.height = height
         self.queue_resize()
 
-gobject.type_register(FieldGrid)
+GObject.type_register(FieldGrid)

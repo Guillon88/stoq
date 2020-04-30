@@ -34,11 +34,15 @@ from stoqlib.database.properties import (DecimalCol, DateTimeCol, EnumCol,
 from stoqlib.database.viewable import Viewable
 from stoqlib.domain.base import Domain
 from stoqlib.domain.events import DomainMergeEvent
-from stoqlib.domain.person import Person, Company, Branch
-from stoqlib.domain.product import Product, StorableBatch, ProductManufacturer
+from stoqlib.domain.person import Person, Company, Branch, LoginUser
+from stoqlib.domain.product import (Product, StorableBatch, ProductManufacturer,
+                                    ProductSupplierInfo)
+from stoqlib.domain.purchase import PurchaseOrder
 from stoqlib.domain.sale import SaleItem, Sale
 from stoqlib.domain.sellable import Sellable, SellableCategory
+from stoqlib.domain.station import BranchStation
 from stoqlib.domain.workorder import WorkOrder, WorkOrderItem
+from stoqlib.lib.defaults import quantize
 from stoqlib.lib.translation import stoqlib_gettext as _
 
 
@@ -81,6 +85,14 @@ class OpticalMedic(Domain):
         other_facet = obj.store.find(cls, person=other).one()
         if not this_facet and not other_facet:
             return
+
+        # If this facet does not have a crm, but the other one does, the crm would be copied to
+        # this, but we need to clear the other value, since crm is unique in the database.
+        if other_facet and other_facet.crm_number and not this_facet.crm_number:
+            crm = other_facet.crm_number
+            other_facet.crm_number = None
+            this_facet.crm_number = crm
+
         obj.merge_facet(this_facet, other_facet)
         return set([('optical_medic', 'person_id')])
 
@@ -214,6 +226,10 @@ class OpticalProduct(Domain):
     #: Free text description of the curvature. normaly a decimal, but may have
     #: textual descriptions
     cl_curvature = UnicodeCol()
+
+    #
+    # Class methods
+    #
 
     @classmethod
     def get_from_product(cls, product):
@@ -352,6 +368,18 @@ class OpticalWorkOrder(Domain):
     #: Pupil distance (DNP in pt_BR)
     re_near_pd = DecimalCol(default=0)
 
+    #
+    # Class methods
+    #
+
+    @classmethod
+    def find_by_work_order(cls, store, work_order):
+        return store.find(cls, work_order_id=work_order.id).one()
+
+    #
+    # Properties
+    #
+
     @property
     def frame_type_str(self):
         return self.frame_types.get(self.frame_type, '')
@@ -359,6 +387,104 @@ class OpticalWorkOrder(Domain):
     @property
     def lens_type_str(self):
         return self.lens_types.get(self.lens_type, '')
+
+    #
+    # Public API
+    #
+
+    def can_create_purchase(self):
+        work_order = self.work_order
+        if work_order.status != WorkOrder.STATUS_WORK_IN_PROGRESS:
+            return False
+
+        if not work_order.sale:
+            return False
+
+        purchases = [i.purchase_item for i in work_order.get_items()]
+        # If there are any item in this work order that was not purchased yet, then we
+        # can still create a purchase
+        return None in purchases
+
+    def create_purchase(self, supplier, work_order_item, is_freebie, branch: Branch,
+                        station: BranchStation, user: LoginUser):
+        """Create a purchase
+
+        :param supplier: the |supplier| of that purchase
+        :param work_order_item: The work order item that a purchase is being created
+        for.
+        :param is_freebie: indicates if the item is a freebie
+        """
+        sellable = work_order_item.sellable
+        store = self.work_order.store
+        purchase = PurchaseOrder(store=store,
+                                 branch=branch,
+                                 station=station,
+                                 status=PurchaseOrder.ORDER_PENDING,
+                                 supplier=supplier,
+                                 responsible=user,
+                                 work_order=self.work_order)
+        if is_freebie:
+            purchase.notes = _('The product %s is a freebie') % sellable.description
+            # FIXME We may want the cost 0, but as it is we wont be able to
+            # receive this purchase without changing the receiving. We must
+            # evaluate the consequences of changing the receiving a little bit
+            # further in order to change that behavior.
+            cost = decimal.Decimal('0.01')
+        else:
+            psi = ProductSupplierInfo.find_by_product_supplier(store, sellable.product, supplier,
+                                                               branch)
+            cost = psi.base_cost if psi else sellable.cost
+
+        # Add the sellable to the purchase
+        purchase_item = purchase.add_item(sellable,
+                                          quantity=work_order_item.quantity,
+                                          cost=cost)
+        work_order_item.purchase_item = purchase_item
+
+        purchase.confirm(user)
+        return purchase
+
+    def can_receive_purchase(self, purchase):
+        work_order = self.work_order
+        if not work_order.status == WorkOrder.STATUS_WORK_FINISHED:
+            return False
+
+        # XXX Lets assume that there is only on purchase
+        return purchase and purchase.status == PurchaseOrder.ORDER_CONFIRMED
+
+    def receive_purchase(self, purchase_order: PurchaseOrder, station: BranchStation,
+                         user: LoginUser, reserve=False):
+        receiving = purchase_order.create_receiving_order(station)
+        receiving.confirm(user)
+        if reserve:
+            self.reserve_products(purchase_order, user)
+
+    def reserve_products(self, purchase_order, user: LoginUser):
+        for item in self.work_order.get_items():
+            if not item.purchase_item:
+                continue
+            sale_item = item.sale_item
+            to_reserve = sale_item.quantity - sale_item.quantity_decreased
+            if to_reserve > 0:
+                sale_item.reserve(user, quantize(to_reserve))
+
+    def copy(self, target):
+        """Make a copy of self into a target |work_order|
+
+        :param target: a |work_order|
+        """
+        props = ['lens_type', 'le_distance_spherical', 'le_distance_cylindrical',
+                 'le_distance_axis', 'le_distance_prism', 'le_distance_base',
+                 'le_distance_height', 'le_distance_pd', 'le_addition',
+                 'le_near_spherical', 'le_near_cylindrical', 'le_near_axis',
+                 'le_near_pd', 're_distance_spherical', 're_distance_cylindrical',
+                 're_distance_axis', 're_distance_prism', 're_distance_base',
+                 're_distance_height', 're_distance_pd', 're_addition',
+                 're_near_spherical', 're_near_cylindrical', 're_near_axis', 're_near_pd']
+
+        for prop in props:
+            value = getattr(self, prop)
+            setattr(target, prop, value)
 
 
 class OpticalPatientHistory(Domain):
@@ -736,3 +862,53 @@ class MedicSoldItemsView(Viewable):
 
     group_by = [id, branch_name, code, description, category, manufacturer,
                 StorableBatch.id, OpticalMedic.id, Person.id, Sale.id, Branch.id]
+
+
+class OpticalWorkOrderItemsView(Viewable):
+
+    optical_work_order = OpticalWorkOrder
+    work_order = WorkOrder
+    optical_product = OpticalProduct
+    work_order_item = WorkOrderItem
+
+    # OpticalWorkOrder
+    id = OpticalWorkOrder.id
+
+    # WorkOrder
+    work_order_id = WorkOrder.id
+
+    # WorkOrderItem
+    work_order_item_id = WorkOrderItem.id
+
+    # OpticalProduct
+    optical_product_id = OpticalProduct.id
+
+    quantity = WorkOrderItem.quantity
+
+    tables = [
+        OpticalWorkOrder,
+        LeftJoin(WorkOrder, WorkOrder.id == OpticalWorkOrder.work_order_id),
+        LeftJoin(WorkOrderItem, WorkOrderItem.order_id == WorkOrder.id),
+        Join(Sellable, Sellable.id == WorkOrderItem.sellable_id),
+        Join(OpticalProduct, OpticalProduct.product_id == Sellable.id),
+
+    ]
+
+    group_by = [id, work_order_id, work_order_item_id, optical_product_id]
+
+    @property
+    def sellable(self):
+        return self.work_order_item.sellable
+
+    @classmethod
+    def find_by_order(cls, store, work_order):
+        """Find all items on of the given work_order
+
+        :param work_order: |work_order|
+        """
+        return store.find(cls, work_order_id=work_order.id)
+
+
+Product.optical = Reference('id', 'OpticalProduct.product_id', on_remote=True)
+WorkOrder.optical_work_order = Reference('id', 'OpticalWorkOrder.work_order_id',
+                                         on_remote=True)

@@ -25,12 +25,11 @@
 import decimal
 import operator
 
-import gtk
+from gi.repository import Gtk, Pango
 from kiwi.currency import currency
 from kiwi.datatypes import converter, ValidationError
 from kiwi.ui.widgets.entry import ProxyEntry
 from kiwi.ui.popup import PopupWindow
-import pango
 
 from stoqlib.gui.stockicons import STOQ_CALC
 from stoqlib.lib.translation import stoqlib_gettext as _
@@ -81,25 +80,26 @@ class CalculatorPopup(PopupWindow):
         # icons. We should put the calculator on the other side.
         # Note that spinbuttons are always right aligned and thus
         # xalign will always be 1.0
-        if self.widget.get_property('xalign') > 0.5:
+        if self.attached_widget.get_alignment() > 0.5:
             self._icon_pos = 'secondary-icon'
         else:
             self._icon_pos = 'primary-icon'
 
-        self.widget.set_property(self._icon_pos + '-activatable', True)
-        self.widget.set_property(self._icon_pos + '-tooltip-text',
-                                 _("Do calculations on top of this value"))
-        self.widget.connect('notify::sensitive',
-                            self._on_entry_sensitive__notify)
-        self.widget.connect('icon-press', self._on_entry__icon_press)
+        self.attached_widget.set_property(self._icon_pos + '-activatable', True)
+        self.attached_widget.set_property(
+            self._icon_pos + '-tooltip-text',
+            _("Do calculations on top of this value"))
+        self.attached_widget.connect(
+            'notify::sensitive', self._on_entry_sensitive__notify)
+        self.attached_widget.connect('icon-press', self._on_entry__icon_press)
         self._toggle_calculator_icon()
 
-        vbox = gtk.VBox(spacing=6)
+        vbox = Gtk.VBox(spacing=6)
         vbox.show()
 
-        self._main_label = gtk.Label()
-        self._main_label.set_ellipsize(pango.ELLIPSIZE_END)
-        vbox.pack_start(self._main_label, True, True)
+        self._main_label = Gtk.Label()
+        self._main_label.set_ellipsize(Pango.EllipsizeMode.END)
+        vbox.pack_start(self._main_label, True, True, 0)
         self._main_label.show()
 
         self._entry = ProxyEntry()
@@ -109,27 +109,27 @@ class CalculatorPopup(PopupWindow):
         self._entry.connect('validate', self._on_entry__validate)
         self._entry.connect_after('changed', self._after_entry__changed)
         self._entry.set_alignment(1.0)
-        vbox.pack_start(self._entry, True, True)
+        vbox.pack_start(self._entry, True, True, 0)
         self._entry.show()
 
-        hbox = gtk.HBox(spacing=6)
-        vbox.pack_start(hbox, True, True)
+        hbox = Gtk.HBox(spacing=6)
+        vbox.pack_start(hbox, True, True, 0)
         hbox.show()
 
-        self._label = gtk.Label()
+        self._label = Gtk.Label()
         self._label.set_property('xalign', 1.0)
         self._label.set_use_markup(True)
-        hbox.pack_start(self._label, True, True)
+        hbox.pack_start(self._label, True, True, 0)
         self._label.show()
 
-        self._warning = gtk.Image()
-        hbox.pack_start(self._warning, False, False)
+        self._warning = Gtk.Image()
+        hbox.pack_start(self._warning, False, False, 0)
 
         return vbox
 
     def validate_popup(self):
         try:
-            self._new_value = self._data_type(self.widget.get_text())
+            self._new_value = self._data_type(self.attached_widget.get_text())
         except decimal.InvalidOperation:
             return False
 
@@ -161,8 +161,8 @@ class CalculatorPopup(PopupWindow):
         if warning is None:
             self._warning.hide()
         else:
-            self._warning.set_from_stock(gtk.STOCK_DIALOG_WARNING,
-                                         gtk.ICON_SIZE_MENU)
+            self._warning.set_from_stock(Gtk.STOCK_DIALOG_WARNING,
+                                         Gtk.IconSize.MENU)
             self._warning.set_tooltip_text(warning)
             self._warning.show()
 
@@ -218,17 +218,17 @@ class CalculatorPopup(PopupWindow):
             self._update_new_value()
             return
 
-        self.widget.update(self._new_value)
+        self.attached_widget.update(self._new_value)
 
         self.popdown()
 
     def _toggle_calculator_icon(self):
-        if self.widget.get_sensitive():
-            pixbuf = self.render_icon(STOQ_CALC, gtk.ICON_SIZE_MENU)
+        if self.attached_widget.get_sensitive():
+            icon = STOQ_CALC
         else:
-            pixbuf = None
+            icon = None
 
-        self.widget.set_property(self._icon_pos + '-pixbuf', pixbuf)
+        self.attached_widget.set_property(self._icon_pos + '-name', icon)
 
     #
     #  Callbacks
@@ -242,7 +242,7 @@ class CalculatorPopup(PopupWindow):
                                    _("Use absolute or percentage (%) value")))
 
         if value:
-            warning = self.widget.emit('validate', value)
+            warning = self.attached_widget.emit('validate', value)
             warning = warning and str(warning)
         else:
             warning = None
@@ -256,7 +256,7 @@ class CalculatorPopup(PopupWindow):
         self._toggle_calculator_icon()
 
     def _on_entry__icon_press(self, entry, icon_pos, event):
-        if icon_pos != gtk.ENTRY_ICON_SECONDARY:
+        if icon_pos != Gtk.EntryIconPosition.SECONDARY:
             return
 
         self.popup()

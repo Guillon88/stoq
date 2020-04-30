@@ -31,6 +31,7 @@ import xlwt
 
 from stoqlib.exporters.xlsutils import (get_date_format,
                                         get_number_format,
+                                        write_app_description,
                                         write_app_hyperlink,
                                         write_app_logo)
 from stoqlib.lib.translation import stoqlib_gettext
@@ -79,17 +80,21 @@ class XLSExporter(object):
             self._write_one(i, column, style=style)
         self._current_column += 1
 
+    def _convert_one(self, data):
+        if data is None:
+            return ''
+        if isinstance(data, datetime.date):
+            return data.strftime('%Y-%m-%d')
+        if isinstance(data, bytes):
+            return data.decode()
+
+        return data
+
     def _write_one(self, i, data, style=None):
         if style is None:
             style = self._column_styles[i]
 
-        if data is None:
-            data = ''
-        else:
-            if isinstance(data, datetime.date):
-                data = data.strftime('%Y-%m-%d')
-            elif isinstance(data, str):
-                data = unicode(data, 'utf-8')
+        data = self._convert_one(data)
 
         self._ws.write(self._current_column, i, data, style)
 
@@ -105,7 +110,7 @@ class XLSExporter(object):
         for i, column_type in enumerate(column_types):
             if column_type in (datetime.datetime, datetime.date):
                 style = self._style_date
-            elif column_type in [int, long, float, currency]:
+            elif column_type in [int, float, currency]:
                 style = self._style_number
             else:
                 style = self._style_general
@@ -114,7 +119,9 @@ class XLSExporter(object):
         self._column_styles = css
         self._n_columns = len(column_types)
 
-    def add_cells(self, cells):
+    def add_cells(self, cells, filter_description=None):
+        if filter_description:
+            write_app_description(self._ws, 0, filter_description=filter_description)
         write_app_logo(self._ws)
         write_app_hyperlink(self._ws, 0)
 
@@ -137,10 +144,12 @@ class XLSExporter(object):
 
         return temporary
 
-    def add_from_object_list(self, objectlist, data=None):
+    def add_from_object_list(self, objectlist, data=None,
+                             filter_description=None):
         columns = objectlist.get_visible_columns()
         self.set_column_types([
             c.data_type for c in columns])
         self.set_column_headers([
             getattr(c, 'long_title', None) or c.title for c in columns])
-        self.add_cells(objectlist.get_cell_contents(data))
+        self.add_cells(objectlist.get_cell_contents(data),
+                       filter_description=filter_description)

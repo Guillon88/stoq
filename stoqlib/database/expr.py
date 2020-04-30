@@ -28,9 +28,9 @@ This contains a list of expressions that are unsupported by Storm.
 Most of them are specific to PostgreSQL
 """
 
-from storm.expr import (Expr, NamedFunc, PrefixExpr, SQL, ComparableExpr,
-                        compile as expr_compile, FromExpr, Undef, EXPR,
-                        is_safe_token, BinaryOper, SetExpr)
+from storm.expr import (Expr, NamedFunc, PrefixExpr, SuffixExpr, SQL, ComparableExpr,
+                        compile as expr_compile, FromExpr, Undef, EXPR, is_safe_token,
+                        BinaryOper, SetExpr)
 
 
 class Age(NamedFunc):
@@ -61,6 +61,27 @@ class NullIf(NamedFunc):
     # See http://www.postgresql.org/docs/8.4/static/functions-conditional.html
     __slots__ = ()
     name = "NULLIF"
+
+
+class Position(NamedFunc):
+    """PSQL function to find location of specified substring.
+
+    .. line-block::
+
+        POSITION(<substring> in <string>)
+    """
+    __slots__ = ('substring', 'string')
+    name = "POSITION"
+
+    def __init__(self, substring, string):
+        self.substring = StoqNormalizeString(substring)
+        self.string = StoqNormalizeString(string)
+
+
+@expr_compile.when(Position)
+def compile_position(compile, expr, state):
+    return "%s(%s in %s)" % (expr.name, expr_compile(expr.substring, state),
+                             expr_compile(expr.string, state))
 
 
 class Date(NamedFunc):
@@ -127,9 +148,31 @@ class LPad(NamedFunc):
     name = "LPAD"
 
 
+class SplitPart(NamedFunc):
+    """Split string on delimiter and return the given field"""
+    # http://www.postgresql.org/docs/8.4/static/functions-string.html
+    __slots__ = ()
+    name = "split_part"
+
+
 class ArrayAgg(NamedFunc):
     __slots__ = ()
     name = "array_agg"
+
+
+class ArrayToString(NamedFunc):
+    __slots__ = ()
+    name = "array_to_string"
+
+
+class RowNumber(NamedFunc):
+    __slots__ = ()
+    name = "ROW_NUMBER"
+
+
+class JsonField(BinaryOper):
+    __slots__ = ()
+    oper = "->>"
 
 
 class Contains(BinaryOper):
@@ -140,6 +183,11 @@ class Contains(BinaryOper):
 class IsContainedBy(BinaryOper):
     __slots__ = ()
     oper = " <@ "
+
+
+class NullsFirst(SuffixExpr):
+    __slots__ = ()
+    suffix = "NULLS FIRST"
 
 
 @expr_compile.when(Contains, IsContainedBy)
@@ -302,3 +350,45 @@ expr_compile.set_precedence(10, UnionAll)
 def is_sql_identifier(identifier):
     return (not expr_compile.is_reserved_word(identifier) and
             is_safe_token(identifier))
+
+
+class Over(ComparableExpr):
+    """Check if value is between start and end
+
+    Usage:
+
+    Over(attr, [partitions], [order by])
+
+    e.g.:
+
+    Considering the query:
+
+    SELECT sale.total_amount OVER (ORDER BY sale.confirm_date DESC) FROM sale;
+
+    The window function gets described as:
+
+    Over(Sale.total_amount, [], [Desc(Sale.confirm_date)])
+    """
+    __slots__ = ('attribute', 'partitions', 'orders')
+
+    def __init__(self, attribute, partitions=None, orders=None):
+        self.attribute = attribute
+        self.partitions = partitions
+        self.orders = orders
+
+
+@expr_compile.when(Over)
+def compile_over(compile, expr, state):
+
+    result = ' %s OVER (' % expr_compile(expr.attribute, state)
+
+    if expr.partitions:
+        partitions = ', '.join(expr_compile(i, state) for i in expr.partitions)
+        result += 'PARTITION BY %s ' % partitions
+
+    if expr.orders:
+        orders = ', '.join(expr_compile(i, state) for i in expr.orders)
+        result += 'ORDER BY %s ' % orders
+
+    result += ')'
+    return result

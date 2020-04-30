@@ -33,6 +33,14 @@ gui Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`delivery` Module
+----------------------
+
+.. automodule:: stoq.gui.delivery
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 :mod:`financial` Module
 -----------------------
 
@@ -141,6 +149,14 @@ gui Package
 ---------------------------
 
 .. automodule:: stoq.gui.welcomedialog
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+:mod:`widgets` Module
+---------------------
+
+.. automodule:: stoq.gui.widgets
     :members:
     :undoc-members:
     :show-inheritance:

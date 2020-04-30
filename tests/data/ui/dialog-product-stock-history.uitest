@@ -1,10 +1,10 @@
 editor: ProductStockHistoryDialog
 GtkDialog(main_dialog.toplevel): title='Product History', hidden
-  GtkVBox(main_dialog._main_vbox):
-    GtkVBox(main_dialog.vbox, expand=True, fill=True):
+  GtkBox(main_dialog._main_vbox, orientation=vertical):
+    GtkBox(main_dialog.vbox, orientation=vertical, expand=True, fill=True):
       GtkEventBox(main_dialog.header):
       GtkEventBox(main_dialog.main, expand=True, fill=True, padding=6): slave ProductStockHistoryDialog is attached
-        GtkVBox(toplevel):
+        GtkBox(vbox1, orientation=vertical):
           GtkTable(table1, fill=True):
             GtkLabel(productstockhistory): 'Product:'
             ProxyLabel(description): '<span >Description</span>'
@@ -13,7 +13,7 @@ GtkDialog(main_dialog.toplevel): title='Product History', hidden
             ProxyLabel(full_balance): '<span ></span>'
             GtkLabel(label3):
           GtkNotebook(history_notebook, expand=True, fill=True):
-            GtkVBox(receiving_vbox):
+            GtkBox(receiving_vbox, orientation=vertical):
               ObjectList(receiving_list, expand=True, fill=True):
                 column: title='Receiving #'
                 column: title='Batch'
@@ -25,11 +25,11 @@ GtkDialog(main_dialog.toplevel): title='Product History', hidden
                 column: title='Quantity'
                 column: title='Cost'
                 column: title='Unit'
-                row: 222, u'1', datetime.datetime(2013, 1, 27, 0, 0), datetime.datetime(2012, 1, 1, 0, 0), 111, u'Supplier', 222, Decimal('8.000'), <currency $125>, None
-              GtkHBox(fill=True):
+                row: 222, '1', datetime.datetime(2013, 1, 27, 0, 0), datetime.datetime(2012, 1, 1, 0, 0), 111, 'Supplier', 222, Decimal('8.000'), <currency $125>, None
+              SummaryLabel(fill=True):
                 GtkLabel(expand=True, fill=True, padding=6): '<b>Total:</b>'
                 GtkLabel(): '<b>8.0</b>'
-            GtkVBox(sales_vbox):
+            GtkBox(sales_vbox, orientation=vertical):
               ObjectList(sales_list, expand=True, fill=True):
                 column: title='Sale #'
                 column: title='Batch'
@@ -38,25 +38,26 @@ GtkDialog(main_dialog.toplevel): title='Product History', hidden
                 column: title='Client', expand
                 column: title='Sold'
                 column: title='Unit'
-                row: 123, u'1', datetime.datetime(2013, 1, 27, 0, 0), datetime.today(), None, Decimal('3.000'), None
-              GtkHBox(fill=True):
+                row: 123, '1', datetime.datetime(2013, 1, 27, 0, 0), datetime.today(), None, Decimal('3.000'), None
+              SummaryLabel(fill=True):
                 GtkLabel(expand=True, fill=True, padding=6): '<b>Total:</b>'
                 GtkLabel(): '<b>3.000</b>'
-            GtkVBox(transfer_vbox):
+            GtkBox(transfer_vbox, orientation=vertical):
               ObjectList(transfer_list, expand=True, fill=True):
                 column: title='Transfer #'
                 column: title='Batch'
                 column: title='Batch Date', hidden
                 column: title='Date Created'
+                column: title='Source', expand
                 column: title='Destination', expand
                 column: title='Responsible', expand
                 column: title='Transfered'
-                row: 55, u'1', None, datetime.datetime(2012, 1, 1, 0, 0), u'Dest shop', u'Ipswich', Decimal('2.000')
-                row: 66, u'1', None, datetime.datetime(2012, 1, 1, 0, 0), u'Moda Stoq', u'Ipswich', Decimal('1.000')
-              GtkHBox(fill=True):
+                row: 55, '1', datetime.datetime(2013, 1, 27, 0, 0), datetime.datetime(2012, 1, 1, 0, 0), 'Moda Stoq', 'Dest shop', 'Ipswich', Decimal('2.000')
+                row: 66, '1', datetime.datetime(2013, 1, 27, 0, 0), datetime.datetime(2012, 1, 1, 0, 0), 'Dest shop', 'Moda Stoq', 'Ipswich', Decimal('1.000')
+              SummaryLabel(fill=True):
                 GtkLabel(expand=True, fill=True, padding=6): '<b>Total:</b>'
                 GtkLabel(): '<b>3.0</b>'
-            GtkVBox(loan_vbox):
+            GtkBox(loan_vbox, orientation=vertical):
               ObjectList(loan_list, expand=True, fill=True):
                 column: title='Loan #'
                 column: title='Batch'
@@ -69,11 +70,11 @@ GtkDialog(main_dialog.toplevel): title='Product History', hidden
                 column: title='Loaned'
                 column: title='Sold'
                 column: title='Returned'
-                row: 33, u'1', datetime.datetime(2013, 1, 27, 0, 0), datetime.datetime(2012, 1, 1, 0, 0), u'', None, u'Description', None, Decimal('2.000'), Decimal('0.000'), Decimal('0.000')
-              GtkHBox(fill=True): hidden
+                row: 33, '1', datetime.datetime(2013, 1, 27, 0, 0), datetime.datetime(2012, 1, 1, 0, 0), '', None, 'Description', None, Decimal('2.000'), Decimal('0.000'), Decimal('0.000')
+              SummaryLabel(fill=True): hidden
                 GtkLabel(expand=True, fill=True, padding=6): '<b>Total:</b>'
                 GtkLabel(): '<b>2.0</b>'
-            GtkVBox(decrease_vbox):
+            GtkBox(decrease_vbox, orientation=vertical):
               ObjectList(decrease_list, expand=True, fill=True):
                 column: title='Decrease #'
                 column: title='Batch'
@@ -82,11 +83,11 @@ GtkDialog(main_dialog.toplevel): title='Product History', hidden
                 column: title='Removed By', expand
                 column: title='Quantity'
                 column: title='Unit'
-                row: 4, u'1', datetime.datetime(2013, 1, 27, 0, 0), datetime.datetime(2012, 1, 1, 0, 0), u'SalesPerson', Decimal('1.000'), None
-              GtkHBox(fill=True):
+                row: 4, '1', datetime.datetime(2013, 1, 27, 0, 0), datetime.datetime(2012, 1, 1, 0, 0), 'SalesPerson', Decimal('1.000'), None
+              SummaryLabel(fill=True):
                 GtkLabel(expand=True, fill=True, padding=6): '<b>Total:</b>'
                 GtkLabel(): '<b>1.000</b>'
-            GtkVBox(inventory_vbox):
+            GtkBox(inventory_vbox, orientation=vertical):
               ObjectList(inventory_list, expand=True, fill=True):
                 column: title='Inventory #'
                 column: title='Batch'
@@ -97,7 +98,7 @@ GtkDialog(main_dialog.toplevel): title='Product History', hidden
                 column: title='Recorded qty'
                 column: title='Counted qty'
                 column: title='Cost'
-            GtkVBox(returned_vbox):
+            GtkBox(returned_vbox, orientation=vertical):
               ObjectList(returned_list, expand=True, fill=True):
                 column: title='Returned #'
                 column: title='Batch'
@@ -107,17 +108,18 @@ GtkDialog(main_dialog.toplevel): title='Product History', hidden
                 column: title='Invoice', hidden
                 column: title='Price'
                 column: title='Return Date'
-            GtkHBox():
+            GtkBox(orientation=horizontal):
               ObjectList(expand=True, fill=True):
                 column: title='Batch', expand
                 column: title='Batch Date'
                 column: title='Quantity'
-                row: u'1', datetime.datetime(2013, 1, 27, 0, 0), Decimal('1.000')
-      GtkHBox(fill=True):
+                row: '1', datetime.datetime(2013, 1, 27, 0, 0), Decimal('1.000')
+      GtkBox(orientation=horizontal, fill=True):
         GtkEventBox(main_dialog.extra_holder, expand=True, fill=True, padding=6):
         GtkEventBox(main_dialog.print_holder, expand=True, fill=True):
         GtkEventBox(main_dialog.notice, fill=True):
         GtkEventBox(main_dialog.details_holder, padding=6, pack-end):
-    GtkHButtonBox(fill=True, pack-end):
-      GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
-      GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(main_dialog.action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel', hidden
+        GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok', hidden

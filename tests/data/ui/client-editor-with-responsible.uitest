@@ -1,0 +1,165 @@
+editor: ClientEditor
+GtkDialog(main_dialog.toplevel): title='Edit Details of "Client"', hidden
+  GtkBox(main_dialog._main_vbox, orientation=vertical):
+    GtkBox(main_dialog.vbox, orientation=vertical, expand=True, fill=True):
+      GtkEventBox(main_dialog.header):
+      GtkEventBox(main_dialog.main, expand=True, fill=True, padding=6): slave ClientEditor is attached
+        GtkBox(toplevel, orientation=horizontal):
+          GtkEventBox(main_holder, expand=True, fill=True): slave IndividualEditorTemplate is attached
+            GtkBox(toplevel, orientation=horizontal):
+              GtkEventBox(main_holder, expand=True, fill=True): slave _PersonEditorTemplate is attached
+                GtkBox(vbox1, orientation=vertical):
+                  GtkNotebook(person_notebook, expand=True, fill=True):
+                    GtkBox(identification_tab, orientation=vertical):
+                      GtkTable(table1, fill=True):
+                        GtkLabel(name_lbl): 'Name:'
+                        ProxyEntry(name): 'Client'
+                        GtkLabel(phone_number_lbl): 'Phone Number:'
+                        ProxyEntry(phone_number): ''
+                        GtkLabel(email_lbl): 'E-mail:'
+                        ProxyEntry(email): ''
+                        GtkLabel(fax_lbl): 'Fax:'
+                        ProxyEntry(fax_number): ''
+                        GtkLabel(mobile_lbl): 'Mobile:'
+                        ProxyEntry(mobile_number): ''
+                      GtkBox(hbox2, orientation=horizontal, fill=True):
+                        GtkLabel(label5, expand=True, fill=True):
+                        GtkButton(contact_info_button, fill=True): 'Co_ntacts...'
+                        GtkButton(credit_check_history_button, fill=True): 'Credit Check History...'
+                        GtkButton(calls_button, fill=True): 'Calls...'
+                      GtkHSeparator(hseparator1, fill=True):
+                      GtkEventBox(address_holder, fill=True): slave AddressSlave is attached
+                        GtkTable(toplevel):
+                          GtkLabel(address_lbl): 'Street:'
+                          ProxyEntry(street): '', mandatory
+                          GtkBox(hbox2, orientation=horizontal):
+                            GtkLabel(label8, expand=True, fill=True):
+                            ProxyCheckButton(streetnumber_check, fill=True): 'Number:', active
+                          GtkBox(hbox1, orientation=horizontal):
+                            ProxyEntry(streetnumber, expand=True, fill=True): '', mandatory
+                            GtkLabel(postal_code_lbl, fill=True): 'Postal Code:'
+                            ProxyEntry(postal_code, fill=True): '     -   '
+                          GtkLabel(district_lbl): 'District:'
+                          ProxyEntry(district): '', mandatory
+                          GtkLabel(complement_lbl): 'Complement:'
+                          ProxyEntry(complement): ''
+                          GtkLabel(city_lbl): 'City:'
+                          ProxyEntry(city): 'São Carlos'
+                          GtkLabel(state_lbl): 'State:'
+                          ProxyEntry(state): 'SP'
+                          GtkLabel(country_lbl): 'Country:'
+                          ProxyComboEntry(country):
+                            item: 'Brazil', selected
+                            item: '... 252 more countries ...'
+                      GtkBox(hbox1, orientation=horizontal, fill=True):
+                        ProxyLabel(kiwilabel2, expand=True, fill=True):
+                        GtkButton(address_button, fill=True): 'More _Addresses...'
+                      GtkEventBox(role_holder, fill=True):
+                    GtkBox(person_data_tab, orientation=vertical):
+                      GtkFrame(individual_frame, fill=True):
+                        GtkEventBox(individual_holder): slave _IndividualDocuments is attached
+                          GtkTable(toplevel):
+                            GtkLabel(cpf_lbl): 'CPF:'
+                            ProxyEntry(cpf): '   .   .   -  '
+                            GtkLabel(rg_number_lbl): 'RG Number:'
+                            ProxyEntry(rg_number): ''
+                            GtkLabel(rg_expedition_local_lbl): 'RG Expedition\nLocal:'
+                            ProxyEntry(rg_expedition_local): ''
+                            GtkLabel(rg_expedition_date_lbl): 'RG Expedition\nDate:'
+                            ProxyDateEntry(rg_expedition_date): None
+                            GtkLabel(state_registry_lbl): 'State Registry:'
+                            ProxyEntry(state_registry): ''
+                            GtkLabel(city_registry_lbl): 'City Registry:'
+                            ProxyEntry(city_registry): ''
+                      GtkFrame(company_frame, fill=True): hidden
+                        GtkEventBox(company_holder):
+                    GtkBox(details_tab, orientation=vertical):
+                      GtkEventBox(person_status_holder, fill=True): slave ClientStatusSlave is attached
+                        GtkBox(vbox1, orientation=vertical):
+                          GtkTable(table1, expand=True, fill=True):
+                            GtkLabel(label1): 'Financial Status:'
+                            ProxyComboBox(statuses_combo):
+                              item: 'Solvent', selected
+                              item: 'Indebted'
+                              item: 'Insolvent'
+                              item: 'Inactive'
+                            GtkLabel(label3): 'Category:'
+                            ProxyComboBox(category_combo):
+                              item: '', selected
+                          GtkHSeparator(hseparator1, fill=True):
+                      GtkEventBox(details_holder, fill=True): slave _IndividualDetailsSlave is attached
+                        GtkBox(vbox1, orientation=vertical):
+                          GtkTable(table2, fill=True):
+                            GtkLabel(gender_lbl): 'Gender:'
+                            GtkBox(hbox1, orientation=horizontal):
+                              GtkRadioButton(unregistered_check, expand=True): 'Not set', active
+                              GtkRadioButton(male_check, expand=True): 'Male'
+                              GtkRadioButton(female_check, expand=True): 'Female'
+                            GtkLabel(label1): 'Birth Date:'
+                            ProxyDateEntry(birth_date): None
+                            GtkLabel(label): 'Responsible:'
+                            GtkBox(orientation=horizontal):
+                              ProxyEntry(responsible, expand=True, fill=True): 'Client'
+                              GtkButton(): insensitive
+                              GtkButton(): insensitive
+                            GtkLabel(occupation_lbl): 'Occupation:'
+                            ProxyEntry(occupation): ''
+                            GtkLabel(label2): 'Birth Country:'
+                            ProxyComboEntry(country):
+                              item: 'Brazil', selected
+                              item: '... 252 more countries ...'
+                            GtkLabel(label6): "Mother's name:"
+                            ProxyEntry(mother_name): ''
+                            GtkLabel(label4): 'Birth State:'
+                            ProxyEntry(state): 'SP'
+                            GtkLabel(label5): "Father's Name:"
+                            ProxyEntry(father_name): ''
+                            GtkLabel(label3): 'Birth City:'
+                            ProxyEntry(city): 'São Carlos'
+                            GtkLabel(marital_status_lbl): 'Marital Status:'
+                            ProxyComboBox(marital_status):
+                              item: 'Single', selected
+                              item: 'Married'
+                              item: 'Divorced'
+                              item: 'Widowed'
+                              item: 'Separated'
+                              item: 'Cohabitation'
+                            GtkLabel(spouse_lbl): 'Spouse:', hidden
+                            ProxyEntry(spouse_name): '', hidden
+                      GtkEventBox(note_holder, expand=True, fill=True): slave NoteSlave is attached
+                        GtkBox(vbox1, orientation=vertical):
+                          GtkLabel(message_label, fill=True): hidden
+                          GtkLabel(observations_label, fill=True): 'Observations:'
+                          GtkScrolledWindow(scrolledwindow1, expand=True, fill=True):
+                            ProxyTextView(notes):
+                    GtkEventBox(): slave ClientCreditSlave is attached
+                      GtkBox(toplevel, orientation=horizontal):
+                        GtkFrame(frame2, expand=True, fill=True, padding=6):
+                          GtkAlignment(alignment2):
+                            GtkTable(table3):
+                              GtkLabel(label1): 'Salary:'
+                              ProxyEntry(salary): '0.00'
+                              GtkButton(salary_history_button):
+                              ProxyLabel(kiwilabel1): 'Credit Limit ($CURRENCY):'
+                              ProxyEntry(credit_limit): '0.00'
+                              GtkLabel(label2): 'Available Credit:'
+                              ProxyLabel(remaining_store_credit): '<span >$0.00</span>'
+                          GtkLabel(label3): '<b>Store Credit</b>'
+                        GtkFrame(frame1, expand=True, fill=True):
+                          GtkAlignment(alignment1):
+                            GtkTable(table1):
+                              GtkLabel(label5): 'Available:'
+                              ProxyLabel(credit_account_balance): '<span >$0.00</span>'
+                              GtkButton(credit_transactions_button):
+                              GtkButton(print_credit_letter): 'gtk-print'
+                          GtkLabel(label6): '<b>Credit</b>'
+      GtkBox(orientation=horizontal, fill=True):
+        GtkEventBox(main_dialog.extra_holder, expand=True, fill=True, padding=6):
+        GtkEventBox(main_dialog.print_holder, expand=True, fill=True):
+        GtkEventBox(main_dialog.notice, fill=True):
+        GtkEventBox(main_dialog.details_holder, padding=6, pack-end):
+    GtkBox(orientation=horizontal, fill=True, pack-end):
+      GtkButtonBox(main_dialog.action_area, orientation=horizontal, fill=True, pack-end):
+        GtkButton(main_dialog.cancel_button, expand=True, fill=True, padding=6): 'gtk-cancel'
+        GtkButton(main_dialog.ok_button, expand=True, fill=True, padding=6): 'gtk-ok', insensitive
+        GtkButton(main_dialog.help_button, padding=6): 'gtk-help'

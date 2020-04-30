@@ -1,0 +1,118 @@
+app: DeliveryApp
+GtkApplicationWindow(toplevel): title='Moda Stoq', hidden
+  GtkBox(orientation=vertical):
+    GtkBox(orientation=horizontal, expand=True, fill=True):
+      GtkBox(main_vbox, orientation=vertical, expand=True, fill=True):
+        GtkBox(menu_hbox, orientation=horizontal, fill=True):
+        GtkBox(list_vbox, orientation=vertical, expand=True, fill=True):
+          GtkEventBox(search_holder, expand=True, fill=True): slave SearchSlave is attached
+            GtkBox(vbox, orientation=vertical):
+              GtkBox(orientation=horizontal, fill=True, padding=6):
+                GtkBox(filters_box, orientation=vertical, padding=6):
+                  GtkBox(hbox, orientation=horizontal):
+                    ComboSearchFilter():
+                      GtkLabel(): 'Branch:'
+                      ProxyComboBox(padding=6):
+                        item: 'Any'
+                        item: 'Moda Stoq', selected
+                        item: 'Stoq Elite Fashion'
+                    ComboSearchFilter(main_filter):
+                      GtkLabel(): 'Show'
+                      ProxyComboBox(padding=6):
+                        item: 'All Deliveries', selected
+                        item: 'Waiting'
+                        item: 'Cancelled'
+                        item: 'Picked'
+                        item: 'Packed'
+                        item: 'Sent'
+                        item: 'Received'
+                    StringSearchFilter(_primary_filter):
+                      GtkLabel(): 'matching:'
+                      ProxyComboBox(padding=6): hidden
+                        item: 'Contains All Words', selected
+                      GtkEntry(search_entry, padding=6): ''
+                    stoqlib+gui+widgets+searchfilterbutton+SearchFilterButton(search_button): 'Find'
+              SearchResultListView(results, expand=True, fill=True):
+                column: title='Operation #'
+                column: title='Operation Nature'
+                column: title='Status'
+                column: title='Recipient', expand
+                column: title='Status (Description)'
+                column: title='Branch', hidden
+                column: title='Transporter'
+                column: title='Open date'
+                column: title='Cancel date', hidden
+                column: title='Pick date', hidden
+                column: title='Pack date', hidden
+                column: title='Send date'
+                column: title='Receive date', hidden
+                row: 666, None, 'Waiting', None, None, 'Moda Stoq', None, datetime.datetime(2017, 1, 1, 0, 0), None, None, None, None, None
+                row: 667, None, 'Waiting', None, None, 'Moda Stoq', None, datetime.datetime(2017, 1, 1, 0, 0), None, None, None, None, None
+    ShellStatusbar():
+      GtkFrame(expand=True, fill=True): hidden
+        GtkBox(orientation=horizontal):
+          GtkLabel(fill=True):
+      GtkBox(orientation=horizontal, fill=True):
+        GtkBox(orientation=horizontal, expand=True, fill=True):
+          GtkLabel(expand=True, fill=True): 'Test Statusbar test'
+          GtkVSeparator():
+          GtkButton(): 'Feedback'
+        LazySummaryLabel(summary_label):
+          GtkLabel(expand=True, fill=True, padding=6): '<b>Number of deliveries:</b>'
+          GtkLabel(): '<b>00002</b>'
+  GtkHeaderBar():
+    stoq+gui+widgets+ButtonGroup():
+      GtkButton():
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+    stoq+gui+widgets+ButtonGroup():
+      GtkButton(): insensitive
+      GtkButton(): insensitive
+      GtkButton(): insensitive
+      GtkButton(): insensitive
+    GtkBox(orientation=horizontal):
+      GtkButton():
+      GtkButton():
+    stoq+gui+widgets+ButtonGroup():
+      GtkMenuButton(): insensitive
+          GtkPopover(): hidden, insensitive
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Products...
+                      GtkModelButton(fill=True): Services...
+                      GtkModelButton(fill=True): Transporters...
+                      GtkModelButton(fill=True): Clients...
+      GtkMenuButton():
+          GtkPopover(): hidden
+            GtkStack():
+              GtkMenuSectionBox(orientation=vertical):
+                GtkBox(orientation=vertical, pack-end):
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Preferences...
+                      GtkModelButton(fill=True): Change password...
+                      GtkModelButton(fill=True): Sign out...
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Delivery help
+                      GtkModelButton(fill=True): Contents
+                      GtkModelButton(fill=True): Translate Stoq...
+                      GtkModelButton(fill=True): Get support online...
+                      GtkModelButton(fill=True): Online chat...
+                      GtkModelButton(fill=True): About
+                  GtkMenuSectionBox(orientation=vertical, fill=True):
+                    GtkBox(orientation=vertical, pack-end):
+                      GtkModelButton(fill=True): Quit

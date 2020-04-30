@@ -22,18 +22,24 @@
 ## Author(s): Stoq Team <stoq-devel@async.com.br>
 ##
 import mock
-from stoqlib.domain.devices import DeviceSettings, _
+from serial.serialutil import SerialException
 
+from stoqdrivers.serialbase import VirtualPort
+from stoqlib.domain.devices import DeviceSettings, _
 from stoqlib.domain.test.domaintest import DomainTest
 from stoqlib.exceptions import DatabaseInconsistency
 
 
 class TestDeviceSettings(DomainTest):
-    def test_get_description(self):
+    def test_properties(self):
+        station = self.create_station()
         device = DeviceSettings(store=self.store, brand=u'Brand', model=u'XX',
-                                type=DeviceSettings.CHEQUE_PRINTER_DEVICE)
-        str = device.get_description()
-        self.assertEquals(str, u'Brand XX')
+                                type=DeviceSettings.CHEQUE_PRINTER_DEVICE,
+                                station=station)
+
+        self.assertEqual(device.description, u'Brand XX')
+        self.assertEqual(device.station_name, u'station')
+        self.assertEqual(device.device_type_name, u'Cheque Printer')
 
     @mock.patch('stoqlib.domain.devices.SerialPort')
     @mock.patch('stoqlib.domain.devices.ChequePrinter')
@@ -42,6 +48,7 @@ class TestDeviceSettings(DomainTest):
         port = SerialPort()
         SerialPort.return_value = port
         device = DeviceSettings(store=self.store,
+                                device_name=u'/dev/ttyS0',
                                 type=DeviceSettings.CHEQUE_PRINTER_DEVICE)
 
         obj = object()
@@ -50,6 +57,7 @@ class TestDeviceSettings(DomainTest):
         ChequePrinter.assert_called_with(brand=device.brand,
                                          model=device.model,
                                          port=port)
+
         obj = object()
         device.type = DeviceSettings.SCALE_DEVICE
         Scale.return_value = obj
@@ -57,19 +65,72 @@ class TestDeviceSettings(DomainTest):
         ChequePrinter.assert_called_with(brand=device.brand,
                                          model=device.model,
                                          port=port)
-        device.type = DeviceSettings._UNUSED
+        device.type = None
         with self.assertRaises(DatabaseInconsistency) as error:
             device.get_interface()
         expected = "The device type referred by this record" \
-                   " (%r) is invalid, given 2." % device
-        self.assertEquals(str(error.exception), expected)
+                   " (%r) is invalid, given None." % device
+        self.assertEqual(str(error.exception), expected)
 
-    def test_is_a_printer(self):
+    @mock.patch('stoqlib.domain.devices.NonFiscalPrinter')
+    def test_get_interface_usb(self, NonFiscalPrinter):
         device = DeviceSettings(store=self.store,
-                                type=DeviceSettings.CHEQUE_PRINTER_DEVICE)
-        self.assertEquals(device.is_a_printer(), True)
-        device.type = DeviceSettings.SCALE_DEVICE
-        self.assertEquals(device.is_a_printer(), False)
+                                device_name=u'usb:0xa:0x1',
+                                type=DeviceSettings.NON_FISCAL_PRINTER_DEVICE)
+
+        obj = object()
+        NonFiscalPrinter.return_value = obj
+        self.assertIs(device.get_interface(), obj)
+        NonFiscalPrinter.assert_called_with(brand=None, model=None, port=None,
+                                            product_id=1, vendor_id=10,
+                                            interface='usb')
+
+    @mock.patch('stoqlib.domain.devices.NonFiscalPrinter')
+    @mock.patch('stoqlib.domain.devices.SerialPort')
+    def test_get_interface_serial(self, SerialPort, NonFiscalPrinter):
+        device = DeviceSettings(store=self.store,
+                                device_name=u'/dev/ttyUSB0',
+                                type=DeviceSettings.NON_FISCAL_PRINTER_DEVICE)
+        port0 = SerialPort(device=device.device_name)
+        port1 = SerialPort(device=u'/dev/ttyUSB1')
+        SerialPort.side_effect = [port0, SerialException, port1]
+        obj = object()
+        NonFiscalPrinter.return_value = obj
+        self.assertIs(device.get_interface(), obj)
+        SerialPort.assert_called_with(baudrate=9600, device=device.device_name)
+        NonFiscalPrinter.assert_called_with(brand=None, model=None, port=port0,
+                                            product_id=None, vendor_id=None,
+                                            interface='serial')
+        with mock.patch('os.path.exists') as mock_os:
+            # Raising the SerialException because the device port has changed names.
+            mock_os.side_effect = [False, True]
+            SerialPort.assert_called_with(baudrate=9600, device=u'/dev/ttyUSB0')
+            device.device_name = u'/dev/ttyUSB1'
+            self.assertIs(device.get_interface(), obj)
+            NonFiscalPrinter.assert_called_with(brand=None, model=None, port=port1,
+                                                product_id=None, vendor_id=None,
+                                                interface='serial')
+
+        with mock.patch('os.path.exists') as mock_os:
+            with self.assertRaises(SerialException):
+                # SerialException, but the port is correct or OS is not Linux.
+                mock_os.return_value = True
+                SerialPort.side_effect = SerialException
+                device.get_interface()
+
+        with mock.patch('os.path.exists') as mock_os:
+            with self.assertRaises(SerialException):
+                # Device not in any ports we search.
+                mock_os.return_value = False
+                SerialPort.side_effect = SerialException
+                device.get_interface()
+
+    def test_get_interface_virtual(self):
+        device = DeviceSettings(store=self.store, brand=u'virtual',
+                                model=u'Simple', device_name=u'/dev/null',
+                                type=DeviceSettings.NON_FISCAL_PRINTER_DEVICE)
+        interface = device.get_interface()
+        self.assertIsInstance(interface._port, VirtualPort)
 
     def test_get_by_station_and_type(self):
         station = self.create_station()
@@ -79,7 +140,7 @@ class TestDeviceSettings(DomainTest):
         results = device.get_by_station_and_type(store=self.store,
                                                  station=station,
                                                  type=type)
-        self.assertEquals(results.count(), 1)
+        self.assertEqual(results, device)
 
     def test_inactivate(self):
         device = DeviceSettings(store=self.store)
@@ -95,11 +156,12 @@ class TestDeviceSettings(DomainTest):
 
     def test_get_status_string(self):
         device = DeviceSettings(store=self.store)
-        self.assertEquals(device.get_status_string(), _(u'Active'))
+        self.assertEqual(device.get_status_string(), _(u'Active'))
         device.inactivate()
-        self.assertEquals(device.get_status_string(), _(u'Inactive'))
+        self.assertEqual(device.get_status_string(), _(u'Inactive'))
 
     def test_get_scale_settings(self):
         device = DeviceSettings(store=self.store,
+                                station=None,
                                 type=DeviceSettings.SCALE_DEVICE)
-        self.assertIsNone(device.get_scale_settings(store=self.store))
+        self.assertIsNone(device.get_scale_settings(store=self.store, station=self.current_station))

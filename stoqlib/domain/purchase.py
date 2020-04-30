@@ -31,26 +31,28 @@ from decimal import Decimal
 from kiwi.currency import currency
 from kiwi.python import Settable
 from storm.expr import (Alias, And, Cast, Coalesce, Count, Eq, Join, LeftJoin,
-                        Select, Sum)
+                        Select, Sum, Min)
 from storm.info import ClassAlias
 from storm.references import Reference, ReferenceSet
 from zope.interface import implementer
 
-from stoqlib.database.expr import Date, Field, NullIf, TransactionTimestamp
+from stoqlib.database.expr import (Date, Field, NullIf, TransactionTimestamp,
+                                   ArrayAgg, ArrayToString)
 from stoqlib.database.properties import (DateTimeCol, UnicodeCol,
                                          PriceCol, BoolCol, QuantityCol,
                                          IdentifierCol, IdCol, EnumCol)
-from stoqlib.database.runtime import get_current_user
 from stoqlib.database.viewable import Viewable
-from stoqlib.domain.base import Domain
+from stoqlib.domain.base import Domain, IdentifiableDomain
 from stoqlib.domain.event import Event
+from stoqlib.domain.interfaces import IContainer, IDescribable
 from stoqlib.domain.payment.method import PaymentMethod
 from stoqlib.domain.payment.payment import Payment
-from stoqlib.domain.product import StockTransactionHistory, Storable
-from stoqlib.domain.interfaces import IContainer, IDescribable
+from stoqlib.domain.product import (StockTransactionHistory, Storable,
+                                    ProductStockItem)
 from stoqlib.domain.person import (Person, Branch, Company, Supplier,
                                    Transporter, LoginUser)
 from stoqlib.domain.sellable import Sellable, SellableUnit
+from stoqlib.domain.station import BranchStation
 from stoqlib.exceptions import DatabaseInconsistency, StoqlibError
 from stoqlib.lib.dateutils import localnow
 from stoqlib.lib.defaults import quantize
@@ -77,6 +79,13 @@ class PurchaseItem(Domain):
     base_cost = PriceCol()
 
     cost = PriceCol()
+
+    #: The ICMS ST value for the product purchased
+    icms_st_value = PriceCol(default=0)
+
+    #: The IPI value for the product purchased
+    ipi_value = PriceCol(default=0)
+
     expected_receival_date = DateTimeCol(default=None)
 
     sellable_id = IdCol()
@@ -109,17 +118,26 @@ class PurchaseItem(Domain):
         Domain.__init__(self, store=store, **kw)
 
     #
+    # Properties
+    #
+
+    @property
+    def unit_ipi_value(self):
+        """Calculate the ipi for each unit of the item"""
+        return currency(quantize(self.ipi_value / self.quantity))
+
+    #
     # Accessors
     #
 
     def get_total(self):
-        return currency(self.quantity * self.cost)
+        return currency((self.quantity * self.cost) + self.ipi_value)
 
     def get_total_sold(self):
         return currency(self.quantity_sold * self.cost)
 
     def get_received_total(self):
-        return currency(self.quantity_received * self.cost)
+        return currency((self.quantity_received * self.cost) + self.ipi_value)
 
     def has_been_received(self):
         return self.quantity_received >= self.quantity
@@ -155,7 +173,7 @@ class PurchaseItem(Domain):
         ordered_items = store.find(PurchaseItem, query)
         return ordered_items.sum(PurchaseItem.quantity) or Decimal(0)
 
-    def return_consignment(self, quantity):
+    def return_consignment(self, user: LoginUser, quantity):
         """
         Return this as a consignment item
 
@@ -166,7 +184,7 @@ class PurchaseItem(Domain):
         storable.decrease_stock(quantity=quantity,
                                 branch=self.order.branch,
                                 type=StockTransactionHistory.TYPE_CONSIGNMENT_RETURNED,
-                                object_id=self.id)
+                                object_id=self.id, user=user)
 
     def get_component_quantity(self, parent):
         """Get the quantity of a component.
@@ -180,7 +198,7 @@ class PurchaseItem(Domain):
 
 
 @implementer(IContainer)
-class PurchaseOrder(Domain):
+class PurchaseOrder(IdentifiableDomain):
     """Purchase and order definition."""
 
     __storm_table__ = 'purchase_order'
@@ -217,6 +235,7 @@ class PurchaseOrder(Domain):
     quote_deadline = DateTimeCol(default=None)
     expected_receival_date = DateTimeCol(default_factory=localnow)
     expected_pay_date = DateTimeCol(default_factory=localnow)
+    # XXX This column is not being used anywhere
     receival_date = DateTimeCol(default=None)
     confirm_date = DateTimeCol(default=None)
     notes = UnicodeCol(default=u'')
@@ -232,12 +251,20 @@ class PurchaseOrder(Domain):
     supplier = Reference(supplier_id, 'Supplier.id')
     branch_id = IdCol()
     branch = Reference(branch_id, 'Branch.id')
+
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
     transporter_id = IdCol(default=None)
     transporter = Reference(transporter_id, 'Transporter.id')
     responsible_id = IdCol()
     responsible = Reference(responsible_id, 'LoginUser.id')
     group_id = IdCol()
     group = Reference(group_id, 'PaymentGroup.id')
+
+    #: Indicates if the order is from a work order
+    work_order_id = IdCol()
+    work_order = Reference(work_order_id, 'WorkOrder.id')
 
     #
     # IContainer Implementation
@@ -260,11 +287,37 @@ class PurchaseOrder(Domain):
         item.order = None
         self.store.maybe_remove(item)
 
-    def add_item(self, sellable, quantity=Decimal(1), parent=None):
+    def add_item(self, sellable, quantity=Decimal(1), parent=None, cost=None,
+                 icms_st_value=0, ipi_value=0):
+        """Add a sellable to this purchase.
+
+        If the sellable is part of a package (parent is not None), then the actual cost
+        and quantity will be calculated based on how many items of this component is on
+        the package.
+
+        :param sellable: the sellable being added
+        :param quantity: How many units of this sellable we are adding
+        :param cost: The price being paid for this sellable
+        :param parent: The parent of this sellable, incase of a package
+        """
+        if cost is None:
+            cost = sellable.cost
+
+        if parent:
+            component = parent.sellable.product.get_component(sellable)
+            cost = cost / component.quantity
+            quantity = quantity * component.quantity
+        else:
+            if sellable.product.is_package:
+                # If this is a package, the cost will be calculated and updated by the
+                # compoents of the package
+                cost = Decimal('0')
+
         store = self.store
         return PurchaseItem(store=store, order=self,
-                            sellable=sellable, quantity=quantity,
-                            parent_item=parent)
+                            sellable=sellable, quantity=quantity, cost=cost,
+                            parent_item=parent, icms_st_value=icms_st_value,
+                            ipi_value=ipi_value)
 
     #
     # Properties
@@ -316,11 +369,12 @@ class PurchaseOrder(Domain):
 
         This will return a list of valid payments for this purchase, that
         is, all payments on the payment group that were not cancelled.
-        If you need to get the cancelled too, use self.group.payments.
+        If you need to get the cancelled too, use self.group.payments. If this
+        purchase does not have a payment group, return a empty list.
 
         :returns: a list of |payment|
         """
-        return self.group.get_valid_payments()
+        return self.group.get_valid_payments() if self.group else []
 
     #
     # Private
@@ -342,9 +396,8 @@ class PurchaseOrder(Domain):
 
         money = PaymentMethod.get_by_name(self.store, u'money')
         payment = money.create_payment(
-            Payment.TYPE_IN, self.group, self.branch,
-            paid_value, description=_(u'%s Money Returned for Purchase %s') % (
-                u'1/1', self.identifier))
+            self.branch, self.station, Payment.TYPE_IN, self.group, paid_value,
+            description=_('%s Money Returned for Purchase %s') % ('1/1', self.identifier))
         payment.set_pending()
         payment.pay()
 
@@ -353,6 +406,9 @@ class PurchaseOrder(Domain):
     #
 
     def is_paid(self):
+        if not self.group:
+            return False
+
         for payment in self.payments:
             if not payment.is_paid():
                 return False
@@ -386,7 +442,7 @@ class PurchaseOrder(Domain):
                 return False
         return True
 
-    def confirm(self, confirm_date=None):
+    def confirm(self, responsible: LoginUser, confirm_date=None):
         """Confirms the purchase order
 
         :param confirm_data: optional, datetime
@@ -401,14 +457,14 @@ class PurchaseOrder(Domain):
             raise ValueError(fmt % (self.status_str, ))
 
         # In consigned purchases there is no payments at this point.
-        if self.status != PurchaseOrder.ORDER_CONSIGNED:
+        if self.status != PurchaseOrder.ORDER_CONSIGNED and self.group:
             for payment in self.payments:
                 payment.set_pending()
 
-        if self.supplier:
+        if self.supplier and self.group:
             self.group.recipient = self.supplier.person
 
-        self.responsible = get_current_user(self.store)
+        self.responsible = responsible
         self.status = PurchaseOrder.ORDER_CONFIRMED
         self.confirm_date = confirm_date
 
@@ -418,13 +474,13 @@ class PurchaseOrder(Domain):
                                             self.purchase_total,
                                             self.supplier.person.name))
 
-    def set_consigned(self):
+    def set_consigned(self, responsible: LoginUser):
         if self.status != PurchaseOrder.ORDER_PENDING:
             raise ValueError(
                 _(u'Invalid order status, it should be '
                   u'ORDER_PENDING, got %s') % (self.status_str, ))
 
-        self.responsible = get_current_user(self.store)
+        self.responsible = responsible
         self.status = PurchaseOrder.ORDER_CONSIGNED
 
     def close(self):
@@ -481,10 +537,12 @@ class PurchaseOrder(Domain):
         to the costs specified in the order.
         """
         for item in self.get_items():
-            item.sellable.cost = item.cost
+            # Since the only way the item have ipi_value is through importer of
+            # a xml from stoqlink, and the cost will be always without ipi
+            item.sellable.cost = item.cost + item.unit_ipi_value
             product = item.sellable.product
             product_supplier = product.get_product_supplier_info(self.supplier)
-            product_supplier.base_cost = item.cost
+            product_supplier.base_cost = item.cost + item.unit_ipi_value
 
     @property
     def status_str(self):
@@ -513,7 +571,7 @@ class PurchaseOrder(Domain):
 
     @property
     def responsible_name(self):
-        return self.responsible.get_description()
+        return self.responsible and self.responsible.get_description() or ''
 
     @property
     def purchase_subtotal(self):
@@ -587,7 +645,7 @@ class PurchaseOrder(Domain):
             sellable = purchase_item.sellable
             label_data = Settable(barcode=sellable.barcode, code=sellable.code,
                                   description=sellable.description,
-                                  price=sellable.price,
+                                  price=sellable.price, sellable=sellable,
                                   quantity=purchase_item.quantity)
             yield label_data
 
@@ -605,6 +663,16 @@ class PurchaseOrder(Domain):
                                        Sellable.id == Storable.id,
                                        Eq(Storable.is_batch, True))).is_empty()
 
+    def create_receiving_order(self, station: BranchStation):
+        from stoqlib.domain.receiving import ReceivingOrder
+        receiving = ReceivingOrder(self.store, branch=self.branch, station=station)
+        receiving.add_purchase(self)
+        for item in self.get_items():
+            receiving.add_purchase_item(item, quantity=item.quantity,
+                                        ipi_value=item.ipi_value)
+
+        return receiving
+
     #
     # Classmethods
     #
@@ -616,9 +684,13 @@ class PurchaseOrder(Domain):
                                           u'%s') % status)
         return cls.statuses[status]
 
+    @classmethod
+    def find_by_work_order(cls, store, work_order):
+        return store.find(PurchaseOrder, work_order=work_order)
+
 
 @implementer(IDescribable)
-class Quotation(Domain):
+class Quotation(IdentifiableDomain):
     __storm_table__ = 'quotation'
 
     #: A numeric identifier for this object. This value should be used instead of
@@ -632,6 +704,10 @@ class Quotation(Domain):
     purchase = Reference(purchase_id, 'PurchaseOrder.id')
     branch_id = IdCol()
     branch = Reference(branch_id, 'Branch.id')
+
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
 
     def get_description(self):
         supplier = self.purchase.supplier.person.name
@@ -658,7 +734,7 @@ class Quotation(Domain):
 
 @implementer(IContainer)
 @implementer(IDescribable)
-class QuoteGroup(Domain):
+class QuoteGroup(IdentifiableDomain):
 
     __storm_table__ = 'quote_group'
 
@@ -669,6 +745,10 @@ class QuoteGroup(Domain):
 
     branch_id = IdCol()
     branch = Reference(branch_id, 'Branch.id')
+
+    station_id = IdCol(allow_none=False)
+    #: The station this object was created at
+    station = Reference(station_id, 'BranchStation.id')
 
     #
     # IContainer
@@ -692,8 +772,8 @@ class QuoteGroup(Domain):
 
     def add_item(self, item):
         store = self.store
-        return Quotation(purchase=item, group=self, branch=self.branch,
-                         store=store)
+        return Quotation(store=store, purchase=item, group=self, branch=self.branch,
+                         station=self.station)
 
     #
     # IDescribable
@@ -736,17 +816,19 @@ class PurchaseItemView(Viewable):
     purchase_item = PurchaseItem
 
     id = PurchaseItem.id
-    cost = PurchaseItem.cost
+    ipi_value = PurchaseItem.ipi_value
+    purchase_cost = PurchaseItem.cost
     quantity = PurchaseItem.quantity
     quantity_received = PurchaseItem.quantity_received
     quantity_sold = PurchaseItem.quantity_sold
     quantity_returned = PurchaseItem.quantity_returned
-    total = PurchaseItem.cost * PurchaseItem.quantity
-    total_received = PurchaseItem.cost * PurchaseItem.quantity_received
-    total_sold = PurchaseItem.cost * PurchaseItem.quantity_sold
+    total_item = (PurchaseItem.cost * PurchaseItem.quantity) + ipi_value
+    total_item_received = (PurchaseItem.cost * PurchaseItem.quantity_received) + ipi_value
+    total_sold = (PurchaseItem.cost * PurchaseItem.quantity_sold) + ipi_value
+    current_stock = Sum(ProductStockItem.quantity)
 
     purchase_id = PurchaseOrder.id
-    sellable = Sellable.id
+    sellable_id = Sellable.id
     code = Sellable.code
     description = Sellable.description
     unit = SellableUnit.description
@@ -756,17 +838,26 @@ class PurchaseItemView(Viewable):
         Join(PurchaseOrder, PurchaseOrder.id == PurchaseItem.order_id),
         Join(Sellable, Sellable.id == PurchaseItem.sellable_id),
         LeftJoin(SellableUnit, SellableUnit.id == Sellable.unit_id),
+        LeftJoin(ProductStockItem,
+                 And(ProductStockItem.storable_id == PurchaseItem.sellable_id,
+                     ProductStockItem.branch_id == PurchaseOrder.branch_id))
     ]
 
-    @property
-    def quantity_as_string(self):
-        return u"%s %s" % (format_quantity(self.quantity),
-                           self.unit or u"")
+    group_by = [PurchaseItem.id, Sellable.id, PurchaseOrder.id, SellableUnit.id]
 
     @property
-    def quantity_received_as_string(self):
-        return u"%s %s" % (format_quantity(self.quantity_received),
-                           self.unit or u"")
+    def cost(self):
+        return currency(self.purchase_cost + self.purchase_item.unit_ipi_value)
+
+    @property
+    def total(self):
+        return currency(self.total_item)
+
+    @property
+    def total_received(self):
+        # If the item isnt received, we shouldnt be showing the ipi value
+        return currency(self.total_item_received
+                        if self.quantity_received else currency(0))
 
     @classmethod
     def find_by_purchase(cls, store, purchase):
@@ -782,14 +873,33 @@ class PurchaseItemView(Viewable):
 # functions require group by for every other column, and grouping all the
 # columns in PurchaseOrderView is extremelly slow, as it requires sorting all
 # those columns
-_ItemSummary = Select(columns=[PurchaseItem.order_id,
-                               Alias(Sum(PurchaseItem.quantity), 'ordered_quantity'),
-                               Alias(Sum(PurchaseItem.quantity_received), 'received_quantity'),
-                               Alias(Sum(PurchaseItem.quantity *
-                                     PurchaseItem.cost), 'subtotal')],
-                      tables=[PurchaseItem],
-                      group_by=[PurchaseItem.order_id])
+from stoqlib.domain.receiving import ReceivingOrder, ReceivingInvoice, PurchaseReceivingMap
+_ItemSummary = Select(
+    columns=[PurchaseItem.order_id,
+             Alias(Sum(PurchaseItem.quantity), 'ordered_quantity'),
+             Alias(Sum(PurchaseItem.quantity_received), 'received_quantity'),
+             Alias(Sum(PurchaseItem.ipi_value), 'ipi_value'),
+             Alias(Sum((PurchaseItem.quantity *
+                       PurchaseItem.cost) + PurchaseItem.ipi_value), 'subtotal')],
+    tables=[PurchaseItem],
+    group_by=[PurchaseItem.order_id])
 PurchaseItemSummary = Alias(_ItemSummary, '_purchase_item')
+
+_ReceivingOrder = Select(
+    columns=[Alias(Min(ReceivingOrder.receival_date), 'receival_date'),
+             Alias(ArrayToString(ArrayAgg(ReceivingInvoice.invoice_number), ', '),
+                   'invoice_numbers'),
+             Alias(PurchaseReceivingMap.purchase_id, 'purchase_id')],
+    tables=[
+        PurchaseReceivingMap,
+        LeftJoin(ReceivingOrder, ReceivingOrder.id == PurchaseReceivingMap.receiving_id),
+        LeftJoin(ReceivingInvoice, ReceivingOrder.receiving_invoice == ReceivingInvoice.id),
+
+    ],
+
+    group_by=[PurchaseReceivingMap.purchase_id])
+
+PurchaseReceivingSummary = Alias(_ReceivingOrder, '_receiving_order')
 
 
 class PurchaseOrderView(Viewable):
@@ -832,7 +942,6 @@ class PurchaseOrderView(Viewable):
     quote_deadline = PurchaseOrder.quote_deadline
     expected_receival_date = PurchaseOrder.expected_receival_date
     expected_pay_date = PurchaseOrder.expected_pay_date
-    receival_date = PurchaseOrder.receival_date
     confirm_date = PurchaseOrder.confirm_date
     salesperson_name = NullIf(PurchaseOrder.salesperson_name, u'')
     expected_freight = PurchaseOrder.expected_freight
@@ -846,6 +955,9 @@ class PurchaseOrderView(Viewable):
     branch_name = Coalesce(NullIf(Company.fancy_name, u''), Person_Branch.name)
     responsible_name = Person_Responsible.name
 
+    receival_date = Field('_receiving_order', 'receival_date')
+
+    invoice_numbers = Field('_receiving_order', 'invoice_numbers')
     ordered_quantity = Field('_purchase_item', 'ordered_quantity')
     received_quantity = Field('_purchase_item', 'received_quantity')
     subtotal = Field('_purchase_item', 'subtotal')
@@ -856,6 +968,9 @@ class PurchaseOrderView(Viewable):
         PurchaseOrder,
         Join(PurchaseItemSummary,
              Field('_purchase_item', 'order_id') == PurchaseOrder.id),
+
+        LeftJoin(PurchaseReceivingSummary,
+                 Field('_receiving_order', 'purchase_id') == PurchaseOrder.id),
 
         LeftJoin(Supplier, PurchaseOrder.supplier_id == Supplier.id),
         LeftJoin(Transporter, PurchaseOrder.transporter_id == Transporter.id),

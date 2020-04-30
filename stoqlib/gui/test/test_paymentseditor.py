@@ -56,9 +56,9 @@ class TestPaymentEditor(GUITest):
         editor.slave.payments.select(payment)
 
         # Removing a PREVIEW payment will remove it from the list
-        self.assertEquals(payment.status, Payment.STATUS_PREVIEW)
+        self.assertEqual(payment.status, Payment.STATUS_PREVIEW)
         self.click(editor.slave.remove_button)
-        self.assertEquals(len(editor.slave.payments), 0)
+        self.assertEqual(len(editor.slave.payments), 0)
 
     def test_sale_editor_remove_pending_payment(self):
         sale = self._create_sale()
@@ -69,15 +69,15 @@ class TestPaymentEditor(GUITest):
         editor.slave.payments.select(payment)
 
         # Removing an already confirmed payment will just cancel it
-        self.assertEquals(payment.status, Payment.STATUS_PENDING)
+        self.assertEqual(payment.status, Payment.STATUS_PENDING)
         self.click(editor.slave.remove_button)
-        self.assertEquals(len(editor.slave.payments), 1)
-        self.assertEquals(payment.status, Payment.STATUS_CANCELLED)
+        self.assertEqual(len(editor.slave.payments), 1)
+        self.assertEqual(payment.status, Payment.STATUS_CANCELLED)
 
     def test_sale_editor_confirmed_sale(self):
         sale = self._create_sale()
-        sale.order()
-        sale.confirm()
+        sale.order(self.current_user)
+        sale.confirm(self.current_user)
         editor = SalePaymentsEditor(self.store, sale)
         payments = editor.slave.payments
         payments.select(payments[0])

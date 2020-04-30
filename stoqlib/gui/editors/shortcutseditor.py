@@ -25,7 +25,7 @@
 
 import warnings
 
-import gtk
+from gi.repository import Gtk
 from kiwi.ui.objectlist import ObjectList, Column
 
 from stoqlib.api import api
@@ -54,9 +54,9 @@ class ShortcutColumn(Column):
         self.editor = editor
 
     def create_renderer(self, model):
-        renderer = gtk.CellRendererAccel()
+        renderer = Gtk.CellRendererAccel()
         renderer.props.editable = True
-        renderer.props.accel_mode = gtk.CELL_RENDERER_ACCEL_MODE_OTHER
+        renderer.props.accel_mode = Gtk.CellRendererAccelMode.OTHER
         renderer.connect('accel-edited', self._on_accel_edited)
         renderer.connect('accel-cleared', self._on_accel_cleared)
         return renderer, 'text'
@@ -64,7 +64,7 @@ class ShortcutColumn(Column):
     def _on_accel_edited(self, renderer, path, accel_key, mods, keycode):
         model = self._objectlist.get_model()
         binding = model[path][0]
-        binding.shortcut = gtk.accelerator_name(accel_key, mods)
+        binding.shortcut = Gtk.accelerator_name(accel_key, mods)
         self.editor.set_binding(binding)
 
     def _on_accel_cleared(self, renderer, path):
@@ -86,7 +86,7 @@ class ShortcutsEditor(BasicDialog):
     def _create_ui(self):
         self.cancel_button.hide()
 
-        hbox = gtk.HBox(spacing=6)
+        hbox = Gtk.HBox(spacing=6)
         self.main.remove(self.main.get_child())
         self.main.add(hbox)
         hbox.show()
@@ -94,30 +94,30 @@ class ShortcutsEditor(BasicDialog):
         self.categories = ObjectList(
             [Column('label', sorted=True, expand=True)],
             get_binding_categories(),
-            gtk.SELECTION_BROWSE)
+            Gtk.SelectionMode.BROWSE)
         self.categories.connect('selection-changed',
                                 self._on_categories__selection_changed)
         self.categories.set_headers_visible(False)
         self.categories.set_size_request(200, -1)
-        hbox.pack_start(self.categories, False, False)
+        hbox.pack_start(self.categories, False, False, 0)
         self.categories.show()
 
-        box = gtk.VBox(spacing=6)
-        hbox.pack_start(box)
+        box = Gtk.VBox(spacing=6)
+        hbox.pack_start(box, True, True, 0)
         box.show()
 
         self.shortcuts = ObjectList(self._get_columns(), [],
-                                    gtk.SELECTION_BROWSE)
-        box.pack_start(self.shortcuts)
+                                    Gtk.SelectionMode.BROWSE)
+        box.pack_start(self.shortcuts, True, True, 0)
         self.shortcuts.show()
 
-        self._label = gtk.Label(
-            _("You need to restart Stoq for the changes to take effect"))
+        self._label = Gtk.Label(
+            label=_("You need to restart Stoq for the changes to take effect"))
         box.pack_start(self._label, False, False, 6)
 
         box.show()
 
-        defaults_button = gtk.Button(_("Reset defaults"))
+        defaults_button = Gtk.Button.new_with_label(_("Reset defaults"))
         defaults_button.connect('clicked', self._on_defaults_button__clicked)
         self.action_area.pack_start(defaults_button, False, False, 6)
         self.action_area.reorder_child(defaults_button, 0)

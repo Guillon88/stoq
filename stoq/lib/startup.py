@@ -53,6 +53,7 @@ def setup_path():
 
     paths = []
 
+    # FIXME. This needs some updating
     # PostgreSQL, we're only working with 8.4 for now
     key = r'Software\PostgreSQL\Installations\postgresql-8.4'
     base_dir = read_registry_key('HKLM', key, 'Base Directory')
@@ -116,14 +117,18 @@ def setup(config=None, options=None, register_station=True, check_schema=True,
     provide_utility(IApplicationDescriptions, ApplicationDescriptions(),
                     replace=True)
 
-    if register_station:
-        try:
-            default_store = get_default_store()
-        except DatabaseError as e:
+    db_settings = config.get_settings()
+    try:
+        default_store = get_default_store()
+    except DatabaseError as e:
+        # Only raise an error if a database is actually required
+        if register_station or load_plugins or check_schema:
             error(e.short, str(e.msg))
+        else:
+            default_store = None
 
-        config.get_settings().check_version(default_store)
-
+    if register_station:
+        db_settings.check_version(default_store)
         if check_schema:
             migration = StoqlibSchemaMigration()
             migration.check()
@@ -139,7 +144,6 @@ def setup(config=None, options=None, register_station=True, check_schema=True,
         manager.activate_installed_plugins()
 
     if check_schema:
-        default_store = get_default_store()
         if not default_store.table_exists('system_table'):
             error(
                 _("Database schema error"),

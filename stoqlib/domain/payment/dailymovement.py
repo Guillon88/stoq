@@ -28,15 +28,19 @@
 from storm.expr import Join, LeftJoin, Sum, Alias, Select, Coalesce
 from storm.info import ClassAlias
 
-from stoqlib.database.expr import Field, NullIf
+from stoqlib.database.expr import Field, NullIf, Round
 from stoqlib.domain.payment.views import InPaymentView, OutPaymentView
 from stoqlib.domain.person import Branch, Client, Company, Person, SalesPerson
 from stoqlib.domain.sale import Sale, SaleItem, InvoiceItemIpi
+from stoqlib.lib.defaults import DECIMAL_PRECISION
 
 
 _SaleItemSummary = Select(columns=[SaleItem.sale_id,
-                                   Alias(Sum(SaleItem.quantity * SaleItem.price +
-                                         InvoiceItemIpi.v_ipi), 'subtotal')],
+                                   Alias(Sum(Round(SaleItem.quantity
+                                                   * SaleItem.price
+                                                   + InvoiceItemIpi.v_ipi,
+                                                   DECIMAL_PRECISION)),
+                                         'subtotal')],
                           tables=[SaleItem,
                                   LeftJoin(InvoiceItemIpi,
                                            SaleItem.ipi_info_id == InvoiceItemIpi.id)],
@@ -50,17 +54,18 @@ class DailyInPaymentView(InPaymentView):
     SalesPersonPerson = ClassAlias(Person, 'salesperson_person')
     ClientPerson = ClassAlias(Person, 'client_person')
     PersonBranch = ClassAlias(Person, 'person_branch')
+    BranchCompany = ClassAlias(Company, 'branch_company')
 
     salesperson_name = SalesPersonPerson.name
     client_name = ClientPerson.name
-    branch_name = Coalesce(NullIf(Company.fancy_name, u''), PersonBranch.name)
+    branch_name = Coalesce(NullIf(BranchCompany.fancy_name, u''), PersonBranch.name)
 
     sale_subtotal = Field('_sale_items', 'subtotal')
 
     tables = InPaymentView.tables[:]
     tables.extend([
         Join(PersonBranch, Branch.person_id == PersonBranch.id),
-        Join(Company, Branch.person_id == Company.person_id),
+        Join(BranchCompany, Branch.person_id == BranchCompany.person_id),
         LeftJoin(SalesPerson, Sale.salesperson_id == SalesPerson.id),
         LeftJoin(SalesPersonPerson,
                  SalesPerson.person_id == SalesPersonPerson.id),

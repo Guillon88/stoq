@@ -32,6 +32,7 @@ from kiwi.datatypes import ValidationError
 from kiwi.ui.forms import BoolField, ChoiceField, DateField, PriceField, TextField
 
 from stoqlib.api import api
+from stoqlib.database.runtime import get_current_branch
 from stoqlib.domain.account import Account
 from stoqlib.domain.payment.category import PaymentCategory
 from stoqlib.domain.payment.group import PaymentGroup
@@ -115,8 +116,10 @@ class _PaymentEditor(BaseEditor):
         branch = api.get_current_branch(store)
         # Set status to PENDING now, to avoid calling set_pending on
         # on_confirm for payments that shoud not have its status changed.
-        return Payment(open_date=localtoday().date(),
+        return Payment(store=store,
+                       open_date=localtoday().date(),
                        branch=branch,
+                       station=api.get_current_station(store),
                        status=Payment.STATUS_PENDING,
                        description=u'',
                        value=currency(0),
@@ -169,6 +172,15 @@ class _PaymentEditor(BaseEditor):
 
         self.model.attachment = self.fields['attachment'].attachment
 
+        # We can only change the identifier if the object is branch new (not edit_mode). If the
+        # object is being edited and the identifier is not temporary, it has already being synced
+        # with the destination branch and the identifier should no longer change.
+        # XXX: We can probably remove the temporary identifiers now that we have the station_id as
+        # part of the key in the identifiable domain.
+        other_branch = self._is_for_another_branch()
+        if other_branch and not self.edit_mode:
+            self.model.identifier = Payment.get_temporary_identifier(self.store)
+
         self.store.add(self.model.group)
         self.store.add(self.model)
 
@@ -176,12 +188,14 @@ class _PaymentEditor(BaseEditor):
             Payment.create_repeated(self.store, self.model,
                                     self.repeat.get_selected(),
                                     self.model.due_date.date(),
-                                    self.end_date.get_date())
+                                    self.end_date.get_date(),
+                                    temporary_identifiers=other_branch)
 
     # Private
 
     def _setup_widgets(self):
         self.person_lbl.set_label(self._person_label)
+        lonely_payment = False
         if self.model.group.sale:
             label = _("Sale details")
         elif self.model.group.purchase:
@@ -189,15 +203,25 @@ class _PaymentEditor(BaseEditor):
         elif self.model.group._renegotiation:
             label = _("Details")
         else:
+            lonely_payment = True
             label = _("Details")
         self.details_button = self.add_button(label)
         self.details_button.connect('clicked',
                                     self._on_details_button__clicked)
 
+        # A branch cannot be edited after its created, since this object may have already being
+        # synced with other databases, in witch case the identifier will no longer change.
+        if api.sysparam.get_bool('SYNCHRONIZED_MODE'):
+            self.branch_id.set_sensitive(not self.edit_mode)
         self.end_date.set_sensitive(False)
         if self.edit_mode:
-            for field_name in ['value', 'due_date', 'person',
-                               'repeat', 'end_date', 'branch_id', 'method']:
+            uneditable_fields = ['value', 'due_date', 'person', 'repeat',
+                                 'end_date', 'branch_id', 'method']
+            # Let an unpaid lonely payment have the value edited
+            if lonely_payment and not self.model.is_paid():
+                uneditable_fields.remove('value')
+
+            for field_name in uneditable_fields:
                 field = self.fields[field_name]
                 field.can_add = False
                 field.can_edit = False
@@ -260,6 +284,15 @@ class _PaymentEditor(BaseEditor):
         method = self.method.get_selected()
         self.person.set_property('mandatory',
                                  method.operation.require_person(payment_type))
+
+    def _is_for_another_branch(self):
+        if not api.sysparam.get_bool('SYNCHRONIZED_MODE'):
+            return False
+
+        if self.model.branch == get_current_branch(self.store):
+            return False
+
+        return True
 
     #
     # Kiwi Callbacks

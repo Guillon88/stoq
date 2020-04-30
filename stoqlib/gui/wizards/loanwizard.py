@@ -27,7 +27,7 @@
 from decimal import Decimal
 import datetime
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.datatypes import ValidationError
 from kiwi.python import Settable
@@ -55,7 +55,10 @@ from stoqlib.gui.dialogs.missingitemsdialog import (get_missing_items,
                                                     MissingItemsDialog)
 from stoqlib.gui.events import (NewLoanWizardFinishEvent,
                                 CloseLoanWizardFinishEvent,
-                                LoanItemSelectionStepEvent)
+                                LoanItemSelectionStepEvent,
+                                InvoiceSetupEvent,
+                                WizardAddSellableEvent,
+                                StockOperationPersonValidationEvent)
 from stoqlib.gui.editors.loanitemeditor import LoanItemEditor
 from stoqlib.gui.editors.noteeditor import NoteEditor
 from stoqlib.gui.search.searchcolumns import IdentifierColumn, SearchColumn
@@ -85,10 +88,6 @@ class StartNewLoanStep(WizardEditorStep):
         self.summary_table.hide()
         self.total_box.hide()
 
-        # Hide invoice number details
-        self.invoice_number_label.hide()
-        self.invoice_number.hide()
-
         # Hide cost center combobox
         self.cost_center_lbl.hide()
         self.cost_center.hide()
@@ -115,7 +114,7 @@ class StartNewLoanStep(WizardEditorStep):
         self.create_transporter.hide()
 
         # removed_by widget
-        self.removed_by = ProxyEntry(unicode)
+        self.removed_by = ProxyEntry(str)
         self.removed_by.model_attribute = 'removed_by'
         if 'removed_by' not in self.proxy_widgets:
             self.proxy_widgets.append('removed_by')
@@ -160,8 +159,7 @@ class StartNewLoanStep(WizardEditorStep):
 
     def setup_proxies(self):
         self._setup_widgets()
-        self.proxy = self.add_proxy(self.model,
-                                    StartNewLoanStep.proxy_widgets)
+        self.proxy = self.add_proxy(self.model, StartNewLoanStep.proxy_widgets)
 
     #
     #   Callbacks
@@ -182,9 +180,13 @@ class StartNewLoanStep(WizardEditorStep):
         run_dialog(NoteEditor, self.wizard, self.store, self.model, 'notes',
                    title=_("Additional Information"))
 
+    def on_client__validate(self, widget, client):
+        return StockOperationPersonValidationEvent.emit(client.person, type(client))
+
 
 class LoanItemStep(SaleQuoteItemStep):
     """ Wizard step for loan items selection """
+    change_remove_btn_sensitive = False
     model_type = Loan
     item_table = LoanItem
     sellable_view = ProductWithStockBranchView
@@ -207,6 +209,7 @@ class LoanItemStep(SaleQuoteItemStep):
     def get_order_item(self, sellable, price, quantity, batch=None, parent=None):
         item = self.model.add_sellable(sellable, quantity, price, batch=batch)
         item._stock_quantity = self.proxy.model.stock_quantity
+        WizardAddSellableEvent.emit(self.wizard, item)
         return item
 
     def has_next_step(self):
@@ -264,7 +267,7 @@ class LoanSelectionStep(BaseWizardStep):
         self._create_filters()
         self.search.results.connect('selection-changed',
                                     self._on_results_selection_changed)
-        self.search.results.set_selection_mode(gtk.SELECTION_MULTIPLE)
+        self.search.results.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         self.search.focus_search_entry()
 
     #
@@ -298,6 +301,7 @@ class LoanItemSelectionStep(SellableItemStep):
     item_table = LoanItem
     cost_editable = False
     summary_label_column = None
+    check_item_taxes = True
 
     def __init__(self, wizard, previous, store, model):
         super(LoanItemSelectionStep, self).__init__(wizard, previous,
@@ -334,7 +338,7 @@ class LoanItemSelectionStep(SellableItemStep):
         self.force_validation()
 
     def get_columns(self):
-        adjustment = gtk.Adjustment(lower=0, upper=MAX_INT, step_incr=1)
+        adjustment = Gtk.Adjustment(lower=0, upper=MAX_INT, step_increment=1)
         return [
             Column('sellable.code', title=_('Code'),
                    data_type=str, visible=False),
@@ -392,7 +396,8 @@ class LoanItemSelectionStep(SellableItemStep):
     #  Callbacks
     #
 
-    def _on_klist__cell_edited(self, klist, obj, attr):
+    def _on_klist__cell_edited(self, klist, obj, column):
+        attr = column.attribute
         # FIXME: Even with the adjustment, the user still can type
         # values out of range with the keyboard. Maybe it's kiwi's fault
         if attr in ['sale_quantity', 'return_quantity']:
@@ -448,6 +453,7 @@ class NewLoanWizard(BaseWizard):
     def _create_model(self, store):
         loan = Loan(responsible=api.get_current_user(store),
                     branch=api.get_current_branch(store),
+                    station=api.get_current_station(store),
                     store=store)
         # Temporarily save the client_category, so it works fine with
         # SaleQuoteItemStep
@@ -457,7 +463,7 @@ class NewLoanWizard(BaseWizard):
     def _print_receipt(self, order):
         # we can only print the receipt if the loan was confirmed.
         if yesno(_('Would you like to print the receipt now?'),
-                 gtk.RESPONSE_YES, _("Print receipt"), _("Don't print")):
+                 Gtk.ResponseType.YES, _("Print receipt"), _("Don't print")):
             print_report(LoanReceipt, order)
 
     #
@@ -470,7 +476,14 @@ class NewLoanWizard(BaseWizard):
             run_dialog(MissingItemsDialog, self, self.model, missing)
             return False
 
-        self.model.sync_stock()
+        invoice_ok = InvoiceSetupEvent.emit()
+        if invoice_ok is False:
+            # If there is any problem with the invoice, the event will display an error
+            # message and the dialog is kept open so the user can fix whatever is wrong.
+            return
+
+        self.model.confirm()
+        self.model.sync_stock(api.get_current_user(self.store))
         self.retval = self.model
         self.close()
         NewLoanWizardFinishEvent.emit(self.model)
@@ -536,6 +549,7 @@ class CloseLoanWizard(BaseWizard):
                 # Even if there is more than one loan, they are always from the
                 # same (client, branch)
                 branch=self.models[0].branch,
+                station=api.get_current_station(self.store),
                 client=self.models[0].client,
                 salesperson=user.person.sales_person,
                 group=PaymentGroup(store=self.store),
@@ -546,7 +560,7 @@ class CloseLoanWizard(BaseWizard):
                                   # Quantity was already decreased on loan
                                   quantity_decreased=quantity)
 
-            sale.order()
+            sale.order(user)
             info(_("Close loan details..."),
                  _("A sale was created from loan items. You can confirm "
                    "that sale in the Till application later."))
@@ -554,7 +568,7 @@ class CloseLoanWizard(BaseWizard):
             sale = None
 
         for model in self.models:
-            model.sync_stock()
+            model.sync_stock(api.get_current_user(self.store))
             if model.can_close():
                 model.close()
 

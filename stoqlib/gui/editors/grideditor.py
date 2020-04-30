@@ -25,7 +25,7 @@
 
 import collections
 
-import gtk
+from gi.repository import Gtk
 from kiwi.ui.objectlist import Column
 from kiwi.ui.forms import TextField, BoolField
 
@@ -88,7 +88,7 @@ class GridAttributeEditor(BaseEditor):
         if model:
             self.set_description(model.description)
 
-        self.fields['group'].set_sensitive(not self._group)
+        self.fields['group'].set_sensitive(not bool(model) and not self._group)
         self.fields['is_active'].set_sensitive(bool(model))
 
     #
@@ -146,10 +146,10 @@ class GridOptionEditor(BaseEditor):
                           attribute=self._attribute)
 
     def setup_proxies(self):
-        self.option_order_spin.set_adjustment(gtk.Adjustment(lower=0,
+        self.option_order_spin.set_adjustment(Gtk.Adjustment(lower=0,
                                                              upper=100,
-                                                             step_incr=1,
-                                                             page_incr=5))
+                                                             step_increment=1,
+                                                             page_increment=5))
         self.proxy = self.add_proxy(self.model, GridOptionEditor.proxy_widgets)
 
 
@@ -189,7 +189,7 @@ def test_grid_editor():  # pragma nocover
     attribute.group = None
     run_dialog(GridAttributeEditor,
                parent=None, store=ec.store, model=attribute)
-    print attribute.group
+    print(attribute.group)
 
 if __name__ == '__main__':  # pragma nocover
     test_grid_editor()

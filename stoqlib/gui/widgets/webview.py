@@ -24,10 +24,9 @@
 
 import logging
 import json
-import urlparse
+import urllib.parse
 
-import gtk
-import webkit
+from gi.repository import Gtk, WebKit
 
 from stoqlib.api import api
 from stoqlib.lib.dateutils import localdate
@@ -46,23 +45,23 @@ USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) "
 
 
 def register_scheme(scheme):
-    for method in filter(lambda s: s.startswith('uses_'), dir(urlparse)):
-        getattr(urlparse, method).append(scheme)
+    for method in [s for s in dir(urllib.parse) if s.startswith('uses_')]:
+        getattr(urllib.parse, method).append(scheme)
 register_scheme('stoq')
 
 
-class WebView(gtk.ScrolledWindow):
+class WebView(Gtk.ScrolledWindow):
     def __init__(self):
-        gtk.ScrolledWindow.__init__(self)
-        self.set_shadow_type(gtk.SHADOW_ETCHED_IN)
+        Gtk.ScrolledWindow.__init__(self)
+        self.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
 
-        self._view = webkit.WebView()
+        self._view = WebKit.WebView()
         settings = self._view.props.settings
         settings.props.enable_developer_extras = True
         settings.props.user_agent = USER_AGENT
         settings.props.enable_default_context_menu = False
 
-        self._view.get_web_inspector().connect(
+        self._view.get_inspector().connect(
             'inspect-web-view',
             self._on_inspector__inspect_web_view)
         self._view.connect(
@@ -195,7 +194,7 @@ class WebView(gtk.ScrolledWindow):
         self.web_open_uri(kwargs)
 
     def _parse_stoq_uri(self, uri):
-        result = urlparse.urlparse(uri)
+        result = urllib.parse.urlparse(uri)
         kwargs = {}
         for arg in result.query.split(','):
             k, v = arg.split('=', 1)
@@ -222,11 +221,11 @@ class WebView(gtk.ScrolledWindow):
             open_browser(uri, self.get_screen())
 
     def _create_view_for_inspector(self, introspector_view):
-        window = gtk.Window()
+        window = Gtk.Window()
         window.set_size_request(800, 600)
-        sw = gtk.ScrolledWindow()
+        sw = Gtk.ScrolledWindow()
         window.add(sw)
-        view = webkit.WebView()
+        view = WebKit.WebView()
         sw.add(introspector_view)
         window.show_all()
         return view
@@ -286,7 +285,7 @@ class WebView(gtk.ScrolledWindow):
 
 
 def show_html(html):
-    w = gtk.Window()
+    w = Gtk.Window()
     w.set_size_request(600, 400)
     wv = WebView()
     wv.load_string(html)

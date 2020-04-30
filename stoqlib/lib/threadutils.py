@@ -25,8 +25,7 @@
 """ Utilities to work with threading """
 
 import ctypes
-
-import glib
+import threading
 
 
 def terminate_thread(thread):
@@ -53,9 +52,18 @@ def terminate_thread(thread):
         raise SystemError("PyThreadState_SetAsyncExc failed")
 
 
+def threadit(func, *args, **kwargs):
+    """Run func on a separated thread"""
+    t = threading.Thread(target=func, args=args, kwargs=kwargs)
+    t.daemon = True
+    t.start()
+    return t
+
+
 def schedule_in_main_thread(func, *args):
     """Schedules a function to be run in the main thread.
     It will as soon as the mainloop schedules it, normally
     it happens within a few ms.
     """
-    glib.idle_add(func, *args)
+    from gi.repository import GLib
+    GLib.idle_add(func, *args)

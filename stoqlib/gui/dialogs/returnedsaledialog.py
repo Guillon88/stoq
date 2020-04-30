@@ -24,15 +24,18 @@
 ##
 """ Classes for returned sale dailgos (details and undo)"""
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from kiwi.ui.objectlist import Column
+from storm.expr import Eq
 
 from stoqlib.api import api
-from stoqlib.domain.returnedsale import ReturnedSale
+from stoqlib.domain.returnedsale import ReturnedSale, ReturnedSaleItem
+from stoqlib.domain.sale import SaleView
 from stoqlib.domain.views import ReturnedSalesView
 from stoqlib.exceptions import StockError
 from stoqlib.gui.base.dialogs import run_dialog
+from stoqlib.gui.dialogs.saledetails import SaleDetailsDialog
 from stoqlib.gui.editors.baseeditor import BaseEditor
 from stoqlib.gui.events import SaleReturnWizardFinishEvent
 from stoqlib.gui.utils.printing import print_report
@@ -59,20 +62,28 @@ class ReturnedSaleDialog(BaseEditor):
     # FIXME
     gladefile = "ReturnedSalesDetails"
     proxy_widgets = ['sale_identifier', 'invoice_number', 'returned_date',
-                     'identifier', 'responsible_name', 'status_str']
+                     'identifier', 'responsible_name', 'status_str',
+                     'new_sale_identifier']
 
     def _setup_status(self):
-        self.receive_button.set_property('visible', self.model.can_receive())
+        self.receive_button.set_property('visible',
+                                         self.model.can_receive(api.get_current_branch(self.store)))
         returned_sale = self.store.get(ReturnedSale, self.model.id)
         if not self.model.is_pending():
             self.receiving_responsible.set_text(returned_sale.confirm_responsible.person.name)
             self.receiving_date.update(returned_sale.confirm_date)
+        if not self.model.sale:
+            self.sale_label.hide()
+            self.sale_box.hide()
+        if not self.model.new_sale:
+            self.new_sale_box.hide()
+            self.new_sale_label.hide()
 
     def _update_reason(self):
         notes = [_('Return reason'), self.model.reason]
         if self.model.returned_sale.is_undone():
             notes.extend([_('Undo reason'), self.model.returned_sale.undo_reason])
-        buffer = gtk.TextBuffer()
+        buffer = Gtk.TextBuffer()
         buffer.set_text('\n\n'.join(notes))
         self.reason.set_buffer(buffer)
 
@@ -82,8 +93,11 @@ class ReturnedSaleDialog(BaseEditor):
         self.undo_button.set_sensitive(returned_sale.can_undo())
 
         self.returned_items_list.set_columns(self._get_returned_items_columns())
-        for r_item in returned_sale.returned_items:
-            self.returned_items_list.append(r_item.parent_item, r_item)
+        r_items = returned_sale.returned_items
+        for r_item in r_items.find(Eq(ReturnedSaleItem.parent_item_id, None)):
+            self.returned_items_list.append(None, r_item)
+            for child in r_item.children_items:
+                self.returned_items_list.append(r_item, child)
 
         self._update_reason()
 
@@ -108,6 +122,17 @@ class ReturnedSaleDialog(BaseEditor):
             self.undo_button.set_sensitive(False)
             self._update_reason()
 
+    def add_tab(self, slave, name):
+        """Add a new tab on the notebook
+
+        :param slave: the slave we are attaching to the new tab
+        :param name: the name of the tab
+        """
+        event_box = Gtk.EventBox()
+        self.details_notebook.insert_page(event_box, Gtk.Label(label=name), -1)
+        self.attach_slave(name, slave, event_box)
+        event_box.show()
+
     #
     # BaseEditor Hooks
     #
@@ -120,8 +145,16 @@ class ReturnedSaleDialog(BaseEditor):
     # Callbacks
     #
 
+    def on_sale_details_button__clicked(self, event):
+        sale_view = self.store.find(SaleView, id=self.model.sale_id).one()
+        run_dialog(SaleDetailsDialog, self, self.store, sale_view)
+
+    def on_new_sale_details_button__clicked(self, event):
+        sale_view = self.store.find(SaleView, id=self.model.new_sale_id).one()
+        run_dialog(SaleDetailsDialog, self, self.store, sale_view)
+
     def on_receive_button__clicked(self, event):
-        if yesno(_(u'Receive pending returned sale?'), gtk.RESPONSE_NO,
+        if yesno(_(u'Receive pending returned sale?'), Gtk.ResponseType.NO,
                  _(u'Receive'), _(u"Don't receive")):
             current_user = api.get_current_user(self.store)
             self.model.returned_sale.confirm(current_user)
@@ -156,7 +189,7 @@ class ReturnedSaleUndoDialog(BaseEditor):
 
     def confirm(self):
         try:
-            self.model.undo(reason=self.undo_reason.read())
+            self.model.undo(api.get_current_user(self.store), reason=self.undo_reason.read())
         except StockError:
             warning(_('It was not possible to undo this returned sale. Some of '
                       'the returned products are out of stock.'))

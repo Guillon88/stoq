@@ -26,7 +26,7 @@
 
 from decimal import Decimal
 
-import gtk
+from gi.repository import Gtk
 from kiwi.currency import currency
 from storm.expr import Ne
 
@@ -34,7 +34,7 @@ from stoqlib.api import api
 from stoqlib.database.orm import ORMObject
 from stoqlib.domain.product import ProductSupplierInfo, Product
 from stoqlib.domain.sellable import Sellable
-from stoqlib.domain.views import SellableFullStockView
+from stoqlib.domain.views import (SellableFullStockView)
 from stoqlib.gui.dialogs.sellableimage import SellableImageViewer
 from stoqlib.gui.editors.producteditor import ProductEditor
 from stoqlib.gui.search.searchcolumns import (AccessorColumn, SearchColumn,
@@ -78,7 +78,7 @@ class SellableSearch(SearchEditor):
             status closed
         """
         if selection_mode is None:
-            selection_mode = gtk.SELECTION_BROWSE
+            selection_mode = Gtk.SelectionMode.BROWSE
 
         self._image_viewer = None
         self._first_search = True
@@ -130,8 +130,8 @@ class SellableSearch(SearchEditor):
         super(SellableSearch, self).confirm(retval=retval)
 
     def setup_widgets(self):
-        self.image_viewer_toggler = gtk.CheckMenuItem(_("Show image viewer"))
-        self.popup = gtk.Menu()
+        self.image_viewer_toggler = Gtk.CheckMenuItem(label=_("Show image viewer"))
+        self.popup = Gtk.Menu()
         self.popup.add(self.image_viewer_toggler)
         self.popup.show_all()
 
@@ -153,10 +153,18 @@ class SellableSearch(SearchEditor):
                                 data_type=str, width=120),
                    SearchColumn('description', title=_('Description'),
                                 data_type=str, expand=True, sorted=True),
+                   SearchColumn('location', title=_('Location'),
+                                data_type=str, visible=False),
                    SearchColumn('manufacturer', title=_('Manufacturer'),
                                 data_type=str, visible=False),
                    SearchColumn('model', title=_('Model'),
                                 data_type=str, visible=False)]
+
+        user = api.get_current_user(self.store)
+        if user.profile.check_app_permission('purchase'):
+            columns.append(SearchColumn('cost',
+                                        title=_(u'Cost'),
+                                        data_type=currency, visible=True))
 
         if hasattr(self.search_spec, 'price'):
             columns.append(SearchColumn('price',
@@ -253,7 +261,8 @@ class SellableSearch(SearchEditor):
             self._close_image_viewer()
 
     def on_results__right_click(self, klist, row, event):
-        self.popup.popup(None, None, None, event.button, event.time)
+        self.popup.popup(None, None, None, None,
+                         event.button.button, event.time)
 
     def on_results__selection_changed(self, klist, row):
         self._update_image_viewer()
@@ -334,8 +343,9 @@ class SaleSellableSearch(SellableSearch):
             return
 
         sellable = sellable_view.sellable
+        quantity = self._quantity or 0
         if (sellable.product_storable and
-                self._quantity > self._get_available_stock(sellable_view)):
+                quantity > self._get_available_stock(sellable_view)):
             self.ok_button.set_sensitive(False)
         else:
             self.ok_button.set_sensitive(True)
@@ -348,12 +358,14 @@ class SaleSellableSearch(SellableSearch):
                              visible=False),
                 SearchColumn('description', title=_('Description'),
                              data_type=str, expand=True),
+                SearchColumn('location', title=_('Location'),
+                             data_type=str, visible=False),
                 SearchColumn('manufacturer', title=_('Manufacturer'),
                              data_type=str, visible=False),
                 SearchColumn('model', title=_('Model'),
                              data_type=str, visible=False),
                 SearchColumn('price', title=_('Price'), data_type=currency,
-                             justify=gtk.JUSTIFY_RIGHT, width=120),
+                             justify=Gtk.Justification.RIGHT, width=120),
                 SearchColumn('category_description', title=_('Category'),
                              data_type=str, visible=False),
                 AccessorColumn('stock', title=_(u'Stock'),
